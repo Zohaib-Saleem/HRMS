@@ -23,6 +23,8 @@ const DEMO_ADMIN_EMAIL = 'admin@hrms.local';
 const DEMO_ADMIN_PASSWORD = 'Admin@12345';
 const DEMO_MANAGER_EMAIL = 'manager@hrms.local';
 const DEMO_MANAGER_PASSWORD = 'Manager@12345';
+const DEMO_EMPLOYEE_EMAIL = 'employee@hrms.local';
+const DEMO_EMPLOYEE_PASSWORD = 'Employee@12345';
 
 const ROLE_META: Record<SystemRoleKey, { name: string; description: string; protected: boolean }> = {
   SUPER_ADMIN: {
@@ -339,6 +341,24 @@ async function main(): Promise<void> {
 
   console.log(`  demo employees   ${employeeSpecs.length + 1}`);
 
+  // --- shifts ---------------------------------------------------------------
+  const shiftSpecs = [
+    { name: 'General', code: 'GEN', startTime: '09:00', endTime: '18:00', breakMinutes: 60 },
+    { name: 'Early', code: 'EAR', startTime: '07:00', endTime: '16:00', breakMinutes: 60 },
+    { name: 'Late', code: 'LAT', startTime: '13:00', endTime: '22:00', breakMinutes: 60 },
+  ];
+
+  const shifts = new Map<string, string>();
+  for (const spec of shiftSpecs) {
+    const record = await prisma.shift.upsert({
+      where: { companyId_name: { companyId: company.id, name: spec.name } },
+      create: { companyId: company.id, ...spec },
+      update: { startTime: spec.startTime, endTime: spec.endTime, breakMinutes: spec.breakMinutes },
+    });
+    shifts.set(spec.name, record.id);
+  }
+  console.log(`  shifts           ${shifts.size}`);
+
   // --- demo manager account -------------------------------------------------
   // Exists so the data-scope rules are testable: this account holds MANAGER,
   // whose scope is REPORTS_AND_OWN, and so sees only itself plus its reports.
@@ -380,10 +400,53 @@ async function main(): Promise<void> {
     console.log(`  demo manager     ${DEMO_MANAGER_EMAIL}`);
   }
 
+  // --- demo employee account ------------------------------------------------
+  // EMP-0003 reports to EMP-0002, so this account can raise requests that the
+  // manager account is the assigned approver for - the whole approval loop is
+  // reproducible from a fresh seed.
+  const staffEmployeeId = byNumber.get('EMP-0003');
+  const employeeRoleId = roleIds.get(SYSTEM_ROLES.EMPLOYEE);
+
+  if (staffEmployeeId && employeeRoleId) {
+    const staffHash = await hash(DEMO_EMPLOYEE_PASSWORD, {
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1,
+    });
+
+    const staffUser = await prisma.user.upsert({
+      where: { email: DEMO_EMPLOYEE_EMAIL },
+      create: {
+        companyId: company.id,
+        email: DEMO_EMPLOYEE_EMAIL,
+        passwordHash: staffHash,
+        firstName: 'Tomas',
+        lastName: 'Lindqvist',
+        status: 'ACTIVE',
+        avatarColor: '#b4531f',
+      },
+      update: { passwordHash: staffHash, status: 'ACTIVE' },
+    });
+
+    await prisma.userRole.upsert({
+      where: { userId_roleId: { userId: staffUser.id, roleId: employeeRoleId } },
+      create: { userId: staffUser.id, roleId: employeeRoleId },
+      update: {},
+    });
+
+    await prisma.employee.update({
+      where: { id: staffEmployeeId },
+      data: { userId: staffUser.id },
+    });
+
+    console.log(`  demo employee    ${DEMO_EMPLOYEE_EMAIL}`);
+  }
+
   console.log('\nSeed complete.\n');
   console.log('  Sign in with');
   console.log(`    admin    ${DEMO_ADMIN_EMAIL} / ${DEMO_ADMIN_PASSWORD}`);
   console.log(`    manager  ${DEMO_MANAGER_EMAIL} / ${DEMO_MANAGER_PASSWORD}`);
+  console.log(`    employee ${DEMO_EMPLOYEE_EMAIL} / ${DEMO_EMPLOYEE_PASSWORD}`);
   console.log('             (limited data scope - sees only their own reporting line)');
   console.log('\n  Local development only - never reuse these credentials elsewhere.\n');
 }

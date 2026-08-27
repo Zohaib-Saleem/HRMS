@@ -17,8 +17,8 @@ The suggested ordering was adjusted in three places, for reasons given below.
 | --- | --- | --- |
 | 1 | Foundation | ✅ Complete |
 | 2 | Organization & Employees | ✅ Complete |
-| 3 | Approvals engine & Notifications | ← next |
-| 4 | Leave & Holidays | moved before attendance |
+| 3 | Approvals engine & Notifications | ✅ Complete |
+| 4 | Leave & Holidays | ← next |
 | 5 | Attendance & Shifts | |
 | 6 | Documents | |
 | 7 | Payroll | |
@@ -97,7 +97,7 @@ screen reuses.
 
 ---
 
-## Phase 3 — Approvals engine & Notifications
+## Phase 3 — Approvals engine & Notifications ✅
 
 - Generic, reusable approval engine in `core/` — any module can register an approvable record
 - Multi-level chains; approver resolved as reporting manager or named role

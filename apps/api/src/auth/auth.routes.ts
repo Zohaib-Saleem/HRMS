@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { loginSchema } from '@hrms/shared';
+import { forgotPasswordSchema, loginSchema, resetPasswordSchema } from '@hrms/shared';
+import { completePasswordReset, requestPasswordReset } from './password-reset.service.js';
 import { parseOrThrow } from '../core/validate.js';
 import { recordAudit } from '../core/audit.js';
 import { authenticate } from './auth.service.js';
@@ -85,4 +86,38 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.get('/session', async (request, reply) => {
     return reply.send({ data: { authenticated: Boolean(request.auth) } });
   });
+
+  /**
+   * Password reset request.
+   *
+   * Always answers 200 with the same body whether or not the address exists,
+   * so it cannot be used to discover which emails have accounts. Rate limited
+   * harder than login because it triggers outbound mail.
+   */
+  app.post(
+    '/forgot-password',
+    { config: { rateLimit: { max: 5, timeWindow: '15 minutes' } } },
+    async (request, reply) => {
+      const input = parseOrThrow(forgotPasswordSchema, request.body);
+      await requestPasswordReset(input.email, request);
+
+      return reply.status(200).send({
+        data: {
+          ok: true,
+          message: 'If that address has an account, a reset link is on its way.',
+        },
+      });
+    },
+  );
+
+  app.post(
+    '/reset-password',
+    { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } },
+    async (request, reply) => {
+      const input = parseOrThrow(resetPasswordSchema, request.body);
+      await completePasswordReset(input.token, input.newPassword, request);
+
+      return reply.status(200).send({ data: { ok: true } });
+    },
+  );
 };

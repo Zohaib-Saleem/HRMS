@@ -41,9 +41,53 @@ const schema = z.object({
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(8),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+
+  // --- Mail -----------------------------------------------------------------
+  // `console` writes the message to the log instead of sending it, which is the
+  // right behaviour for development. Switching to `smtp` requires the SMTP_*
+  // variables below; the refinement further down enforces that, so a
+  // half-configured mail setup fails at boot rather than at first send.
+  MAIL_PROVIDER: z.enum(['console', 'smtp']).default('console'),
+  MAIL_FROM: z.string().default('HRMS <no-reply@hrms.local>'),
+  /// Base URL the web app is reachable at, used to build links inside emails.
+  APP_URL: z.string().url().default('http://localhost:5173'),
+
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  SMTP_SECURE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+
+  PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
 });
 
-const parsed = schema.safeParse(process.env);
+/**
+ * Choosing the SMTP provider without giving it a host is a configuration
+ * mistake that would otherwise only surface the first time someone requests a
+ * password reset. Fail at boot instead.
+ */
+const schemaWithMailRules = schema.superRefine((value, ctx) => {
+  if (value.MAIL_PROVIDER !== 'smtp') return;
+  if (!value.SMTP_HOST) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SMTP_HOST'],
+      message: 'SMTP_HOST is required when MAIL_PROVIDER=smtp.',
+    });
+  }
+  if (!value.SMTP_PORT) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SMTP_PORT'],
+      message: 'SMTP_PORT is required when MAIL_PROVIDER=smtp.',
+    });
+  }
+});
+
+const parsed = schemaWithMailRules.safeParse(process.env);
 
 if (!parsed.success) {
   const issues = parsed.error.issues

@@ -25,14 +25,16 @@
     "@prisma/client": "^6.3.1",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
+    "nodemailer": "^9.0.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",
+    "@types/nodemailer": "^8.0.1",
+    "dotenv-cli": "^8.0.0",
     "pino-pretty": "^13.0.0",
     "prisma": "^6.3.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
-    "dotenv-cli": "^8.0.0"
+    "typescript": "^5.7.3"
   }
 }

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQueryClient } from '@tanstack/react-query';
@@ -159,6 +159,13 @@ export function LoginPage() {
                 />
                 Keep me signed in
               </Label>
+
+              <Link
+                to="/forgot-password"
+                className="text-[13px] text-primary transition-colors hover:underline"
+              >
+                Forgot password?
+              </Link>
             </div>
 
             <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>

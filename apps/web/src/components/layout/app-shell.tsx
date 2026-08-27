@@ -1,10 +1,11 @@
 import * as React from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Bell, ChevronRight, Menu, Search } from 'lucide-react';
+import { ChevronRight, Menu, Search } from 'lucide-react';
 import { NAV_SECTIONS, ROUTE_TITLES } from '@/navigation/nav-config';
 import { SidebarNav } from './sidebar';
 import { UserMenu } from './user-menu';
+import { NotificationCenter } from '@/features/notifications/notification-center';
 import { cn } from '@/lib/utils';
 
 const COLLAPSE_KEY = 'hrms.sidebar.collapsed';
@@ -99,14 +100,7 @@ export function AppShell() {
               </kbd>
             </button>
 
-            <button
-              type="button"
-              className="grid size-9 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-              aria-label="Notifications (coming soon)"
-              disabled
-            >
-              <Bell className="size-4.5" aria-hidden />
-            </button>
+            <NotificationCenter />
 
             <div className="mx-1 h-6 w-px bg-border" aria-hidden />
             <UserMenu />

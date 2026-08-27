@@ -2,6 +2,9 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Banknote,
   Building2,
+  ClipboardCheck,
+  FileClock,
+  Timer,
   CalendarDays,
   Clock,
   FileText,
@@ -71,12 +74,42 @@ export const NAV_SECTIONS: NavSection[] = [
         status: 'ready',
         matchPrefix: true,
       },
+    ],
+  },
+  {
+    key: 'time',
+    label: 'Time',
+    items: [
+      {
+        label: 'Approvals',
+        to: '/approvals',
+        icon: ClipboardCheck,
+        permission: PERMISSIONS.APPROVAL_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
       {
         label: 'Attendance',
         to: '/attendance',
         icon: Clock,
-        permission: PERMISSIONS.EMPLOYEE_READ,
-        status: 'planned',
+        permission: PERMISSIONS.ATTENDANCE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Shifts',
+        to: '/shifts',
+        icon: Timer,
+        permission: PERMISSIONS.SHIFT_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Timesheets',
+        to: '/timesheets',
+        icon: FileClock,
+        permission: PERMISSIONS.TIMESHEET_READ,
+        status: 'ready',
         matchPrefix: true,
       },
       {
@@ -138,6 +171,10 @@ export const NAV_SECTIONS: NavSection[] = [
 /** Breadcrumb labels for routes that are not in the sidebar. */
 export const ROUTE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
+  '/approvals': 'Approvals',
+  '/attendance': 'Attendance',
+  '/shifts': 'Shifts',
+  '/timesheets': 'Timesheets',
   '/people': 'People',
   '/people/org-chart': 'Org chart',
   '/organisation': 'Organisation',

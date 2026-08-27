@@ -20,6 +20,12 @@ import { TeamsPage } from '@/features/organisation/teams-page';
 import { DesignationsPage } from '@/features/organisation/designations-page';
 import { LocationsPage } from '@/features/organisation/locations-page';
 import { StructurePage } from '@/features/organisation/structure-page';
+import { ApprovalsListPage } from '@/features/approvals/approvals-list-page';
+import { ApprovalDetailPage } from '@/features/approvals/approval-detail-page';
+import { AttendancePage } from '@/features/time/attendance-page';
+import { ShiftsPage } from '@/features/time/shifts-page';
+import { TimesheetsPage } from '@/features/time/timesheets-page';
+import { ForgotPasswordPage, ResetPasswordPage } from '@/features/auth/password-reset-pages';
 import { CompanySettingsPage } from '@/features/settings/company-page';
 import { RolesPage } from '@/features/settings/roles-page';
 import { AuditLogPage } from '@/features/settings/audit-log-page';
@@ -109,6 +115,8 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
       <Route element={<ProtectedRoutes />}>
         <Route index element={<DashboardPage />} />
@@ -118,6 +126,23 @@ export function AppRoutes() {
           <Route path="people" element={<EmployeeListPage />} />
           <Route path="people/org-chart" element={<OrgChartPage />} />
           <Route path="people/:id" element={<EmployeeDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.APPROVAL_READ} />}>
+          <Route path="approvals" element={<ApprovalsListPage />} />
+          <Route path="approvals/:id" element={<ApprovalDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.ATTENDANCE_READ} />}>
+          <Route path="attendance" element={<AttendancePage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.SHIFT_READ} />}>
+          <Route path="shifts" element={<ShiftsPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.TIMESHEET_READ} />}>
+          <Route path="timesheets" element={<TimesheetsPage />} />
         </Route>
 
         <Route

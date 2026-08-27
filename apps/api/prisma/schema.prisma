@@ -114,6 +114,16 @@ model Company {
   roles        Role[]
   auditLogs    AuditLog[]
 
+  // --- phase 3 ---
+  approvalRequests    ApprovalRequest[]
+  notifications       Notification[]
+  attendanceRecords   AttendanceRecord[]
+  regularizations     AttendanceRegularizationRequest[]
+  shifts              Shift[]
+  shiftAssignments    EmployeeShiftAssignment[]
+  shiftChangeRequests ShiftChangeRequest[]
+  timesheets          Timesheet[]
+
   @@map("companies")
 }
 
@@ -309,6 +319,15 @@ model Employee {
   headOfDepartment Department? @relation("DepartmentHead")
   leadOfTeam       Team?       @relation("TeamLead")
 
+  // --- phase 3 ---
+  approvalRequests    ApprovalRequest[]                 @relation("ApprovalRequester")
+  approvalSteps       ApprovalStep[]                    @relation("ApprovalApprover")
+  attendanceRecords   AttendanceRecord[]
+  regularizations     AttendanceRegularizationRequest[]
+  shiftAssignments    EmployeeShiftAssignment[]
+  shiftChangeRequests ShiftChangeRequest[]
+  timesheets          Timesheet[]
+
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
   @@index([companyId, departmentId])
@@ -368,6 +387,10 @@ model User {
   userRoles UserRole[]
   sessions  Session[]
   auditLogs AuditLog[] @relation("AuditActor")
+
+  // --- phase 3 ---
+  notifications       Notification[]
+  passwordResetTokens PasswordResetToken[]
 
   @@unique([email])
   @@index([companyId, status])
@@ -491,4 +514,363 @@ model AuditLog {
   @@index([companyId, entityType, entityId])
   @@index([actorId])
   @@map("audit_logs")
+}
+
+// ===========================================================================
+// PHASE 3 - approvals, notifications, and the time-tracking foundation
+// ===========================================================================
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Which domain record an approval is about. The engine stays generic: it
+/// never imports the domain modules, it only stores the pair
+/// (subjectType, subjectId) and lets each module resolve its own record.
+enum ApprovalSubjectType {
+  ATTENDANCE_REGULARIZATION
+  SHIFT_CHANGE
+  TIMESHEET
+  LEAVE_REQUEST
+}
+
+enum NotificationType {
+  APPROVAL_REQUESTED
+  APPROVAL_APPROVED
+  APPROVAL_REJECTED
+  APPROVAL_CANCELLED
+  PASSWORD_RESET
+  SYSTEM
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  ON_LEAVE
+  WEEKEND
+  HOLIDAY
+}
+
+enum AttendanceSource {
+  SELF
+  SYSTEM
+  ADMIN
+}
+
+enum TimesheetStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+// ------------------------------------------------------------------ approvals
+
+/// One approval request, whatever it is about.
+model ApprovalRequest {
+  id        String @id @default(cuid())
+  companyId String
+
+  subjectType ApprovalSubjectType
+  /// Id of the domain record. Deliberately not a foreign key - the engine is
+  /// shared by several tables and must not depend on any of them.
+  subjectId   String
+
+  requesterEmployeeId String
+  requesterUserId     String?
+
+  title   String
+  summary String?
+
+  status      ApprovalStatus @default(PENDING)
+  currentStep Int            @default(1)
+
+  decidedAt       DateTime?
+  decidedByUserId String?
+  cancelledAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company           Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requesterEmployee Employee        @relation("ApprovalRequester", fields: [requesterEmployeeId], references: [id], onDelete: Cascade)
+  steps             ApprovalStep[]
+  events            ApprovalEvent[]
+
+  @@unique([subjectType, subjectId])
+  @@index([companyId, status])
+  @@index([companyId, subjectType, subjectId])
+  @@index([requesterEmployeeId, status])
+  @@map("approval_requests")
+}
+
+/// One level of an approval chain. Multi-level flows are several rows with
+/// increasing stepOrder; the request advances as each is approved.
+model ApprovalStep {
+  id                String @id @default(cuid())
+  approvalRequestId String
+  stepOrder         Int
+
+  /// Either a named employee, or a role key resolved at decision time.
+  approverEmployeeId String?
+  approverRoleKey    String?
+
+  status          ApprovalStatus @default(PENDING)
+  decidedByUserId String?
+  decidedAt       DateTime?
+  comment         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  approvalRequest  ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+  approverEmployee Employee?       @relation("ApprovalApprover", fields: [approverEmployeeId], references: [id], onDelete: SetNull)
+
+  @@unique([approvalRequestId, stepOrder])
+  @@index([approverEmployeeId, status])
+  @@map("approval_steps")
+}
+
+/// Append-only transition history. Never updated, never deleted - the API
+/// exposes no mutation for this table at all.
+model ApprovalEvent {
+  id                String @id @default(cuid())
+  approvalRequestId String
+
+  actorUserId String?
+  action      String
+  fromStatus  ApprovalStatus?
+  toStatus    ApprovalStatus
+  comment     String?
+
+  createdAt DateTime @default(now())
+
+  approvalRequest ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  @@index([approvalRequestId, createdAt])
+  @@map("approval_events")
+}
+
+// -------------------------------------------------------------- notifications
+
+model Notification {
+  id        String @id @default(cuid())
+  companyId String
+  /// Recipient login account.
+  userId    String
+
+  type    NotificationType
+  title   String
+  message String
+
+  /// Optional pointer back to whatever this is about.
+  entityType String?
+  entityId   String?
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+// ------------------------------------------------------------ password resets
+
+/// Only the SHA-256 hash of the token is stored, exactly as with sessions, so
+/// a database leak cannot be replayed as a reset.
+model PasswordResetToken {
+  id     String @id @default(cuid())
+  userId String
+
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  requestedIp String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ----------------------------------------------------------------- attendance
+
+model AttendanceRecord {
+  id         String   @id @default(cuid())
+  companyId  String
+  employeeId String
+  date       DateTime @db.Date
+
+  status        AttendanceStatus @default(PRESENT)
+  checkInAt     DateTime?
+  checkOutAt    DateTime?
+  workedMinutes Int?
+  notes         String?
+  source        AttendanceSource @default(SELF)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, date])
+  @@index([companyId, date])
+  @@index([companyId, status])
+  @@map("attendance_records")
+}
+
+/// A request to correct an attendance record. Carries its own status mirroring
+/// the approval so the domain table can be queried without joining the engine.
+model AttendanceRegularizationRequest {
+  id             String   @id @default(cuid())
+  companyId      String
+  employeeId     String
+  attendanceDate DateTime @db.Date
+
+  requestedCheckInAt  DateTime?
+  requestedCheckOutAt DateTime?
+  requestedStatus     AttendanceStatus?
+  reason              String
+
+  status            ApprovalStatus @default(PENDING)
+  approvalRequestId String?        @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([employeeId, attendanceDate])
+  @@map("attendance_regularization_requests")
+}
+
+// --------------------------------------------------------------------- shifts
+
+model Shift {
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  code      String?
+
+  /// Local wall-clock times as HH:mm. Timezone comes from the work location.
+  startTime    String
+  endTime      String
+  breakMinutes Int     @default(0)
+  isActive     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignments EmployeeShiftAssignment[]
+  requestedBy ShiftChangeRequest[]      @relation("RequestedShift")
+  currentOf   ShiftChangeRequest[]      @relation("CurrentShift")
+
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+  @@map("shifts")
+}
+
+model EmployeeShiftAssignment {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+  shiftId    String
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    Shift    @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, effectiveFrom])
+  @@index([companyId, shiftId])
+  @@map("employee_shift_assignments")
+}
+
+model ShiftChangeRequest {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  currentShiftId   String?
+  requestedShiftId String
+  effectiveFrom    DateTime @db.Date
+  reason           String
+
+  status            ApprovalStatus @default(PENDING)
+  approvalRequestId String?        @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  currentShift   Shift?   @relation("CurrentShift", fields: [currentShiftId], references: [id], onDelete: SetNull)
+  requestedShift Shift    @relation("RequestedShift", fields: [requestedShiftId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([employeeId, effectiveFrom])
+  @@map("shift_change_requests")
+}
+
+// ----------------------------------------------------------------- timesheets
+
+model Timesheet {
+  id          String   @id @default(cuid())
+  companyId   String
+  employeeId  String
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+
+  status       TimesheetStatus @default(DRAFT)
+  totalMinutes Int             @default(0)
+  notes        String?
+
+  submittedAt       DateTime?
+  approvalRequestId String?   @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  entries  TimesheetEntry[]
+
+  @@unique([employeeId, periodStart])
+  @@index([companyId, status])
+  @@map("timesheets")
+}
+
+model TimesheetEntry {
+  id          String   @id @default(cuid())
+  timesheetId String
+  date        DateTime @db.Date
+  minutes     Int
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timesheet Timesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+
+  @@index([timesheetId, date])
+  @@map("timesheet_entries")
 }

@@ -36,6 +36,22 @@ export const PERMISSIONS = {
   ROLE_READ: 'role.read',
   ROLE_MANAGE: 'role.manage',
 
+  // --- Approvals ---
+  /// See approval requests within your data scope.
+  APPROVAL_READ: 'approval.read',
+  /// Act on requests where you are the assigned approver.
+  APPROVAL_ACT: 'approval.act',
+  /// Administrative override: see and act on any request in the company.
+  APPROVAL_MANAGE: 'approval.manage',
+
+  // --- Time ---
+  ATTENDANCE_READ: 'attendance.read',
+  ATTENDANCE_MANAGE: 'attendance.manage',
+  SHIFT_READ: 'shift.read',
+  SHIFT_MANAGE: 'shift.manage',
+  TIMESHEET_READ: 'timesheet.read',
+  TIMESHEET_MANAGE: 'timesheet.manage',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -92,6 +108,29 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.USER_MANAGE, label: 'Manage users', description: 'Invite, edit and disable login accounts.' },
       { value: PERMISSIONS.ROLE_READ, label: 'View roles', description: 'See roles and their permissions.' },
       { value: PERMISSIONS.ROLE_MANAGE, label: 'Manage roles', description: 'Create roles and change permissions.' },
+    ],
+  },
+  {
+    key: 'approvals',
+    label: 'Approvals',
+    description: 'Requests that need a decision.',
+    permissions: [
+      { value: PERMISSIONS.APPROVAL_READ, label: 'View approvals', description: 'See requests within your data scope.' },
+      { value: PERMISSIONS.APPROVAL_ACT, label: 'Decide approvals', description: 'Approve or reject requests assigned to you.' },
+      { value: PERMISSIONS.APPROVAL_MANAGE, label: 'Administer approvals', description: 'See and decide any request in the company.' },
+    ],
+  },
+  {
+    key: 'time',
+    label: 'Time',
+    description: 'Attendance, shifts and timesheets.',
+    permissions: [
+      { value: PERMISSIONS.ATTENDANCE_READ, label: 'View attendance', description: 'See attendance records.' },
+      { value: PERMISSIONS.ATTENDANCE_MANAGE, label: 'Manage attendance', description: 'Record and correct attendance.' },
+      { value: PERMISSIONS.SHIFT_READ, label: 'View shifts', description: 'See shifts and assignments.' },
+      { value: PERMISSIONS.SHIFT_MANAGE, label: 'Manage shifts', description: 'Create shifts and assign employees.' },
+      { value: PERMISSIONS.TIMESHEET_READ, label: 'View timesheets', description: 'See timesheets.' },
+      { value: PERMISSIONS.TIMESHEET_MANAGE, label: 'Manage timesheets', description: 'Create and submit timesheets.' },
     ],
   },
   {
@@ -166,6 +205,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.USER_READ,
     PERMISSIONS.ROLE_READ,
     PERMISSIONS.AUDIT_READ,
+    PERMISSIONS.APPROVAL_READ,
+    PERMISSIONS.APPROVAL_ACT,
+    PERMISSIONS.APPROVAL_MANAGE,
+    PERMISSIONS.ATTENDANCE_READ,
+    PERMISSIONS.ATTENDANCE_MANAGE,
+    PERMISSIONS.SHIFT_READ,
+    PERMISSIONS.SHIFT_MANAGE,
+    PERMISSIONS.TIMESHEET_READ,
+    PERMISSIONS.TIMESHEET_MANAGE,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -176,6 +224,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.DESIGNATION_READ,
     PERMISSIONS.LOCATION_READ,
     PERMISSIONS.EMPLOYEE_READ,
+    PERMISSIONS.APPROVAL_READ,
+    PERMISSIONS.APPROVAL_ACT,
+    PERMISSIONS.ATTENDANCE_READ,
+    PERMISSIONS.SHIFT_READ,
+    PERMISSIONS.TIMESHEET_READ,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -183,6 +236,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.TEAM_READ,
     PERMISSIONS.DESIGNATION_READ,
     PERMISSIONS.LOCATION_READ,
+    PERMISSIONS.APPROVAL_READ,
+    PERMISSIONS.ATTENDANCE_READ,
+    PERMISSIONS.SHIFT_READ,
+    PERMISSIONS.TIMESHEET_READ,
+    PERMISSIONS.TIMESHEET_MANAGE,
   ],
 };
 

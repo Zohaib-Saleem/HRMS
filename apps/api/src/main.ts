@@ -2,19 +2,29 @@ import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { assertDatabaseConnection, prisma } from './core/db.js';
 import { pruneExpiredSessions } from './auth/session.js';
+import { pruneExpiredResetTokens } from './auth/password-reset.service.js';
+import { verifyEmailProvider } from './core/mail/index.js';
 
 async function main(): Promise<void> {
   await assertDatabaseConnection();
 
   const app = await buildApp();
 
-  // Housekeeping: clear long-expired sessions at boot and once a day after.
+  // A broken mail configuration is reported but never blocks startup - in-app
+  // notifications keep working regardless.
+  await verifyEmailProvider(app.log);
+
+  // Housekeeping: clear long-expired sessions and reset tokens at boot, then
+  // once a day.
   const prune = async () => {
     try {
       const removed = await pruneExpiredSessions();
       if (removed > 0) app.log.info({ removed }, 'pruned expired sessions');
+
+      const tokens = await pruneExpiredResetTokens();
+      if (tokens > 0) app.log.info({ removed: tokens }, 'pruned expired reset tokens');
     } catch (error) {
-      app.log.error({ err: error }, 'session prune failed');
+      app.log.error({ err: error }, 'housekeeping prune failed');
     }
   };
   await prune();

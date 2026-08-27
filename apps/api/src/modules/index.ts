@@ -9,6 +9,11 @@ import { teamRoutes } from './organisation/teams.routes.js';
 import { designationRoutes } from './organisation/designations.routes.js';
 import { locationRoutes } from './organisation/locations.routes.js';
 import { employeeRoutes } from './employees/employees.routes.js';
+import { approvalRoutes } from './approvals/approvals.routes.js';
+import { notificationRoutes } from './notifications/notifications.routes.js';
+import { attendanceRoutes } from './time/attendance.routes.js';
+import { shiftRoutes } from './time/shifts.routes.js';
+import { timesheetRoutes } from './time/timesheets.routes.js';
 
 /**
  * Module registry.
@@ -36,10 +41,16 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/locations', plugin: locationRoutes },
   { prefix: '/employees', plugin: employeeRoutes },
 
-  // --- phase 3+ ---------------------------------------------------------
-  // { prefix: '/approvals',  plugin: approvalRoutes },
-  // { prefix: '/leave',      plugin: leaveRoutes },
-  // { prefix: '/attendance', plugin: attendanceRoutes },
+  // --- phase 3: approvals, notifications and the time foundation ---------
+  { prefix: '/approvals', plugin: approvalRoutes },
+  { prefix: '/notifications', plugin: notificationRoutes },
+  { prefix: '/attendance', plugin: attendanceRoutes },
+  { prefix: '/shifts', plugin: shiftRoutes },
+  { prefix: '/timesheets', plugin: timesheetRoutes },
+
+  // --- phase 4+ ---------------------------------------------------------
+  // { prefix: '/leave',    plugin: leaveRoutes },
+  // { prefix: '/holidays', plugin: holidayRoutes },
 ];
 
 export const registerModules: FastifyPluginAsync = async (app) => {
