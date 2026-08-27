@@ -36,9 +36,38 @@ export interface ButtonProps
   loading?: boolean;
 }
 
+/**
+ * Development-only contract check.
+ *
+ * Radix's Slot requires exactly one element to merge onto. When that contract
+ * is broken it throws from inside Slot, so the stack points at Radix internals
+ * and says nothing about which call site is at fault - which makes the failure
+ * expensive to track down, especially when the offending child is conditional
+ * and the crash therefore only happens sometimes.
+ *
+ * This logs the culprit first. It does not swallow anything: Radix still throws
+ * and the error boundary still catches, the console just names the component.
+ */
+function warnOnBadAsChild(children: React.ReactNode): void {
+  if (!import.meta.env.DEV) return;
+
+  const count = React.Children.count(children);
+  if (count === 1 && React.isValidElement(children)) return;
+
+  // eslint-disable-next-line no-console
+  console.error(
+    `<Button asChild> expects exactly one React element child, received ${
+      count === 0 ? 'none' : count > 1 ? `${count} children` : 'a non-element child'
+    }. Radix Slot cannot merge onto that. Wrap the content in a single element, ` +
+      'or drop asChild.',
+    children,
+  );
+}
+
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, loading = false, children, disabled, ...props }, ref) => {
     const Comp = asChild ? Slot : 'button';
+    if (asChild) warnOnBadAsChild(children);
     return (
       <Comp
         ref={ref}
