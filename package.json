@@ -1,0 +1,37 @@
+{
+  "name": "hrms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Independent HRMS platform - modular monorepo",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "npm run shared:build && concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm -w @hrms/api run dev",
+    "dev:web": "npm -w @hrms/web run dev",
+    "shared:build": "npm -w @hrms/shared run build",
+    "build": "npm run shared:build && npm -w @hrms/api run build && npm -w @hrms/web run build",
+    "typecheck": "npm run shared:build && npm -w @hrms/api run typecheck && npm -w @hrms/web run typecheck",
+    "db:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/setup-db.ps1",
+    "db:migrate": "npm -w @hrms/api run db:migrate",
+    "db:seed": "npm -w @hrms/api run db:seed",
+    "db:reset": "npm -w @hrms/api run db:reset",
+    "db:studio": "npm -w @hrms/api run db:studio"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true,
+    "prisma@6.19.3": true
+  }
+}

@@ -1,0 +1,330 @@
+// ---------------------------------------------------------------------------
+// HRMS data model
+//
+// Conventions
+//  - cuid primary keys, createdAt/updatedAt on every table
+//  - companyId on every business table from day one, so a second company is a
+//    feature flag rather than a migration nightmare
+//  - User (login account) is deliberately separate from Employee (HR record):
+//    not every employee gets a login, and not every login is an employee
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --------------------------------------------------------------------- enums
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  SUSPENDED
+  TERMINATED
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
+  TEMPORARY
+}
+
+enum WeekDay {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+// ------------------------------------------------------------------- company
+
+model Company {
+  id           String  @id @default(cuid())
+  name         String
+  legalName    String?
+  email        String?
+  phone        String?
+  website      String?
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String?
+
+  // Localisation defaults inherited by every module added later
+  timezone     String  @default("UTC")
+  currency     String  @default("USD") @db.Char(3)
+  dateFormat   String  @default("dd MMM yyyy")
+  weekStartsOn WeekDay @default(MONDAY)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  departments Department[]
+  teams       Team[]
+  employees   Employee[]
+  users       User[]
+  roles       Role[]
+  auditLogs   AuditLog[]
+
+  @@map("companies")
+}
+
+// -------------------------------------------------------------- organisation
+
+model Department {
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean @default(true)
+
+  // Optional org-chart head. Named relation keeps it distinct from employees.
+  headEmployeeId String?   @unique
+  headEmployee   Employee? @relation("DepartmentHead", fields: [headEmployeeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  teams     Team[]
+  employees Employee[] @relation("EmployeeDepartment")
+
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+  @@map("departments")
+}
+
+model Team {
+  id           String  @id @default(cuid())
+  companyId    String
+  departmentId String
+  name         String
+  description  String?
+  isActive     Boolean @default(true)
+
+  leadEmployeeId String?   @unique
+  leadEmployee   Employee? @relation("TeamLead", fields: [leadEmployeeId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  employees  Employee[] @relation("EmployeeTeam")
+
+  @@unique([departmentId, name])
+  @@index([companyId, isActive])
+  @@map("teams")
+}
+
+model Employee {
+  id             String @id @default(cuid())
+  companyId      String
+  employeeNumber String
+
+  firstName     String
+  lastName      String
+  workEmail     String?
+  personalEmail String?
+  phone         String?
+  jobTitle      String?
+
+  departmentId String?
+  teamId       String?
+  managerId    String?
+
+  employmentType  EmploymentType @default(FULL_TIME)
+  status          EmployeeStatus @default(ACTIVE)
+  hireDate        DateTime?      @db.Date
+  terminationDate DateTime?      @db.Date
+
+  // Optional link to a login account (1:1)
+  userId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department Department? @relation("EmployeeDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  team       Team?       @relation("EmployeeTeam", fields: [teamId], references: [id], onDelete: SetNull)
+  manager    Employee?   @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports    Employee[]  @relation("EmployeeManager")
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  headOfDepartment Department? @relation("DepartmentHead")
+  leadOfTeam       Team?       @relation("TeamLead")
+
+  @@unique([companyId, employeeNumber])
+  @@index([companyId, status])
+  @@index([companyId, departmentId])
+  @@index([lastName, firstName])
+  @@map("employees")
+}
+
+// ---------------------------------------------------------------- auth & rbac
+
+model User {
+  id        String @id @default(cuid())
+  companyId String
+
+  email        String
+  passwordHash String
+  firstName    String
+  lastName     String
+
+  status             UserStatus @default(ACTIVE)
+  mustChangePassword Boolean    @default(false)
+
+  // Deterministic avatar tint so the UI needs no uploaded images yet
+  avatarColor String @default("#3f6cd6")
+
+  lastLoginAt      DateTime?
+  failedLoginCount Int       @default(0)
+  lockedUntil      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee?
+  userRoles UserRole[]
+  sessions  Session[]
+  auditLogs AuditLog[] @relation("AuditActor")
+
+  @@unique([email])
+  @@index([companyId, status])
+  @@map("users")
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  companyId   String
+  key         String
+  name        String
+  description String?
+
+  /// Seeded by the system - cannot be deleted.
+  isSystem Boolean @default(false)
+
+  /// SUPER_ADMIN - permissions cannot be edited away, which prevents lock-out.
+  isProtected Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@unique([companyId, key])
+  @@map("roles")
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  name        String
+  description String?
+  groupKey    String
+
+  createdAt DateTime @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+/// Server-side session. The cookie carries an opaque token; only its SHA-256
+/// hash is stored, so a database leak cannot be replayed as a login.
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt      DateTime @default(now())
+  lastActivityAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// --------------------------------------------------------------------- audit
+
+model AuditLog {
+  id        String  @id @default(cuid())
+  companyId String
+  actorId   String?
+
+  /// Dotted verb, e.g. auth.login, company.update, role.permissions.update
+  action     String
+  entityType String
+  entityId   String?
+  summary    String?
+
+  /// Field-level diff. Secrets are redacted before they reach here.
+  before Json?
+  after  Json?
+
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actor   User?   @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
