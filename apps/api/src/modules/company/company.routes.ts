@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { PERMISSIONS, updateCompanySchema } from '@hrms/shared';
+import { PERMISSIONS, attendancePolicySchema, updateCompanySchema } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { diff, recordAudit } from '../../core/audit.js';
@@ -39,6 +39,47 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
           entityType: 'Company',
           entityId: auth.companyId,
           summary: `Updated company settings (${changes.changed.join(', ')})`,
+          before: changes.before,
+          after: changes.after,
+          request,
+        });
+      }
+
+      return reply.send({ data: after });
+    },
+  );
+
+  /**
+   * The attendance policy, saved as its own decision.
+   *
+   * Kept off the company profile form deliberately: these values change how
+   * worked time is scored, so they get their own endpoint, their own permission
+   * check and their own audit entry rather than riding along with an address
+   * change. Read back through GET /company, which returns the whole row.
+   */
+  app.patch(
+    '/attendance-policy',
+    { preHandler: requirePermission(PERMISSIONS.COMPANY_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const input = parseOrThrow(attendancePolicySchema, request.body);
+
+      const before = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } });
+      const after = await prisma.company.update({ where: { id: auth.companyId }, data: input });
+
+      const changes = diff(
+        before as unknown as Record<string, unknown>,
+        input as unknown as Record<string, unknown>,
+      );
+
+      if (changes.changed.length > 0) {
+        await recordAudit({
+          companyId: auth.companyId,
+          actorId: auth.userId,
+          action: 'company.attendance_policy.update',
+          entityType: 'Company',
+          entityId: auth.companyId,
+          summary: `Updated the attendance policy (${changes.changed.join(', ')})`,
           before: changes.before,
           after: changes.after,
           request,

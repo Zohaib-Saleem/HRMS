@@ -3,14 +3,19 @@ import type { Prisma } from '@prisma/client';
 import {
   PERMISSIONS,
   type AttendanceDay,
+  type AttendanceMode,
   type AttendanceRecordItem,
   type AttendanceStatus,
   type AttendanceTodayState,
+  type AttendanceTotals,
+  type MarkAbsencesResult,
+  type TeamAttendanceRow,
   attendanceQuerySchema,
   attendanceSummaryQuerySchema,
   attendanceUpsertSchema,
   checkInSchema,
   checkOutSchema,
+  markAbsencesSchema,
   regularizationCreateSchema,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
@@ -25,10 +30,61 @@ import {
   resolveDefaultApprovers,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
-import { deriveRange, lateMinutesAgainst, shiftOnDate } from './attendance.service.js';
+import {
+  assertCheckInLocationAllowed,
+  deriveRange,
+  deriveRangeForEmployees,
+  shiftOnDate,
+} from './attendance.service.js';
+import { computeAttendance, resolveAttendancePolicy } from './attendance-policy.js';
+import { markAbsencesForDate } from './absence.service.js';
 
 const displayName = (e: { firstName: string; lastName: string; displayName: string | null }) =>
   e.displayName ?? `${e.firstName} ${e.lastName}`.trim();
+
+const emptyTotals = (): AttendanceTotals => ({
+  present: 0,
+  halfDay: 0,
+  absent: 0,
+  onLeave: 0,
+  holiday: 0,
+  weekend: 0,
+  workedMinutes: 0,
+  lateMinutes: 0,
+  overtimeMinutes: 0,
+});
+
+/** One place that turns derived days into headline numbers. */
+function tally(days: readonly AttendanceDay[]): AttendanceTotals {
+  return days.reduce<AttendanceTotals>((acc, d) => {
+    if (d.status === 'PRESENT') acc.present += 1;
+    else if (d.status === 'HALF_DAY') acc.halfDay += 1;
+    else if (d.status === 'ABSENT') acc.absent += 1;
+    else if (d.status === 'ON_LEAVE') acc.onLeave += 1;
+    else if (d.status === 'HOLIDAY') acc.holiday += 1;
+    else if (d.status === 'WEEKEND') acc.weekend += 1;
+
+    acc.workedMinutes += d.workedMinutes ?? 0;
+    acc.lateMinutes += d.lateMinutes ?? 0;
+    acc.overtimeMinutes += d.overtimeMinutes ?? 0;
+    return acc;
+  }, emptyTotals());
+}
+
+/** A range longer than this is a report, not a screen. */
+const MAX_RANGE_DAYS = 62;
+
+function assertUsableRange(from: Date, to: Date): void {
+  if (to < from) {
+    throw new ValidationError({ to: ['The end of the range cannot be before the start.'] });
+  }
+  const days = Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1;
+  if (days > MAX_RANGE_DAYS) {
+    throw new ValidationError({
+      to: [`Ask for at most ${MAX_RANGE_DAYS} days at a time; this range is ${days}.`],
+    });
+  }
+}
 
 export const attendanceRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requirePermission(PERMISSIONS.ATTENDANCE_READ));
@@ -77,6 +133,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         orderBy: [{ date: 'desc' }],
         include: {
           employee: { select: { id: true, firstName: true, lastName: true, displayName: true } },
+          shift: { select: { name: true } },
         },
       }),
     ]);
@@ -90,6 +147,11 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       checkInAt: row.checkInAt?.toISOString() ?? null,
       checkOutAt: row.checkOutAt?.toISOString() ?? null,
       workedMinutes: row.workedMinutes,
+      lateMinutes: row.lateMinutes,
+      earlyLeaveMinutes: row.earlyLeaveMinutes,
+      overtimeMinutes: row.overtimeMinutes,
+      mode: (row.mode as AttendanceMode | null) ?? null,
+      shiftName: row.shift?.name ?? null,
       notes: row.notes,
       source: row.source,
     }));
@@ -115,36 +177,38 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         throw new ValidationError({ checkOutAt: ['Check-out must be after check-in.'] });
       }
 
-      const workedMinutes =
-        checkInAt && checkOutAt
-          ? Math.round((checkOutAt.getTime() - checkInAt.getTime()) / 60000)
-          : null;
+      // The status an administrator typed is honoured; the derived numbers are
+      // still computed from the policy, so a hand-entered day is measured the
+      // same way as a captured one.
+      const [policy, shift] = await Promise.all([
+        resolveAttendancePolicy(auth.companyId),
+        shiftOnDate(input.employeeId, date),
+      ]);
+      const computed = computeAttendance({ checkInAt, checkOutAt, shift, policy });
 
       const before = await prisma.attendanceRecord.findUnique({
         where: { employeeId_date: { employeeId: input.employeeId, date } },
       });
 
+      const values = {
+        // A status the administrator chose is honoured; otherwise the policy
+        // decides, so a hand-entered short day is scored like any other.
+        status: input.status ?? computed.status,
+        checkInAt,
+        checkOutAt,
+        workedMinutes: computed.workedMinutes,
+        lateMinutes: computed.lateMinutes,
+        earlyLeaveMinutes: computed.earlyLeaveMinutes,
+        overtimeMinutes: computed.overtimeMinutes,
+        shiftId: shift?.id ?? null,
+        notes: input.notes ?? null,
+        source: 'ADMIN' as const,
+      };
+
       const record = await prisma.attendanceRecord.upsert({
         where: { employeeId_date: { employeeId: input.employeeId, date } },
-        create: {
-          companyId: auth.companyId,
-          employeeId: input.employeeId,
-          date,
-          status: input.status,
-          checkInAt,
-          checkOutAt,
-          workedMinutes,
-          notes: input.notes ?? null,
-          source: 'ADMIN',
-        },
-        update: {
-          status: input.status,
-          checkInAt,
-          checkOutAt,
-          workedMinutes,
-          notes: input.notes ?? null,
-          source: 'ADMIN',
-        },
+        create: { companyId: auth.companyId, employeeId: input.employeeId, date, ...values },
+        update: values,
       });
 
       await recordAudit({
@@ -167,18 +231,25 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
 
   /**
    * Today's state for the caller. Drives the check-in widget: it says whether
-   * today is even a working day before offering a button.
+   * today is even a working day before offering a button, and whether the
+   * browser needs to ask for coordinates first.
    */
   app.get('/today', async (request, reply) => {
     const auth = requireAuthContext(request);
     const self = await callerEmployeeOrThrow(auth);
 
     const today = toDateOnly(new Date().toISOString());
-    const [day] = await deriveRange(auth.companyId, self.id, today, today);
-    const shift = await shiftOnDate(self.id, today);
+    const [[day], shift, policy] = await Promise.all([
+      deriveRange(auth.companyId, self.id, today, today),
+      shiftOnDate(self.id, today),
+      resolveAttendancePolicy(auth.companyId),
+    ]);
 
     const workingDay =
-      day !== undefined && day.status !== 'WEEKEND' && day.status !== 'HOLIDAY' && day.status !== 'ON_LEAVE';
+      day !== undefined &&
+      day.status !== 'WEEKEND' &&
+      day.status !== 'HOLIDAY' &&
+      day.status !== 'ON_LEAVE';
 
     const state: AttendanceTodayState = {
       date: today.toISOString().slice(0, 10),
@@ -189,12 +260,16 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       checkOutAt: day?.checkOutAt ?? null,
       workedMinutes: day?.workedMinutes ?? null,
       lateMinutes: day?.lateMinutes ?? null,
+      earlyLeaveMinutes: day?.earlyLeaveMinutes ?? null,
+      overtimeMinutes: day?.overtimeMinutes ?? null,
       mode: day?.mode ?? null,
       shiftName: shift?.name ?? null,
       shiftStartTime: shift?.startTime ?? null,
       shiftEndTime: shift?.endTime ?? null,
       isWorkingDay: workingDay,
-      reason: day?.holidayName ?? day?.leaveTypeName ?? (day?.status === 'WEEKEND' ? 'Weekend' : null),
+      reason:
+        day?.holidayName ?? day?.leaveTypeName ?? (day?.status === 'WEEKEND' ? 'Weekend' : null),
+      locationRequired: policy.locationRestrictionEnabled,
     };
 
     return reply.send({ data: state });
@@ -206,7 +281,10 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const self = await callerEmployeeOrThrow(auth);
 
     const today = toDateOnly(new Date().toISOString());
-    const [day] = await deriveRange(auth.companyId, self.id, today, today);
+    const [[day], policy] = await Promise.all([
+      deriveRange(auth.companyId, self.id, today, today),
+      resolveAttendancePolicy(auth.companyId),
+    ]);
 
     // Refuse rather than quietly record a day the calendar says is not worked.
     if (day && (day.status === 'WEEKEND' || day.status === 'HOLIDAY' || day.status === 'ON_LEAVE')) {
@@ -222,32 +300,35 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       throw new ConflictError('You have already checked in today.');
     }
 
+    // Enforced here, on the server. The browser only supplies coordinates; it
+    // never gets to decide whether they are acceptable.
+    const geo = await assertCheckInLocationAllowed({
+      employee: self,
+      policy,
+      latitude: input.latitude ?? null,
+      longitude: input.longitude ?? null,
+    });
+
     const now = new Date();
     const shift = await shiftOnDate(self.id, today);
+    const computed = computeAttendance({ checkInAt: now, checkOutAt: null, shift, policy });
+
+    const values = {
+      status: 'PRESENT' as const,
+      checkInAt: now,
+      mode: input.mode,
+      notes: input.notes ?? null,
+      source: 'SELF' as const,
+      shiftId: shift?.id ?? null,
+      lateMinutes: computed.lateMinutes,
+      checkInLatitude: input.latitude ?? null,
+      checkInLongitude: input.longitude ?? null,
+    };
 
     const record = await prisma.attendanceRecord.upsert({
       where: { employeeId_date: { employeeId: self.id, date: today } },
-      create: {
-        companyId: auth.companyId,
-        employeeId: self.id,
-        date: today,
-        status: 'PRESENT',
-        checkInAt: now,
-        mode: input.mode,
-        notes: input.notes ?? null,
-        source: 'SELF',
-        shiftId: shift?.id ?? null,
-        lateMinutes: lateMinutesAgainst(now, shift?.startTime ?? null),
-      },
-      update: {
-        status: 'PRESENT',
-        checkInAt: now,
-        mode: input.mode,
-        notes: input.notes ?? null,
-        source: 'SELF',
-        shiftId: shift?.id ?? null,
-        lateMinutes: lateMinutesAgainst(now, shift?.startTime ?? null),
-      },
+      create: { companyId: auth.companyId, employeeId: self.id, date: today, ...values },
+      update: values,
     });
 
     await recordAudit({
@@ -256,7 +337,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       action: 'attendance.check_in',
       entityType: 'AttendanceRecord',
       entityId: record.id,
-      summary: `Checked in (${input.mode.toLowerCase()})${record.lateMinutes ? `, ${record.lateMinutes} minute(s) late` : ''}`,
+      summary: `Checked in (${input.mode.toLowerCase()})${record.lateMinutes ? `, ${record.lateMinutes} minute(s) late` : ''}${geo ? `, ${geo.distanceMeters}m from the work location` : ''}`,
       request,
     });
 
@@ -265,6 +346,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         id: record.id,
         checkInAt: record.checkInAt?.toISOString() ?? null,
         lateMinutes: record.lateMinutes,
+        distanceMeters: geo?.distanceMeters ?? null,
       },
     });
   });
@@ -283,16 +365,33 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     if (existing.checkOutAt) throw new ConflictError('You have already checked out today.');
 
     const now = new Date();
-    const workedMinutes = Math.max(
-      0,
-      Math.round((now.getTime() - existing.checkInAt.getTime()) / 60_000),
-    );
+    const policy = await resolveAttendancePolicy(auth.companyId);
+
+    // The shift captured at check-in is the one scored, so a shift reassignment
+    // made during the day cannot change how the day is measured after the fact.
+    const shift = existing.shiftId
+      ? await prisma.shift.findUnique({
+          where: { id: existing.shiftId },
+          select: { startTime: true, endTime: true },
+        })
+      : await shiftOnDate(self.id, today);
+
+    const computed = computeAttendance({
+      checkInAt: existing.checkInAt,
+      checkOutAt: now,
+      shift,
+      policy,
+    });
 
     const record = await prisma.attendanceRecord.update({
       where: { id: existing.id },
       data: {
         checkOutAt: now,
-        workedMinutes,
+        workedMinutes: computed.workedMinutes,
+        lateMinutes: computed.lateMinutes,
+        earlyLeaveMinutes: computed.earlyLeaveMinutes,
+        overtimeMinutes: computed.overtimeMinutes,
+        status: computed.status,
         notes: input.notes ?? existing.notes,
       },
     });
@@ -303,12 +402,19 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       action: 'attendance.check_out',
       entityType: 'AttendanceRecord',
       entityId: record.id,
-      summary: `Checked out after ${(workedMinutes / 60).toFixed(1)} hour(s)`,
+      summary: `Checked out after ${((computed.workedMinutes ?? 0) / 60).toFixed(1)} hour(s), scored ${computed.status}`,
       request,
     });
 
     return reply.send({
-      data: { id: record.id, checkOutAt: now.toISOString(), workedMinutes },
+      data: {
+        id: record.id,
+        checkOutAt: now.toISOString(),
+        workedMinutes: computed.workedMinutes ?? 0,
+        overtimeMinutes: computed.overtimeMinutes,
+        earlyLeaveMinutes: computed.earlyLeaveMinutes,
+        status: computed.status,
+      },
     });
   });
 
@@ -335,24 +441,171 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const to = toDateOnly(
       query.to ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString(),
     );
+    assertUsableRange(from, to);
 
     const days: AttendanceDay[] = await deriveRange(auth.companyId, employeeId, from, to);
 
-    const totals = days.reduce(
-      (acc, d) => ({
-        present: acc.present + (d.status === 'PRESENT' ? 1 : 0),
-        absent: acc.absent + (d.status === 'ABSENT' ? 1 : 0),
-        onLeave: acc.onLeave + (d.status === 'ON_LEAVE' ? 1 : 0),
-        holiday: acc.holiday + (d.status === 'HOLIDAY' ? 1 : 0),
-        weekend: acc.weekend + (d.status === 'WEEKEND' ? 1 : 0),
-        workedMinutes: acc.workedMinutes + (d.workedMinutes ?? 0),
-        lateMinutes: acc.lateMinutes + (d.lateMinutes ?? 0),
-      }),
-      { present: 0, absent: 0, onLeave: 0, holiday: 0, weekend: 0, workedMinutes: 0, lateMinutes: 0 },
-    );
-
-    return reply.send({ data: { days, totals } });
+    return reply.send({ data: { days, totals: tally(days) } });
   });
+
+  /**
+   * Team attendance for everyone the caller may see.
+   *
+   * Same derivation, same scope rules, one row per employee. There is no
+   * separate manager permission: `employeeScopeFilter` already answers "which
+   * people?", so a manager sees their reports, HR sees the company, and an
+   * employee with OWN scope sees exactly themselves - which is not a leak, just
+   * a very small team.
+   */
+  app.get('/team', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const query = parseOrThrow(attendanceQuerySchema, request.query);
+
+    const scopeFilter = await employeeScopeFilter(auth);
+    if (scopeFilter === null) {
+      return reply.send({
+        data: [],
+        meta: buildMeta(query.page, query.limit, 0),
+        totals: emptyTotals(),
+      });
+    }
+
+    const todayIso = new Date().toISOString();
+    const from = toDateOnly(query.from ?? todayIso);
+    const to = toDateOnly(query.to ?? query.from ?? todayIso);
+    assertUsableRange(from, to);
+
+    // Asking for one specific person still goes through the scope check, so a
+    // guessed id cannot widen what the caller sees.
+    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+
+    const terms = query.q ? query.q.split(/\s+/).filter(Boolean) : [];
+    const searchClauses: Prisma.EmployeeWhereInput[] = terms.map((term) => ({
+      OR: [
+        { firstName: { contains: term, mode: 'insensitive' } },
+        { lastName: { contains: term, mode: 'insensitive' } },
+        { displayName: { contains: term, mode: 'insensitive' } },
+        { employeeNumber: { contains: term, mode: 'insensitive' } },
+      ],
+    }));
+
+    const where: Prisma.EmployeeWhereInput = {
+      AND: [
+        { companyId: auth.companyId },
+        scopeFilter,
+        query.employeeId ? { id: query.employeeId } : {},
+        ...searchClauses,
+      ],
+    };
+
+    const { skip, take } = toSkipTake(query.page, query.limit);
+    const [total, employees] = await Promise.all([
+      prisma.employee.count({ where }),
+      prisma.employee.findMany({
+        where,
+        skip,
+        take,
+        orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          displayName: true,
+          employeeNumber: true,
+          locationId: true,
+          department: { select: { name: true } },
+        },
+      }),
+    ]);
+
+    const derived = await deriveRangeForEmployees(auth.companyId, employees, from, to);
+
+    // The shift each person is on at the end of the range, for the roster column.
+    const shifts = await Promise.all(employees.map((e) => shiftOnDate(e.id, to)));
+
+    const rows: TeamAttendanceRow[] = employees.map((employee, index) => {
+      const days = derived.get(employee.id) ?? [];
+      return {
+        employeeId: employee.id,
+        employeeName: displayName(employee),
+        employeeNumber: employee.employeeNumber,
+        departmentName: employee.department?.name ?? null,
+        shiftName: shifts[index]?.name ?? null,
+        days: query.status ? days.filter((d) => d.status === query.status) : days,
+        totals: tally(days),
+      };
+    });
+
+    // A status filter is about finding people, so drop anyone with no match.
+    const data = query.status ? rows.filter((r) => r.days.length > 0) : rows;
+    const totals = tally(rows.flatMap((r) => r.days));
+
+    return reply.send({
+      data,
+      meta: buildMeta(query.page, query.limit, total),
+      totals,
+      range: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+    });
+  });
+
+  /**
+   * Finalise a day by recording an absence for everyone with no record.
+   *
+   * Exposed as an explicit operation as well as running nightly, so an
+   * administrator can close off a day and see exactly what it did. Idempotent:
+   * re-running reports zero marked rather than failing or duplicating.
+   */
+  app.post(
+    '/mark-absences',
+    { preHandler: requirePermission(PERMISSIONS.ATTENDANCE_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const input = parseOrThrow(markAbsencesSchema, request.body ?? {});
+
+      const date = toDateOnly(input.date);
+      if (date > toDateOnly(new Date().toISOString())) {
+        throw new ValidationError({
+          date: ['You cannot finalise a day that has not happened yet.'],
+        });
+      }
+
+      const scopeFilter = await employeeScopeFilter(auth);
+      if (scopeFilter === null) {
+        const empty: MarkAbsencesResult = {
+          date: date.toISOString().slice(0, 10),
+          scanned: 0,
+          marked: 0,
+          skipped: { notWorkingDay: 0, onLeave: 0, alreadyRecorded: 0 },
+        };
+        return reply.send({ data: empty });
+      }
+
+      if (input.employeeId) await assertEmployeeInScope(auth, input.employeeId);
+
+      const result = await markAbsencesForDate({
+        companyId: auth.companyId,
+        date,
+        employeeFilter: {
+          AND: [scopeFilter, input.employeeId ? { id: input.employeeId } : {}],
+        },
+      });
+
+      if (result.marked > 0) {
+        await recordAudit({
+          companyId: auth.companyId,
+          actorId: auth.userId,
+          action: 'attendance.mark_absences',
+          entityType: 'AttendanceRecord',
+          entityId: result.date,
+          summary: `Marked ${result.marked} employee(s) absent for ${result.date}`,
+          after: { marked: result.marked, scanned: result.scanned },
+          request,
+        });
+      }
+
+      return reply.send({ data: result });
+    },
+  );
 
   // --- regularisation requests --------------------------------------------
 

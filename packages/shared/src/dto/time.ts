@@ -32,11 +32,19 @@ export interface NotificationRecord {
 
 // --------------------------------------------------------------- attendance
 
-export const ATTENDANCE_STATUSES = ['PRESENT', 'ABSENT', 'ON_LEAVE', 'WEEKEND', 'HOLIDAY'] as const;
+export const ATTENDANCE_STATUSES = [
+  'PRESENT',
+  'HALF_DAY',
+  'ABSENT',
+  'ON_LEAVE',
+  'WEEKEND',
+  'HOLIDAY',
+] as const;
 export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 
 export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
   PRESENT: 'Present',
+  HALF_DAY: 'Half day',
   ABSENT: 'Absent',
   ON_LEAVE: 'On leave',
   WEEKEND: 'Weekend',
@@ -58,7 +66,12 @@ export const attendanceQuerySchema = paginationQuerySchema.extend({
 export const attendanceUpsertSchema = z.object({
   employeeId: z.string().trim().min(1, 'Choose an employee.'),
   date: isoDate,
-  status: z.enum(ATTENDANCE_STATUSES).default('PRESENT'),
+  /**
+   * Optional. Omit it and the day is scored by the company policy from the
+   * times given; send one and the human decision wins. Either way the derived
+   * numbers - worked, late, early, overtime - come from the policy.
+   */
+  status: z.enum(ATTENDANCE_STATUSES).optional(),
   checkInAt: z.string().trim().optional().nullable(),
   checkOutAt: z.string().trim().optional().nullable(),
   notes: z.string().trim().max(500).optional().nullable(),
@@ -84,6 +97,11 @@ export interface AttendanceRecordItem {
   checkInAt: string | null;
   checkOutAt: string | null;
   workedMinutes: number | null;
+  lateMinutes: number | null;
+  earlyLeaveMinutes: number | null;
+  overtimeMinutes: number | null;
+  mode: AttendanceMode | null;
+  shiftName: string | null;
   notes: string | null;
   source: string;
 }
@@ -239,6 +257,11 @@ export const ATTENDANCE_MODE_LABELS: Record<AttendanceMode, string> = {
 export const checkInSchema = z.object({
   mode: z.enum(ATTENDANCE_MODES).default('OFFICE'),
   notes: z.string().trim().max(500).optional().nullable(),
+  // Sent only when the company restricts check-in to approved locations. The
+  // browser is never trusted with the decision - the server compares these
+  // against the work location itself.
+  latitude: z.coerce.number().min(-90).max(90).optional().nullable(),
+  longitude: z.coerce.number().min(-180).max(180).optional().nullable(),
 });
 
 export const checkOutSchema = z.object({
@@ -259,12 +282,27 @@ export interface AttendanceDay {
   checkOutAt: string | null;
   workedMinutes: number | null;
   lateMinutes: number | null;
+  earlyLeaveMinutes: number | null;
+  /** The portion of workedMinutes past the overtime threshold, never extra. */
+  overtimeMinutes: number | null;
   mode: string | null;
   shiftName: string | null;
   notes: string | null;
   leaveTypeName: string | null;
   holidayName: string | null;
   hasRecord: boolean;
+}
+
+export interface AttendanceTotals {
+  present: number;
+  halfDay: number;
+  absent: number;
+  onLeave: number;
+  holiday: number;
+  weekend: number;
+  workedMinutes: number;
+  lateMinutes: number;
+  overtimeMinutes: number;
 }
 
 export interface AttendanceTodayState {
@@ -276,6 +314,8 @@ export interface AttendanceTodayState {
   checkOutAt: string | null;
   workedMinutes: number | null;
   lateMinutes: number | null;
+  earlyLeaveMinutes: number | null;
+  overtimeMinutes: number | null;
   mode: string | null;
   shiftName: string | null;
   shiftStartTime: string | null;
@@ -283,4 +323,39 @@ export interface AttendanceTodayState {
   /** False on weekends, holidays and approved leave. */
   isWorkingDay: boolean;
   reason: string | null;
+  /** True when the company requires coordinates with a check-in. */
+  locationRequired: boolean;
+}
+
+// ------------------------------------------------- team attendance (manager)
+
+/** One employee across the requested range, scoped to what the caller may see. */
+export interface TeamAttendanceRow {
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  departmentName: string | null;
+  shiftName: string | null;
+  days: AttendanceDay[];
+  totals: AttendanceTotals;
+}
+
+/** Absence finalisation for one day. Safe to repeat: it never overwrites. */
+export const markAbsencesSchema = z.object({
+  date: isoDate,
+  /** Optional narrowing to a single employee; scope is enforced regardless. */
+  employeeId: z.string().trim().max(64).optional().nullable(),
+});
+
+export type MarkAbsencesInput = z.infer<typeof markAbsencesSchema>;
+
+export interface MarkAbsencesResult {
+  date: string;
+  scanned: number;
+  marked: number;
+  skipped: {
+    notWorkingDay: number;
+    onLeave: number;
+    alreadyRecorded: number;
+  };
 }

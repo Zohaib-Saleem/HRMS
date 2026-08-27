@@ -109,10 +109,29 @@ export function AppShell() {
 
         <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-[1400px]">
-            <Outlet />
+            {/*
+              Routes are code-split, so the first visit to a screen fetches its
+              chunk. The boundary sits inside the shell so the sidebar and
+              header stay put while that happens - a navigation should never
+              blank the whole page.
+            */}
+            <React.Suspense fallback={<RouteFallback />}>
+              <Outlet />
+            </React.Suspense>
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+/** Quiet placeholder while a route chunk loads. Matches a page header block. */
+function RouteFallback() {
+  return (
+    <div className="animate-pulse space-y-4" aria-busy role="status" aria-label="Loading">
+      <div className="h-7 w-56 rounded-md bg-muted" />
+      <div className="h-4 w-80 rounded-md bg-muted" />
+      <div className="h-64 rounded-xl bg-muted" />
     </div>
   );
 }

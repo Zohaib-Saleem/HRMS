@@ -16,11 +16,34 @@ import { NativeSelect } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
-const time = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '--';
+import { minutesLabel as hours, timeLabel as time } from './attendance-ui';
 
-const hours = (minutes: number | null) =>
-  minutes === null ? '--' : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
+/**
+ * Asks the browser where it is, once, when the company requires it.
+ *
+ * The coordinates are only ever evidence. The server compares them against the
+ * work location and can refuse the check-in; nothing here decides anything.
+ */
+function currentPosition(): Promise<{ latitude: number; longitude: number }> {
+  return new Promise((resolve, reject) => {
+    if (!('geolocation' in navigator)) {
+      reject(new Error('This browser cannot share your location, which your company requires for check-in.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) =>
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        }),
+      () =>
+        reject(
+          new Error('Location permission is needed to check in. Allow it in your browser and try again.'),
+        ),
+      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 60_000 },
+    );
+  });
+}
 
 /**
  * Check-in widget.
@@ -45,7 +68,15 @@ export function AttendanceToday() {
   };
 
   const checkIn = useMutation({
-    mutationFn: () => api.post<{ lateMinutes: number | null }>('/attendance/check-in', { mode }),
+    mutationFn: async () => {
+      // Only asked for when the company restricts check-in, so companies that
+      // do not use the feature never see a permission prompt.
+      const where = today.data?.locationRequired ? await currentPosition() : null;
+      return api.post<{ lateMinutes: number | null; distanceMeters: number | null }>(
+        '/attendance/check-in',
+        { mode, ...(where ?? {}) },
+      );
+    },
     onSuccess: async (result) => {
       toast.success(
         result.lateMinutes && result.lateMinutes > 0
@@ -58,9 +89,17 @@ export function AttendanceToday() {
   });
 
   const checkOut = useMutation({
-    mutationFn: () => api.post<{ workedMinutes: number }>('/attendance/check-out', {}),
+    mutationFn: () =>
+      api.post<{ workedMinutes: number; overtimeMinutes: number | null; status: string }>(
+        '/attendance/check-out',
+        {},
+      ),
     onSuccess: async (result) => {
-      toast.success(`Checked out after ${(result.workedMinutes / 60).toFixed(1)} hours.`);
+      toast.success(
+        `Checked out after ${(result.workedMinutes / 60).toFixed(1)} hours.${
+          result.overtimeMinutes ? ` ${result.overtimeMinutes} minute(s) counted as overtime.` : ''
+        }`,
+      );
       await refresh();
     },
     onError: (error: unknown) => toast.error(errorMessage(error)),
@@ -112,6 +151,19 @@ export function AttendanceToday() {
             ) : null}
             {state.lateMinutes && state.lateMinutes > 0 ? (
               <Badge variant="warning">{state.lateMinutes}m late</Badge>
+            ) : null}
+            {state.earlyLeaveMinutes && state.earlyLeaveMinutes > 0 ? (
+              <Badge variant="warning">{state.earlyLeaveMinutes}m early</Badge>
+            ) : null}
+            {state.overtimeMinutes && state.overtimeMinutes > 0 ? (
+              <Badge variant="success">{state.overtimeMinutes}m overtime</Badge>
+            ) : null}
+            {state.status === 'HALF_DAY' ? <Badge variant="warning">Half day</Badge> : null}
+            {state.locationRequired && !state.checkedIn ? (
+              <Badge variant="outline">
+                <MapPin className="size-3" aria-hidden />
+                Location required
+              </Badge>
             ) : null}
           </div>
 

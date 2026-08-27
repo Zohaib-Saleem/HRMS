@@ -79,6 +79,17 @@ export const locationInputSchema = z.object({
   postalCode: optionalText(24),
   country: optionalText(120),
   timezone: optionalText(64),
+  // Geofence centre. Only consulted when the company turns on check-in
+  // location restriction; blank simply means this site is not geofenced.
+  latitude: z.coerce.number().min(-90).max(90).optional().nullable(),
+  longitude: z.coerce.number().min(-180).max(180).optional().nullable(),
+  geofenceRadiusMeters: z.coerce
+    .number()
+    .int('Use whole metres.')
+    .min(10, 'A radius under 10m will reject almost every genuine check-in.')
+    .max(100_000)
+    .optional()
+    .nullable(),
   isActive: z.boolean().default(true),
 });
 
@@ -142,6 +153,9 @@ export interface LocationRecord {
   postalCode: string | null;
   country: string | null;
   timezone: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geofenceRadiusMeters: number | null;
   isActive: boolean;
   employeeCount: number;
   createdAt: string;

@@ -124,16 +124,33 @@ screen reuses.
 
 ## Phase 5 — Attendance & Shifts ✅
 
-- Check-in / check-out with timestamp, notes and location mode (office / remote)
-- Attendance summary: list, tabular and calendar views
-- Daily status derivation: present / absent / weekend / holiday / on-leave
-- Hours-worked calculation
-- Regularization requests with approval
-- Attendance policy: grace period, half-day rules, minimum hours
-- Absent auto-marking scheduler
-- Shift definitions and employee assignment
-- Team attendance view for managers
-- Pay period configuration
+- Check-in / check-out with timestamp, notes and location mode (office / remote) ✅
+- Attendance summary: list, tabular and calendar views ✅
+- Daily status derivation: present / half-day / absent / weekend / holiday / on-leave ✅
+- Hours-worked calculation ✅
+- Regularization requests with approval, writing through to the record ✅
+- Attendance policy: grace period, early-leave grace, half-day and full-day
+  thresholds — all stored on the company and editable in settings ✅
+- Overtime: configurable threshold and daily cap, stored per day as a labelled
+  portion of worked minutes rather than time added to it ✅
+- Absent auto-marking: nightly job plus an on-demand admin action, idempotent
+  and never overwriting an existing record ✅
+- Weekend configuration, read by both attendance and leave ✅
+- Shift definitions and employee assignment ✅
+- Team attendance view for managers, scoped by the existing data scope ✅
+- Optional check-in geofence: per-location coordinates and radius, enforced on
+  the server and off by default ✅
+- Pay period configuration — **not built**, deferred to payroll
+
+### Known limits carried forward
+
+- `lateMinutes` and `earlyLeaveMinutes` are only computed when a shift is
+  assigned; without one they stay null rather than guessing a start time.
+- Overnight shifts (end at or before start) are not scored for early leave.
+- The overtime threshold is the company value, not the assigned shift length.
+- Timesheets are still independent of captured attendance.
+- Date handling is UTC throughout, so "yesterday" in the nightly job means the
+  previous UTC day.
 
 ---
 

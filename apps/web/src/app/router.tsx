@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import { FileQuestion } from 'lucide-react';
@@ -9,30 +10,92 @@ import { EmptyState, ErrorState, FullPageLoader } from '@/components/feedback/st
 import { useSession } from '@/features/auth/session-context';
 import { LoginPage } from '@/features/auth/login-page';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
-import { ProfilePage } from '@/features/profile/profile-page';
-import { SettingsLayout } from '@/features/settings/settings-layout';
-import { EmployeeListPage } from '@/features/people/employee-list-page';
-import { EmployeeDetailPage } from '@/features/people/employee-detail-page';
-import { OrgChartPage } from '@/features/people/org-chart-page';
-import { OrganisationLayout } from '@/features/organisation/organisation-layout';
-import { DepartmentsPage } from '@/features/organisation/departments-page';
-import { TeamsPage } from '@/features/organisation/teams-page';
-import { DesignationsPage } from '@/features/organisation/designations-page';
-import { LocationsPage } from '@/features/organisation/locations-page';
-import { StructurePage } from '@/features/organisation/structure-page';
-import { ApprovalsListPage } from '@/features/approvals/approvals-list-page';
-import { ApprovalDetailPage } from '@/features/approvals/approval-detail-page';
-import { AttendancePage } from '@/features/time/attendance-page';
-import { ShiftsPage } from '@/features/time/shifts-page';
-import { TimesheetsPage } from '@/features/time/timesheets-page';
 import { ForgotPasswordPage, ResetPasswordPage } from '@/features/auth/password-reset-pages';
-import { MyLeavePage } from '@/features/leave/my-leave-page';
-import { LeaveRequestsPage } from '@/features/leave/leave-requests-page';
-import { LeaveTypesPage } from '@/features/leave/leave-types-page';
-import { HolidaysPage } from '@/features/leave/holidays-page';
-import { CompanySettingsPage } from '@/features/settings/company-page';
-import { RolesPage } from '@/features/settings/roles-page';
-import { AuditLogPage } from '@/features/settings/audit-log-page';
+
+/**
+ * Route-level code splitting.
+ *
+ * Login and the dashboard stay in the entry bundle - they are what the first
+ * paint needs. Everything else is a separate chunk fetched when its route is
+ * first opened, so signing in no longer downloads the audit log, the org chart
+ * and every settings screen along the way.
+ *
+ * `lazy` needs a default export, so each named page is adapted inline rather
+ * than adding a default export to files that are also imported by name
+ * elsewhere.
+ */
+const lazyPage = <K extends string>(
+  load: () => Promise<Record<K, React.ComponentType>>,
+  name: K,
+) => React.lazy(async () => ({ default: (await load())[name] }));
+
+const ProfilePage = lazyPage(() => import('@/features/profile/profile-page'), 'ProfilePage');
+const SettingsLayout = lazyPage(
+  () => import('@/features/settings/settings-layout'),
+  'SettingsLayout',
+);
+const EmployeeListPage = lazyPage(
+  () => import('@/features/people/employee-list-page'),
+  'EmployeeListPage',
+);
+const EmployeeDetailPage = lazyPage(
+  () => import('@/features/people/employee-detail-page'),
+  'EmployeeDetailPage',
+);
+const OrgChartPage = lazyPage(() => import('@/features/people/org-chart-page'), 'OrgChartPage');
+const OrganisationLayout = lazyPage(
+  () => import('@/features/organisation/organisation-layout'),
+  'OrganisationLayout',
+);
+const DepartmentsPage = lazyPage(
+  () => import('@/features/organisation/departments-page'),
+  'DepartmentsPage',
+);
+const TeamsPage = lazyPage(() => import('@/features/organisation/teams-page'), 'TeamsPage');
+const DesignationsPage = lazyPage(
+  () => import('@/features/organisation/designations-page'),
+  'DesignationsPage',
+);
+const LocationsPage = lazyPage(
+  () => import('@/features/organisation/locations-page'),
+  'LocationsPage',
+);
+const StructurePage = lazyPage(
+  () => import('@/features/organisation/structure-page'),
+  'StructurePage',
+);
+const ApprovalsListPage = lazyPage(
+  () => import('@/features/approvals/approvals-list-page'),
+  'ApprovalsListPage',
+);
+const ApprovalDetailPage = lazyPage(
+  () => import('@/features/approvals/approval-detail-page'),
+  'ApprovalDetailPage',
+);
+const AttendancePage = lazyPage(() => import('@/features/time/attendance-page'), 'AttendancePage');
+const TeamAttendancePage = lazyPage(
+  () => import('@/features/time/team-attendance-page'),
+  'TeamAttendancePage',
+);
+const ShiftsPage = lazyPage(() => import('@/features/time/shifts-page'), 'ShiftsPage');
+const TimesheetsPage = lazyPage(() => import('@/features/time/timesheets-page'), 'TimesheetsPage');
+const MyLeavePage = lazyPage(() => import('@/features/leave/my-leave-page'), 'MyLeavePage');
+const LeaveRequestsPage = lazyPage(
+  () => import('@/features/leave/leave-requests-page'),
+  'LeaveRequestsPage',
+);
+const LeaveTypesPage = lazyPage(() => import('@/features/leave/leave-types-page'), 'LeaveTypesPage');
+const HolidaysPage = lazyPage(() => import('@/features/leave/holidays-page'), 'HolidaysPage');
+const CompanySettingsPage = lazyPage(
+  () => import('@/features/settings/company-page'),
+  'CompanySettingsPage',
+);
+const AttendancePolicyPage = lazyPage(
+  () => import('@/features/settings/attendance-policy-page'),
+  'AttendancePolicyPage',
+);
+const RolesPage = lazyPage(() => import('@/features/settings/roles-page'), 'RolesPage');
+const AuditLogPage = lazyPage(() => import('@/features/settings/audit-log-page'), 'AuditLogPage');
 
 /** Blocks the whole authenticated area until the session resolves. */
 function ProtectedRoutes() {
@@ -153,6 +216,8 @@ export function AppRoutes() {
 
         <Route element={<RequirePermission permission={PERMISSIONS.ATTENDANCE_READ} />}>
           <Route path="attendance" element={<AttendancePage />} />
+          {/* Scope, not a separate permission, decides who appears here. */}
+          <Route path="attendance/team" element={<TeamAttendancePage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.SHIFT_READ} />}>
@@ -208,6 +273,7 @@ export function AppRoutes() {
             <Route index element={<SettingsIndexRedirect />} />
             <Route element={<RequirePermission permission={PERMISSIONS.COMPANY_READ} />}>
               <Route path="company" element={<CompanySettingsPage />} />
+              <Route path="attendance" element={<AttendancePolicyPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.ROLE_READ} />}>
               <Route path="roles" element={<RolesPage />} />

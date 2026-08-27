@@ -16,12 +16,16 @@ import { ValidationError } from '../../core/errors.js';
  * a stored total can never drift away from the records behind it.
  */
 
-/** Saturday and Sunday. The company has no weekend-days column yet. */
-const WEEKEND_DAYS = new Set([0, 6]);
+/**
+ * Weekends come from the company configuration, never from a constant here.
+ *
+ * A leave request and an attendance calendar that disagree about which days are
+ * working days would quietly corrupt balances, so both read `isWeekendFor` with
+ * the same `Company.weekendDays` value.
+ */
+import { isWeekendFor, weekendDaysFor } from '../time/attendance-policy.js';
 
-export function isWeekend(date: Date): boolean {
-  return WEEKEND_DAYS.has(date.getUTCDay());
-}
+export { isWeekendFor, weekendDaysFor };
 
 /** Dates are stored as @db.Date; pin to UTC midnight so the day never shifts. */
 export function toDateOnly(value: string | Date): Date {
@@ -70,11 +74,14 @@ export async function countWorkingDays(
   end: Date,
   dayPart: LeaveDayPart,
 ): Promise<number> {
-  const holidays = await applicableHolidays(companyId, locationId, start, end);
+  const [holidays, weekendDays] = await Promise.all([
+    applicableHolidays(companyId, locationId, start, end),
+    weekendDaysFor(companyId),
+  ]);
 
   let days = 0;
   for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
-    if (isWeekend(d)) continue;
+    if (isWeekendFor(d, weekendDays)) continue;
     if (holidays.has(d.toISOString().slice(0, 10))) continue;
     days += 1;
   }

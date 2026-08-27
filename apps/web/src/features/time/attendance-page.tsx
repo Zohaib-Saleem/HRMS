@@ -8,7 +8,6 @@ import {
   ATTENDANCE_STATUSES,
   ATTENDANCE_STATUS_LABELS,
   type AttendanceRecordItem,
-  type AttendanceStatus,
   type RegularizationCreateInput,
   regularizationCreateSchema,
 } from '@hrms/shared';
@@ -37,20 +36,9 @@ import {
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { AttendanceToday } from './attendance-today';
 import { AttendanceCalendar } from './attendance-calendar';
-
-
-const STATUS_TONE: Record<AttendanceStatus, 'success' | 'destructive' | 'warning' | 'neutral'> = {
-  PRESENT: 'success',
-  ABSENT: 'destructive',
-  ON_LEAVE: 'warning',
-  WEEKEND: 'neutral',
-  HOLIDAY: 'neutral',
-};
+import { STATUS_TONE, minutesLabel, timeLabel } from './attendance-ui';
 
 const INITIAL = { q: '', employeeId: '', status: '', page: 1, limit: 20 };
-
-const minutesLabel = (minutes: number | null) =>
-  minutes === null ? '--' : `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 
 export function AttendancePage() {
   const { lookups } = useLookups();
@@ -146,20 +134,22 @@ export function AttendancePage() {
                     <TH className="w-32">Check in</TH>
                     <TH className="w-32">Check out</TH>
                     <TH className="w-28 text-right">Worked</TH>
+                    <TH className="w-28 text-right">Overtime</TH>
+                    <TH className="w-32">Late / early</TH>
                     <TH className="w-28">Status</TH>
                     <TH className="w-24">Source</TH>
                   </TR>
                 </THead>
                 <TBody>
                   {query.isLoading ? (
-                    <TableSkeleton rows={6} columns={7} />
+                    <TableSkeleton rows={6} columns={9} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={7} className="p-0">
+                      <TD colSpan={9} className="p-0">
                         <EmptyState
                           icon={CalendarClock}
                           title={hasFilters ? 'No records match your filters' : 'No attendance recorded yet'}
-                          description="Records appear here once attendance is captured. Check-in capture arrives with the full attendance module."
+                          description="Check in above to record today. Days with no record are still shown in the calendar, classified as weekend, holiday, leave or absent."
                         />
                       </TD>
                     </TR>
@@ -167,14 +157,44 @@ export function AttendancePage() {
                     rows.map((row) => (
                       <TR key={row.id}>
                         <TD className="tabular text-[13px]">{formatDate(row.date)}</TD>
-                        <TD className="text-[13px]">{row.employeeName}</TD>
-                        <TD className="tabular text-[13px] text-muted-foreground">
-                          {row.checkInAt ? new Date(row.checkInAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '--'}
+                        <TD className="text-[13px]">
+                          {row.employeeName}
+                          {row.shiftName ? (
+                            <span className="ml-1.5 text-[11.5px] text-muted-foreground">
+                              {row.shiftName}
+                            </span>
+                          ) : null}
                         </TD>
                         <TD className="tabular text-[13px] text-muted-foreground">
-                          {row.checkOutAt ? new Date(row.checkOutAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '--'}
+                          {timeLabel(row.checkInAt)}
+                        </TD>
+                        <TD className="tabular text-[13px] text-muted-foreground">
+                          {timeLabel(row.checkOutAt)}
                         </TD>
                         <TD className="tabular text-right text-[13px]">{minutesLabel(row.workedMinutes)}</TD>
+                        <TD className="tabular text-right text-[13px]">
+                          {row.overtimeMinutes ? (
+                            <span className="text-success">{minutesLabel(row.overtimeMinutes)}</span>
+                          ) : (
+                            <span className="text-muted-foreground">--</span>
+                          )}
+                        </TD>
+                        <TD className="tabular text-[12.5px]">
+                          {row.lateMinutes || row.earlyLeaveMinutes ? (
+                            <span className="text-warning-foreground">
+                              {row.lateMinutes ? `${row.lateMinutes}m late` : ''}
+                              {row.lateMinutes && row.earlyLeaveMinutes ? ' · ' : ''}
+                              {row.earlyLeaveMinutes ? `${row.earlyLeaveMinutes}m early` : ''}
+                            </span>
+                          ) : (
+                            // Nobody arrived, so there is nothing to be on time
+                            // for. Saying "On time" about an absence is worse
+                            // than saying nothing.
+                            <span className="text-muted-foreground">
+                              {row.checkInAt ? 'On time' : '--'}
+                            </span>
+                          )}
+                        </TD>
                         <TD>
                           <Badge variant={STATUS_TONE[row.status]}>
                             {ATTENDANCE_STATUS_LABELS[row.status]}

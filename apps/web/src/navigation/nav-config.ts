@@ -15,6 +15,7 @@ import {
   Settings,
   TrendingUp,
   Users,
+  UsersRound,
 } from 'lucide-react';
 import { PERMISSIONS, type Permission } from '@hrms/shared';
 
@@ -95,6 +96,15 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Attendance',
         to: '/attendance',
         icon: Clock,
+        permission: PERMISSIONS.ATTENDANCE_READ,
+        status: 'ready',
+        // Exact match: /attendance/team is its own entry below.
+        matchPrefix: false,
+      },
+      {
+        label: 'Team attendance',
+        to: '/attendance/team',
+        icon: UsersRound,
         permission: PERMISSIONS.ATTENDANCE_READ,
         status: 'ready',
         matchPrefix: true,
@@ -200,6 +210,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
   '/approvals': 'Approvals',
   '/attendance': 'Attendance',
+  '/attendance/team': 'Team attendance',
   '/shifts': 'Shifts',
   '/timesheets': 'Timesheets',
   '/leave/me': 'My leave',
@@ -217,6 +228,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/profile': 'My profile',
   '/settings': 'Settings',
   '/settings/company': 'Company',
+  '/settings/attendance': 'Attendance policy',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',
 };

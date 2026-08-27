@@ -25,10 +25,10 @@ export function toDateOnly(value: string): Date {
  */
 export async function callerEmployeeOrThrow(
   auth: AuthContext,
-): Promise<{ id: string; firstName: string; lastName: string }> {
+): Promise<{ id: string; firstName: string; lastName: string; locationId: string | null }> {
   const employee = await prisma.employee.findFirst({
     where: { companyId: auth.companyId, userId: auth.userId },
-    select: { id: true, firstName: true, lastName: true },
+    select: { id: true, firstName: true, lastName: true, locationId: true },
   });
 
   if (!employee) {

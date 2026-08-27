@@ -18,6 +18,12 @@ for pair in "a.txt:admin@hrms.local:Admin@12345" "m.txt:manager@hrms.local:Manag
   check "login $em" 200 "$(curl -s -c "$jar" -X POST $B/auth/login -H "$J" -d "{\"email\":\"$em\",\"password\":\"$pw\"}" -o /dev/null -w '%{http_code}')"
 done
 
+# Withdraw anything a previous run of this suite booked. Cancelled leave does
+# not clash and does not count against a balance, so every run starts level.
+for RID in $(curl -s -b e.txt "$B/leave/requests?limit=100" | ev "console.log(j.data.filter(r=>/^Audit:/.test(r.reason||'')&&(r.status==='PENDING'||r.status==='APPROVED')).map(r=>r.id).join(' '))"); do
+  curl -s -o /dev/null -b e.txt -X POST "$B/leave/requests/$RID/cancel" -H "$J" -d '{"reason":"Audit cleanup."}'
+done
+
 echo
 echo "################ A. LEAVE TYPE CRUD ################"
 check "list leave types" 200 "$(code -b a.txt "$B/leave-types")"
@@ -49,6 +55,14 @@ check "weekend-only range rejected" 422 "$(code -b e.txt -X POST $B/leave/reques
 check "exceeding balance rejected" 422 "$(code -b e.txt -X POST $B/leave/requests -H "$J" -d "{\"leaveTypeId\":\"$AL\",\"startDate\":\"2026-09-07\",\"endDate\":\"2026-12-31\",\"reason\":\"far too much\"}")"
 
 echo "-- working-day counting (Mon 7 Sep to Fri 11 Sep 2026 = 5 days) --"
+# Balances are asserted as deltas from here, not as absolute totals.
+# The employee may already hold approved leave booked by another suite or by
+# an earlier run of this one, and an absolute "used == 5" would then be wrong
+# about the application rather than about the arithmetic.
+bal() { curl -s -b e.txt "$B/leave/balances/me" | ev "const b=j.data.find(x=>x.leaveTypeName==='Annual Leave');console.log(b.$1)"; }
+USED0=$(bal usedDays); PEND0=$(bal pendingDays); AVAIL0=$(bal availableDays)
+echo "  INFO  starting Annual Leave balance: used=$USED0 pending=$PEND0 available=$AVAIL0"
+
 REQ=$(curl -s -b e.txt -X POST $B/leave/requests -H "$J" -d "{\"leaveTypeId\":\"$AL\",\"startDate\":\"2026-09-07\",\"endDate\":\"2026-09-11\",\"reason\":\"Audit: full week.\"}")
 DAYS=$(echo "$REQ" | ev "console.log(j.data?j.data.totalDays:'ERR')")
 check "5 working days counted" 5 "$DAYS"
@@ -58,10 +72,10 @@ APID=$(echo "$REQ" | ev "console.log(j.data?j.data.approvalRequestId:'')")
 check "overlapping request rejected" 422 "$(code -b e.txt -X POST $B/leave/requests -H "$J" -d "{\"leaveTypeId\":\"$AL\",\"startDate\":\"2026-09-09\",\"endDate\":\"2026-09-14\",\"reason\":\"overlap\"}")"
 
 echo "-- pending leave is reserved against the balance --"
-PEND=$(curl -s -b e.txt "$B/leave/balances/me" | ev "const b=j.data.find(x=>x.leaveTypeName==='Annual Leave');console.log(b.pendingDays)")
-check "pending shows 5 days" 5 "$PEND"
-AVAIL2=$(curl -s -b e.txt "$B/leave/balances/me" | ev "const b=j.data.find(x=>x.leaveTypeName==='Annual Leave');console.log(b.availableDays)")
-check "available reduced by pending" true "$(node -e "console.log($AVAIL2 === $ANNUAL - 5)")"
+PEND=$(bal pendingDays)
+check "pending rises by the 5 requested days" "$(node -e "console.log($PEND0 + 5)")" "$PEND"
+AVAIL2=$(bal availableDays)
+check "available reduced by pending" true "$(node -e "console.log($AVAIL2 === $AVAIL0 - 5)")"
 
 echo
 echo "################ D. APPROVAL VIA THE PHASE 3 ENGINE ################"
@@ -71,10 +85,9 @@ check "manager approves" 200 "$(code -b m.txt -X POST "$B/approvals/$APID/approv
 check "leave mirrored to APPROVED" APPROVED "$(curl -s -b e.txt "$B/leave/requests/$LID" | ev "console.log(j.data.status)")"
 check "terminal: re-approve rejected" 409 "$(code -b m.txt -X POST "$B/approvals/$APID/approve" -H "$J" -d '{}')"
 
-USED=$(curl -s -b e.txt "$B/leave/balances/me" | ev "const b=j.data.find(x=>x.leaveTypeName==='Annual Leave');console.log(b.usedDays)")
-PEND2=$(curl -s -b e.txt "$B/leave/balances/me" | ev "const b=j.data.find(x=>x.leaveTypeName==='Annual Leave');console.log(b.pendingDays)")
-check "used becomes 5 after approval" 5 "$USED"
-check "pending returns to 0" 0 "$PEND2"
+USED=$(bal usedDays); PEND2=$(bal pendingDays)
+check "used rises by exactly the 5 approved days" "$(node -e "console.log($USED0 + 5)")" "$USED"
+check "pending returns to where it started" "$PEND0" "$PEND2"
 check "employee notified of decision" true "$(curl -s -b e.txt "$B/notifications?limit=10" | ev "console.log(j.data.some(n=>n.type==='APPROVAL_APPROVED'))")"
 
 echo
@@ -84,17 +97,22 @@ AP2=$(echo "$R2" | ev "console.log(j.data?j.data.approvalRequestId:'')")
 L2=$(echo "$R2" | ev "console.log(j.data?j.data.id:'')")
 check "manager rejects" 200 "$(code -b m.txt -X POST "$B/approvals/$AP2/reject" -H "$J" -d '{"comment":"Coverage."}')"
 check "leave mirrored to REJECTED" REJECTED "$(curl -s -b e.txt "$B/leave/requests/$L2" | ev "console.log(j.data.status)")"
-check "rejected days not counted as used" 5 "$(curl -s -b e.txt "$B/leave/balances/me" | ev "const b=j.data.find(x=>x.leaveTypeName==='Annual Leave');console.log(b.usedDays)")"
+check "rejected days not counted as used" "$(node -e "console.log($USED0 + 5)")" "$(bal usedDays)"
 
 R3=$(curl -s -b e.txt -X POST $B/leave/requests -H "$J" -d "{\"leaveTypeId\":\"$AL\",\"startDate\":\"2026-11-02\",\"endDate\":\"2026-11-03\",\"reason\":\"Audit: to cancel.\"}")
 L3=$(echo "$R3" | ev "console.log(j.data?j.data.id:'')")
 check "employee cancels own leave" 200 "$(code -b e.txt -X POST "$B/leave/requests/$L3/cancel" -H "$J" -d '{"reason":"Plans changed."}')"
 check "leave mirrored to CANCELLED" CANCELLED "$(curl -s -b e.txt "$B/leave/requests/$L3" | ev "console.log(j.data.status)")"
-check "cancelled days released" 5 "$(curl -s -b e.txt "$B/leave/balances/me" | ev "const b=j.data.find(x=>x.leaveTypeName==='Annual Leave');console.log(b.usedDays)")"
+check "cancelled days released" "$(node -e "console.log($USED0 + 5)")" "$(bal usedDays)"
 
 echo
 echo "################ F. HOLIDAYS ################"
 check "list holidays" 200 "$(code -b a.txt "$B/holidays")"
+# Holidays created by an earlier run are withdrawn first, so the create and
+# duplicate checks below are testing the rules rather than the leftovers.
+for HID in $(curl -s -b a.txt "$B/holidays?limit=100" | ev "console.log(j.data.filter(h=>h.date==='2026-09-16').map(h=>h.id).join(' '))"); do
+  curl -s -o /dev/null -b a.txt -X DELETE "$B/holidays/$HID"
+done
 HOL=$(curl -s -b a.txt -X POST $B/holidays -H "$J" -d '{"name":"Audit Holiday","date":"2026-09-16","isActive":true}' | ev "console.log(j.data?j.data.id:'')")
 check "create company-wide holiday" true "$([ -n "$HOL" ] && echo true || echo false)"
 check "duplicate company-wide date rejected" 409 "$(code -b a.txt -X POST $B/holidays -H "$J" -d '{"name":"Clash","date":"2026-09-16","isActive":true}')"

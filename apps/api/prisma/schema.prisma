@@ -105,6 +105,32 @@ model Company {
   /// week is configuration, not a code change.
   weekendDays  WeekDay[] @default([SATURDAY, SUNDAY])
 
+  // --- attendance policy (phase 5) ---------------------------------------
+  // Every threshold below is configuration. Nothing in the attendance
+  // calculation may hard-code a number that appears here.
+
+  /// Lateness forgiven entirely at or below this many minutes past shift start.
+  graceMinutes               Int     @default(10)
+  /// Worked minutes at or above this - but below fullDayMinutes - earn a half day.
+  halfDayMinutes             Int     @default(240)
+  /// Worked minutes at or above this earn a full present day.
+  fullDayMinutes             Int     @default(480)
+  /// Leaving early is forgiven at or below this many minutes before shift end.
+  earlyLeaveGraceMinutes     Int     @default(10)
+  overtimeEnabled            Boolean @default(true)
+  /// Worked minutes beyond this count as overtime. Not additional time - a
+  /// labelled portion of workedMinutes, so the two are never double-counted.
+  overtimeAfterMinutes       Int     @default(480)
+  /// Ceiling on overtime credited in one day, so a forgotten check-out cannot
+  /// silently book 14 hours of overtime.
+  overtimeDailyCapMinutes    Int     @default(240)
+
+  // --- check-in location restriction (phase 5) ----------------------------
+  /// Off by default: existing companies keep unrestricted check-in.
+  locationRestrictionEnabled Boolean @default(false)
+  /// Fallback radius for locations that do not set their own.
+  defaultGeofenceRadiusM     Int     @default(200)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -204,6 +230,13 @@ model Location {
   postalCode   String?
   country      String?
   timezone     String?
+
+  /// Geofence centre. Optional: a location without coordinates simply cannot
+  /// be used to restrict check-in, which is reported rather than assumed.
+  latitude             Float?
+  longitude            Float?
+  /// Overrides the company default radius for this site.
+  geofenceRadiusMeters Int?
 
   isActive Boolean @default(true)
 
@@ -562,6 +595,8 @@ enum NotificationType {
 
 enum AttendanceStatus {
   PRESENT
+  /// Worked at least halfDayMinutes but less than fullDayMinutes.
+  HALF_DAY
   ABSENT
   ON_LEAVE
   WEEKEND
@@ -743,6 +778,16 @@ model AttendanceRecord {
   /// change cannot retrospectively alter how late someone was.
   shiftId     String?
   lateMinutes Int?
+
+  /// Derived from the policy at write time so reports never have to recompute.
+  earlyLeaveMinutes Int?
+  /// The portion of workedMinutes beyond the configured overtime threshold.
+  overtimeMinutes   Int?
+
+  /// Where the check-in came from, when the company records it. Stored for the
+  /// audit trail even when the restriction is switched off.
+  checkInLatitude  Float?
+  checkInLongitude Float?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

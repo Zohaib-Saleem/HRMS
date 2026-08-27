@@ -3,6 +3,7 @@ import { env } from './config/env.js';
 import { assertDatabaseConnection, prisma } from './core/db.js';
 import { pruneExpiredSessions } from './auth/session.js';
 import { pruneExpiredResetTokens } from './auth/password-reset.service.js';
+import { markAbsencesForPreviousDay } from './modules/time/absence.service.js';
 import { verifyEmailProvider } from './core/mail/index.js';
 
 async function main(): Promise<void> {
@@ -23,6 +24,12 @@ async function main(): Promise<void> {
 
       const tokens = await pruneExpiredResetTokens();
       if (tokens > 0) app.log.info({ removed: tokens }, 'pruned expired reset tokens');
+
+      // Finalise yesterday: anyone with no record on a working day is recorded
+      // absent. Idempotent, so running it again on the next boot is harmless.
+      for (const run of await markAbsencesForPreviousDay()) {
+        if (run.marked > 0) app.log.info({ ...run }, 'marked absences');
+      }
     } catch (error) {
       app.log.error({ err: error }, 'housekeeping prune failed');
     }

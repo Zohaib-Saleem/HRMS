@@ -1,31 +1,19 @@
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { ATTENDANCE_STATUS_LABELS, type AttendanceDay, type AttendanceStatus } from '@hrms/shared';
+import {
+  ATTENDANCE_STATUS_LABELS,
+  type AttendanceDay,
+  type AttendanceStatus,
+  type AttendanceTotals,
+} from '@hrms/shared';
 import { api } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/feedback/states';
 import { cn } from '@/lib/utils';
-
-interface Totals {
-  present: number;
-  absent: number;
-  onLeave: number;
-  holiday: number;
-  weekend: number;
-  workedMinutes: number;
-  lateMinutes: number;
-}
-
-const STATUS_CELL: Record<AttendanceStatus, string> = {
-  PRESENT: 'bg-success-soft text-success border-success/25',
-  ABSENT: 'bg-destructive-soft text-destructive border-destructive/25',
-  ON_LEAVE: 'bg-warning-soft text-warning-foreground border-warning/25',
-  HOLIDAY: 'bg-primary-soft text-primary border-primary/25',
-  WEEKEND: 'bg-muted text-muted-foreground border-border',
-};
+import { STATUS_CELL } from './attendance-ui';
 
 const monthLabel = (d: Date) =>
   d.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -51,7 +39,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
   const query = useQuery({
     queryKey: ['attendance', 'summary', { from, to, employeeId }],
     queryFn: () =>
-      api.get<{ days: AttendanceDay[]; totals: Totals }>('/attendance/summary', {
+      api.get<{ days: AttendanceDay[]; totals: AttendanceTotals }>('/attendance/summary', {
         query: { from, to, employeeId },
       }),
   });
@@ -86,6 +74,9 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
           {totals ? (
             <div className="tabular mb-4 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-muted-foreground">
               <span><span className="font-medium text-foreground">{totals.present}</span> present</span>
+              {totals.halfDay > 0 ? (
+                <span><span className="font-medium text-foreground">{totals.halfDay}</span> half day</span>
+              ) : null}
               <span><span className="font-medium text-foreground">{totals.absent}</span> absent</span>
               <span><span className="font-medium text-foreground">{totals.onLeave}</span> on leave</span>
               <span><span className="font-medium text-foreground">{totals.holiday}</span> holiday</span>
@@ -95,6 +86,14 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
                 </span>{' '}
                 hours worked
               </span>
+              {totals.overtimeMinutes > 0 ? (
+                <span>
+                  <span className="font-medium text-foreground">
+                    {(totals.overtimeMinutes / 60).toFixed(1)}
+                  </span>{' '}
+                  hours overtime
+                </span>
+              ) : null}
               {totals.lateMinutes > 0 ? (
                 <span><span className="font-medium text-foreground">{totals.lateMinutes}</span> minutes late</span>
               ) : null}
@@ -124,6 +123,8 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
                       ATTENDANCE_STATUS_LABELS[day.status],
                       day.holidayName ?? day.leaveTypeName ?? '',
                       day.workedMinutes !== null ? `${(day.workedMinutes / 60).toFixed(1)}h` : '',
+                      day.lateMinutes ? `${day.lateMinutes}m late` : '',
+                      day.overtimeMinutes ? `${day.overtimeMinutes}m overtime` : '',
                     ]
                       .filter(Boolean)
                       .join(' · ');

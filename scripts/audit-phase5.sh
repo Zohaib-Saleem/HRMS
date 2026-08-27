@@ -29,7 +29,11 @@ if [ "$WORKING" = "true" ]; then
   check "checkedIn now true" true "$(curl -s -b e.txt "$B/attendance/today" | ev "console.log(j.data.checkedIn)")"
   check "check out" 200 "$(code -b e.txt -X POST $B/attendance/check-out -H "$J" -d '{}')"
   check "duplicate check-out rejected" 409 "$(code -b e.txt -X POST $B/attendance/check-out -H "$J" -d '{}')"
-  check "status is PRESENT" PRESENT "$(curl -s -b e.txt "$B/attendance/today" | ev "console.log(j.data.status)")"
+  # Checking straight back out worked no time at all, so the configured
+  # minimum-hours policy scores the day ABSENT. The times stay on the record.
+  # Before the policy existed this asserted PRESENT, which only held because
+  # nothing ever looked at how long the day was.
+  check "immediate check-out scores ABSENT under the policy" ABSENT "$(curl -s -b e.txt "$B/attendance/today" | ev "console.log(j.data.status)")"
 else
   echo "  SKIP  today is not a working day ($(echo "$TODAY" | ev "console.log(j.data.reason)"))"
   check "check-in refused on non-working day" 409 "$(code -b e.txt -X POST $B/attendance/check-in -H "$J" -d '{"mode":"OFFICE"}')"

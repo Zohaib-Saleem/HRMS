@@ -260,6 +260,9 @@ function LocationDrawer({
       postalCode: location?.postalCode ?? '',
       country: location?.country ?? '',
       timezone: location?.timezone ?? '',
+      latitude: location?.latitude ?? null,
+      longitude: location?.longitude ?? null,
+      geofenceRadiusMeters: location?.geofenceRadiusMeters ?? null,
       isActive: location?.isActive ?? true,
     },
   });
@@ -304,6 +307,39 @@ function LocationDrawer({
             <FormField label="Time zone" htmlFor="loc-timezone" error={formState.errors.timezone?.message} hint="e.g. Asia/Karachi">
               <Input {...register('timezone')} />
             </FormField>
+            <div className="sm:col-span-2 border-t border-border pt-4">
+              <p className="text-[13px] font-medium">Check-in geofence</p>
+              <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+                Optional, and only consulted when the company turns on check-in location
+                restriction in the attendance policy. Leave blank if this site is not geofenced.
+              </p>
+            </div>
+            <FormField
+              label="Latitude"
+              htmlFor="loc-lat"
+              error={formState.errors.latitude?.message}
+              hint="Decimal degrees, e.g. 24.8607"
+            >
+              <Input type="number" step="any" {...register('latitude')} />
+            </FormField>
+            <FormField
+              label="Longitude"
+              htmlFor="loc-lng"
+              error={formState.errors.longitude?.message}
+              hint="Decimal degrees, e.g. 67.0011"
+            >
+              <Input type="number" step="any" {...register('longitude')} />
+            </FormField>
+            <FormField
+              label="Radius (metres)"
+              htmlFor="loc-radius"
+              error={formState.errors.geofenceRadiusMeters?.message}
+              hint="Blank uses the company default."
+              className="sm:col-span-2"
+            >
+              <Input type="number" min={10} {...register('geofenceRadiusMeters')} />
+            </FormField>
+
             <FormField label="Address line 1" htmlFor="loc-address1" error={formState.errors.addressLine1?.message} className="sm:col-span-2">
               <Input {...register('addressLine1')} />
             </FormField>
