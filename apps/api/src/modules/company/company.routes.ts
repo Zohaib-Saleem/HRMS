@@ -3,6 +3,7 @@ import { PERMISSIONS, attendancePolicySchema, updateCompanySchema } from '@hrms/
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { diff, recordAudit } from '../../core/audit.js';
+import { ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 
 export const companyRoutes: FastifyPluginAsync = async (app) => {
@@ -65,11 +66,33 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
       const input = parseOrThrow(attendancePolicySchema, request.body);
 
       const before = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } });
-      const after = await prisma.company.update({ where: { id: auth.companyId }, data: input });
+
+      // The check-in restriction fields are optional in the payload: a client
+      // that does not send them keeps whatever is stored. Merging here rather
+      // than defaulting in the schema means an older client cannot switch a
+      // security control off simply by not knowing about it.
+      const data = {
+        ...input,
+        ipRestrictionEnabled: input.ipRestrictionEnabled ?? before.ipRestrictionEnabled,
+        allowedCheckInCidrs: input.allowedCheckInCidrs ?? before.allowedCheckInCidrs,
+      };
+
+      // Checked against the merged result, so enabling the restriction while
+      // relying on an already-configured list is allowed, and enabling it with
+      // nothing configured is not.
+      if (data.ipRestrictionEnabled && data.allowedCheckInCidrs.length === 0) {
+        throw new ValidationError({
+          allowedCheckInCidrs: [
+            'Add at least one network before turning this on - an empty list refuses every check-in.',
+          ],
+        });
+      }
+
+      const after = await prisma.company.update({ where: { id: auth.companyId }, data });
 
       const changes = diff(
         before as unknown as Record<string, unknown>,
-        input as unknown as Record<string, unknown>,
+        data as unknown as Record<string, unknown>,
       );
 
       if (changes.changed.length > 0) {

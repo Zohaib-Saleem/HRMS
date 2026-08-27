@@ -1,4 +1,4 @@
-import type { WeekDay } from '@prisma/client';
+import type { AttendancePolicyScope, WeekDay } from '@prisma/client';
 import { prisma } from '../../core/db.js';
 
 /**
@@ -25,6 +25,8 @@ export interface AttendancePolicy {
   overtimeDailyCapMinutes: number;
   locationRestrictionEnabled: boolean;
   defaultGeofenceRadiusM: number;
+  ipRestrictionEnabled: boolean;
+  allowedCheckInCidrs: string[];
 }
 
 const POLICY_SELECT = {
@@ -38,14 +40,118 @@ const POLICY_SELECT = {
   overtimeDailyCapMinutes: true,
   locationRestrictionEnabled: true,
   defaultGeofenceRadiusM: true,
+  ipRestrictionEnabled: true,
+  allowedCheckInCidrs: true,
 } as const;
 
 /**
- * Reads the live policy. Deliberately not cached: a policy change made in
+ * Reads the company baseline. Deliberately not cached: a policy change made in
  * settings has to affect the very next check-out, not the next restart.
+ *
+ * Weekend days and the check-in restrictions live only at this level. They
+ * describe the company, not a person, so they are never overridden per team.
  */
 export async function resolveAttendancePolicy(companyId: string): Promise<AttendancePolicy> {
   return prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: POLICY_SELECT });
+}
+
+/** The thresholds an override can replace. Everything else stays company-wide. */
+const OVERRIDABLE = [
+  'graceMinutes',
+  'halfDayMinutes',
+  'fullDayMinutes',
+  'earlyLeaveGraceMinutes',
+  'overtimeEnabled',
+  'overtimeAfterMinutes',
+  'overtimeDailyCapMinutes',
+] as const;
+
+/** Most specific wins. Two assignments at the same level are broken by date. */
+const SCOPE_PRECEDENCE: Record<AttendancePolicyScope, number> = {
+  EMPLOYEE: 4,
+  TEAM: 3,
+  DEPARTMENT: 2,
+  COMPANY: 1,
+};
+
+export interface ResolvedPolicy extends AttendancePolicy {
+  /** Null when the company baseline applied and no override matched. */
+  policyId: string | null;
+  policyName: string | null;
+  scope: AttendancePolicyScope | null;
+}
+
+/**
+ * The policy in force for one employee on one date.
+ *
+ * Two things make this more than a lookup:
+ *
+ *   - Specificity. An employee override beats a team one, which beats a
+ *     department one, which beats a company-wide override; anything unmatched
+ *     falls through to the Company row, so a company with no policies at all
+ *     behaves exactly as it did before policies existed.
+ *   - Effective dates. Rescoring a day in March has to use the policy that was
+ *     in force in March. Passing the attendance date rather than "now" is what
+ *     stops an approved correction from silently regrading history against
+ *     today's rules.
+ */
+export async function resolvePolicyFor(
+  companyId: string,
+  employeeId: string,
+  date: Date,
+): Promise<ResolvedPolicy> {
+  const [baseline, employee] = await Promise.all([
+    resolveAttendancePolicy(companyId),
+    prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { departmentId: true, teamId: true },
+    }),
+  ]);
+
+  const unscoped: ResolvedPolicy = { ...baseline, policyId: null, policyName: null, scope: null };
+  if (!employee) return unscoped;
+
+  const targets: Array<{ scope: AttendancePolicyScope; targetId: string | null }> = [
+    { scope: 'EMPLOYEE', targetId: employeeId },
+    { scope: 'TEAM', targetId: employee.teamId },
+    { scope: 'DEPARTMENT', targetId: employee.departmentId },
+    { scope: 'COMPANY', targetId: null },
+  ].filter((t) => t.scope === 'COMPANY' || t.targetId !== null) as Array<{
+    scope: AttendancePolicyScope;
+    targetId: string | null;
+  }>;
+
+  const candidates = await prisma.attendancePolicyAssignment.findMany({
+    where: {
+      companyId,
+      policy: { isActive: true },
+      effectiveFrom: { lte: date },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: date } }],
+      AND: [{ OR: targets.map((t) => ({ scope: t.scope, targetId: t.targetId })) }],
+    },
+    include: { policy: true },
+  });
+
+  if (candidates.length === 0) return unscoped;
+
+  const winner = candidates.reduce((best, current) => {
+    const byScope = SCOPE_PRECEDENCE[current.scope] - SCOPE_PRECEDENCE[best.scope];
+    if (byScope !== 0) return byScope > 0 ? current : best;
+    // Same level: the one that started later is the newer decision.
+    return current.effectiveFrom > best.effectiveFrom ? current : best;
+  });
+
+  const overrides = Object.fromEntries(
+    OVERRIDABLE.map((key) => [key, winner.policy[key]]),
+  ) as Pick<AttendancePolicy, (typeof OVERRIDABLE)[number]>;
+
+  return {
+    ...baseline,
+    ...overrides,
+    policyId: winner.policy.id,
+    policyName: winner.policy.name,
+    scope: winner.scope,
+  };
 }
 
 const WEEKDAY_BY_INDEX: readonly WeekDay[] = [
@@ -222,6 +328,61 @@ export function computeAttendance(input: {
   else status = 'ABSENT';
 
   return { workedMinutes, lateMinutes, earlyLeaveMinutes, overtimeMinutes, status };
+}
+
+// -------------------------------------------------------- network matching
+
+/** Dotted-quad to a 32-bit number, or null if it is not an IPv4 address. */
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.trim().split('.');
+  if (parts.length !== 4) return null;
+
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet > 255) return null;
+    value = value * 256 + octet;
+  }
+  return value;
+}
+
+/**
+ * Whether an address falls inside an allow-list entry.
+ *
+ * Accepts a bare address or CIDR notation. IPv6 is compared literally rather
+ * than by prefix: half-implemented IPv6 masking would be a security control
+ * that quietly does the wrong thing, which is worse than one that only handles
+ * what it claims.
+ *
+ * IPv4-mapped IPv6 addresses (::ffff:10.0.0.1) are unwrapped first, because
+ * that is how a dual-stack Node server reports an ordinary IPv4 client.
+ */
+export function ipMatches(address: string, entry: string): boolean {
+  const ip = address.trim().replace(/^::ffff:/i, '');
+  const rule = entry.trim();
+  if (rule === '') return false;
+
+  if (!rule.includes('/')) return ip.toLowerCase() === rule.toLowerCase();
+
+  const [network, bitsRaw] = rule.split('/');
+  const bits = Number(bitsRaw);
+  if (network === undefined || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+
+  const ipInt = ipv4ToInt(ip);
+  const netInt = ipv4ToInt(network);
+  if (ipInt === null || netInt === null) return false;
+
+  // A /0 shifts by 32, which is a no-op in JS - handle it explicitly.
+  if (bits === 0) return true;
+  const mask = (0xffffffff << (32 - bits)) >>> 0;
+  return (ipInt & mask) >>> 0 === (netInt & mask) >>> 0;
+}
+
+/** True when the address is permitted by any entry in the allow-list. */
+export function isIpAllowed(address: string | null, allowList: readonly string[]): boolean {
+  if (!address) return false;
+  return allowList.some((entry) => ipMatches(address, entry));
 }
 
 // --------------------------------------------------------------- geofencing

@@ -4,7 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
-import { FileClock, Plus, Send } from 'lucide-react';
+import { FileClock, Plus, Send, RefreshCw } from 'lucide-react';
 import {
   PERMISSIONS,
   TIMESHEET_STATUSES,
@@ -12,6 +12,7 @@ import {
   type TimesheetCreateInput,
   type TimesheetRecord,
   type TimesheetStatus,
+  type TimesheetSyncResult,
   timesheetCreateSchema,
 } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
@@ -76,6 +77,24 @@ export function TimesheetsPage() {
         },
       }),
     placeholderData: keepPreviousData,
+  });
+
+  /**
+   * Fills a draft from captured attendance. Attendance is the source of truth
+   * for what was worked; anything typed by hand on the timesheet is kept.
+   */
+  const syncAttendance = useMutation({
+    mutationFn: (id: string) =>
+      api.post<TimesheetSyncResult>(`/timesheets/${id}/sync-attendance`, { replaceExisting: true }),
+    onSuccess: async (result) => {
+      toast.success(
+        result.entriesWritten > 0
+          ? `Filled ${result.entriesWritten} day(s) from attendance${result.manualEntriesKept > 0 ? `, keeping ${result.manualEntriesKept} manual entr${result.manualEntriesKept === 1 ? 'y' : 'ies'}` : ''}.${result.skippedIncomplete > 0 ? ` ${result.skippedIncomplete} day(s) had no check-out and were left alone.` : ''}`
+          : 'No completed attendance days in this period to fill from.',
+      );
+      await queryClient.invalidateQueries({ queryKey: ['timesheets'] });
+    },
+    onError: (error: unknown) => toast.error(errorMessage(error)),
   });
 
   const submit = useMutation({
@@ -185,15 +204,27 @@ export function TimesheetsPage() {
                         <TD>
                           <div className="flex justify-end gap-1">
                             {row.status === 'DRAFT' ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                loading={submit.isPending}
-                                onClick={() => void handleSubmitSheet(row)}
-                              >
-                                <Send />
-                                Submit
-                              </Button>
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  loading={syncAttendance.isPending}
+                                  onClick={() => syncAttendance.mutate(row.id)}
+                                  title="Fill this period from captured attendance. Manual lines are kept."
+                                >
+                                  <RefreshCw />
+                                  From attendance
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  loading={submit.isPending}
+                                  onClick={() => void handleSubmitSheet(row)}
+                                >
+                                  <Send />
+                                  Submit
+                                </Button>
+                              </>
                             ) : row.approvalRequestId ? (
                               <Button
                                 variant="ghost"

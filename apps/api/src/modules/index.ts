@@ -11,6 +11,7 @@ import { locationRoutes } from './organisation/locations.routes.js';
 import { employeeRoutes } from './employees/employees.routes.js';
 import { approvalRoutes } from './approvals/approvals.routes.js';
 import { notificationRoutes } from './notifications/notifications.routes.js';
+import { attendancePolicyRoutes } from './time/attendance-policies.routes.js';
 import { attendanceRoutes } from './time/attendance.routes.js';
 import { shiftRoutes } from './time/shifts.routes.js';
 import { timesheetRoutes } from './time/timesheets.routes.js';
@@ -48,6 +49,7 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/approvals', plugin: approvalRoutes },
   { prefix: '/notifications', plugin: notificationRoutes },
   { prefix: '/attendance', plugin: attendanceRoutes },
+  { prefix: '/attendance-policies', plugin: attendancePolicyRoutes },
   { prefix: '/shifts', plugin: shiftRoutes },
   { prefix: '/timesheets', plugin: timesheetRoutes },
 

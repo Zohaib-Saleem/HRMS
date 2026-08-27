@@ -5,8 +5,10 @@ import { toDateOnly } from '../leave/leave.service.js';
 import {
   computeAttendance,
   haversineMeters,
+  isIpAllowed,
   isWeekendFor,
   resolveAttendancePolicy,
+  resolvePolicyFor,
   type AttendancePolicy,
 } from './attendance-policy.js';
 
@@ -210,6 +212,38 @@ export async function shiftOnDate(
  * Does nothing at all when the restriction is off, which is the default, so
  * existing companies are unaffected.
  */
+/**
+ * Enforces the company check-in network allow-list, server side.
+ *
+ * Fails closed the same way the geofence does: with the restriction on and an
+ * empty allow-list, nothing is permitted. An allow-list that silently means
+ * "everything" would be a security control that does the opposite of what its
+ * name says.
+ *
+ * The address comes from Fastify, which honours `trustProxy` when configured;
+ * it is never taken from a client-supplied header here.
+ */
+export function assertCheckInIpAllowed(input: {
+  policy: AttendancePolicy;
+  ip: string | null;
+}): void {
+  const { policy, ip } = input;
+  if (!policy.ipRestrictionEnabled) return;
+
+  if (policy.allowedCheckInCidrs.length === 0) {
+    throw new ForbiddenError(
+      'Check-in is restricted to approved networks, but no networks have been configured. Ask an administrator to add one.',
+    );
+  }
+
+  if (!isIpAllowed(ip, policy.allowedCheckInCidrs)) {
+    // Deliberately does not echo the address or the allow-list back.
+    throw new ForbiddenError(
+      'You are not on a network approved for check-in. Connect to a company network and try again.',
+    );
+  }
+}
+
 export async function assertCheckInLocationAllowed(input: {
   employee: { locationId: string | null };
   policy: AttendancePolicy;
@@ -282,7 +316,7 @@ export async function applyRegularization(regularizationId: string): Promise<voi
     prisma.attendanceRecord.findUnique({
       where: { employeeId_date: { employeeId: req.employeeId, date } },
     }),
-    resolveAttendancePolicy(req.companyId),
+    resolvePolicyFor(req.companyId, req.employeeId, date),
     shiftOnDate(req.employeeId, date),
   ]);
 

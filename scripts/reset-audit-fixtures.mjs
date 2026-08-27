@@ -133,10 +133,18 @@ async function main() {
     })
   ).count;
 
-  // Timesheets the Phase 3 suite creates for a fixed period; a second run
-  // would collide with the first.
+  // Timesheets the suites create for fixed periods. A timesheet has no delete
+  // route - correctly, since approved time should not vanish - so a second run
+  // would collide on the (employee, periodStart) unique index.
   const auditTimesheets = await prisma.timesheet.findMany({
-    where: { periodStart: new Date(Date.UTC(2026, 5, 1)) },
+    where: {
+      periodStart: {
+        in: [
+          new Date(Date.UTC(2026, 5, 1)), // Phase 3
+          new Date(Date.UTC(2026, 7, 17)), // Phase 6
+        ],
+      },
+    },
     select: { id: true, approvalRequestId: true },
   });
   removed.timesheets = (

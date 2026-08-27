@@ -61,6 +61,10 @@ export const attendanceQuerySchema = paginationQuerySchema.extend({
   status: z.enum(ATTENDANCE_STATUSES).optional(),
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
+  // Narrowing only. These never widen what the caller may see - the data scope
+  // is applied first and these filter inside it.
+  teamId: z.string().trim().max(64).optional(),
+  departmentId: z.string().trim().max(64).optional(),
 });
 
 export const attendanceUpsertSchema = z.object({
@@ -202,6 +206,9 @@ export interface TimesheetEntryRecord {
   date: string;
   minutes: number;
   description: string | null;
+  /** MANUAL unless the line was filled from captured attendance. */
+  source: TimesheetEntrySource;
+  attendanceRecordId: string | null;
 }
 
 export interface TimesheetRecord {
@@ -325,6 +332,10 @@ export interface AttendanceTodayState {
   reason: string | null;
   /** True when the company requires coordinates with a check-in. */
   locationRequired: boolean;
+  /** True when check-in is limited to approved networks. The list is never sent. */
+  networkRestricted: boolean;
+  /** The override in force today, or null when the company baseline applies. */
+  policyName: string | null;
 }
 
 // ------------------------------------------------- team attendance (manager)
@@ -357,5 +368,91 @@ export interface MarkAbsencesResult {
     notWorkingDay: number;
     onLeave: number;
     alreadyRecorded: number;
+  };
+}
+
+// ------------------------------------ attendance -> timesheet, pay period (P6)
+
+export const TIMESHEET_ENTRY_SOURCES = ['MANUAL', 'CAPTURED'] as const;
+export type TimesheetEntrySource = (typeof TIMESHEET_ENTRY_SOURCES)[number];
+
+export const TIMESHEET_ENTRY_SOURCE_LABELS: Record<TimesheetEntrySource, string> = {
+  MANUAL: 'Manual',
+  CAPTURED: 'From attendance',
+};
+
+/**
+ * Fill a draft timesheet from captured attendance.
+ *
+ * Attendance stays the source of truth for what was actually worked; the
+ * timesheet consumes it. Only CAPTURED lines are rewritten, so anything typed
+ * by a person survives a re-sync untouched.
+ */
+export const timesheetSyncSchema = z.object({
+  /** Replace existing captured lines. False adds only days not already covered. */
+  replaceExisting: z.boolean().default(true),
+});
+
+export type TimesheetSyncInput = z.infer<typeof timesheetSyncSchema>;
+
+export interface TimesheetSyncResult {
+  timesheetId: string;
+  daysConsidered: number;
+  entriesWritten: number;
+  entriesRemoved: number;
+  manualEntriesKept: number;
+  capturedMinutes: number;
+  manualMinutes: number;
+  totalMinutes: number;
+  /** Days with a check-in but no check-out, which are never guessed at. */
+  skippedIncomplete: number;
+}
+
+export const payPeriodQuerySchema = z.object({
+  from: z.string().trim().min(1, 'Choose a period start.'),
+  to: z.string().trim().min(1, 'Choose a period end.'),
+  employeeId: z.string().trim().max(64).optional(),
+});
+
+/**
+ * One employee's attendance summarised for a pay period.
+ *
+ * Deliberately figures, not money: this is the clean input a payroll run would
+ * consume, and nothing here decides what anyone is paid.
+ */
+export interface PayPeriodRow {
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  departmentName: string | null;
+  workedMinutes: number;
+  overtimeMinutes: number;
+  /** Worked minutes excluding the overtime portion, so the two sum to worked. */
+  regularMinutes: number;
+  presentDays: number;
+  halfDays: number;
+  absentDays: number;
+  leaveDays: number;
+  holidayDays: number;
+  weekendDays: number;
+  lateMinutes: number;
+  earlyLeaveMinutes: number;
+  /** Days needing a human look: checked in but never out. */
+  incompleteDays: number;
+  /** Days whose record came from an approved correction or an administrator. */
+  adjustedDays: number;
+}
+
+export interface PayPeriodSummary {
+  from: string;
+  to: string;
+  rows: PayPeriodRow[];
+  totals: {
+    employees: number;
+    workedMinutes: number;
+    overtimeMinutes: number;
+    absentDays: number;
+    leaveDays: number;
+    incompleteDays: number;
   };
 }

@@ -22,7 +22,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { FormField, Input } from '@/components/ui/field';
+import { FormField, Input, Textarea } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/feedback/states';
 import { usePermissions } from '@/features/auth/session-context';
@@ -70,6 +70,8 @@ export function AttendancePolicyPage() {
           overtimeDailyCapMinutes: query.data.overtimeDailyCapMinutes,
           locationRestrictionEnabled: query.data.locationRestrictionEnabled,
           defaultGeofenceRadiusM: query.data.defaultGeofenceRadiusM,
+          ipRestrictionEnabled: query.data.ipRestrictionEnabled,
+          allowedCheckInCidrs: query.data.allowedCheckInCidrs ?? [],
         }
       : undefined,
   });
@@ -114,6 +116,7 @@ export function AttendancePolicyPage() {
 
   const restrictionOn = watch('locationRestrictionEnabled');
   const overtimeOn = watch('overtimeEnabled');
+  const networkOn = watch('ipRestrictionEnabled');
 
   const unmapped = (locations.data?.data ?? []).filter(
     (l) => l.isActive && (l.latitude === null || l.longitude === null),
@@ -337,6 +340,63 @@ export function AttendancePolicyPage() {
                 {...register('defaultGeofenceRadiusM')}
               />
             </FormField>
+          </div>
+
+          <div className="border-t border-border pt-5">
+            <label
+              className={cn(
+                'flex cursor-pointer items-start gap-3 text-[13.5px]',
+                !canManage && 'pointer-events-none opacity-60',
+              )}
+            >
+              <input
+                type="checkbox"
+                disabled={!canManage}
+                {...register('ipRestrictionEnabled')}
+                className="mt-0.5 size-4 shrink-0 rounded border-input accent-[var(--primary)]"
+              />
+              <span>
+                <span className="block font-medium">Restrict check-in to approved networks</span>
+                <span className="block text-[12.5px] text-muted-foreground">
+                  Checked against the address the request arrives from. The list is never sent to
+                  the browser.
+                </span>
+              </span>
+            </label>
+
+            <div className={cn('mt-4', !networkOn && 'opacity-50')}>
+              <Controller
+                control={control}
+                name="allowedCheckInCidrs"
+                render={({ field }) => (
+                  <FormField
+                    label="Approved networks"
+                    htmlFor="allowedCheckInCidrs"
+                    hint="One per line: an address like 10.0.0.5, or a range like 10.0.0.0/24."
+                    error={
+                      formState.errors.allowedCheckInCidrs?.message ??
+                      formState.errors.allowedCheckInCidrs?.find?.((e) => e?.message)?.message
+                    }
+                  >
+                    <Textarea
+                      rows={4}
+                      disabled={!canManage || !networkOn}
+                      className="tabular"
+                      placeholder={'10.0.0.0/24\n192.168.1.50'}
+                      value={(field.value ?? []).join('\n')}
+                      onChange={(e) =>
+                        field.onChange(
+                          e.target.value
+                            .split('\n')
+                            .map((line) => line.trim())
+                            .filter(Boolean),
+                        )
+                      }
+                    />
+                  </FormField>
+                )}
+              />
+            </div>
           </div>
 
           {restrictionOn && unmapped.length > 0 ? (

@@ -130,6 +130,11 @@ model Company {
   locationRestrictionEnabled Boolean @default(false)
   /// Fallback radius for locations that do not set their own.
   defaultGeofenceRadiusM     Int     @default(200)
+  /// Off by default: existing companies keep unrestricted check-in.
+  ipRestrictionEnabled       Boolean @default(false)
+  /// Networks permitted to check in, as CIDR blocks or bare addresses. Empty
+  /// while the restriction is on means nothing is permitted - fail closed.
+  allowedCheckInCidrs        String[] @default([])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -152,6 +157,10 @@ model Company {
   shiftAssignments    EmployeeShiftAssignment[]
   shiftChangeRequests ShiftChangeRequest[]
   timesheets          Timesheet[]
+
+  // --- phase 6 ---
+  attendancePolicies           AttendancePolicy[]
+  attendancePolicyAssignments  AttendancePolicyAssignment[]
 
   // --- phase 4 ---
   leaveTypes    LeaveType[]
@@ -939,6 +948,11 @@ model TimesheetEntry {
   minutes     Int
   description String?
 
+  /// MANUAL unless the line was filled from captured attendance.
+  source             TimesheetEntrySource @default(MANUAL)
+  /// The attendance day this line mirrors, when it came from one.
+  attendanceRecordId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1090,4 +1104,89 @@ model Holiday {
   @@index([companyId, date])
   @@index([locationId, date])
   @@map("holidays")
+}
+
+// ---------------------------------------------------------------- phase 6
+
+/// How broadly an attendance policy applies. Resolution runs most specific
+/// first, so an employee override beats a team one, which beats a department
+/// one, which beats the company baseline.
+enum AttendancePolicyScope {
+  COMPANY
+  DEPARTMENT
+  TEAM
+  EMPLOYEE
+}
+
+/// A named set of attendance thresholds.
+///
+/// The Company row still carries the baseline every employee falls back to, so
+/// nothing here is required for the system to work. A policy exists only to
+/// override that baseline for part of the workforce, or to change it from a
+/// date onwards without rewriting how past days were scored.
+model AttendancePolicy {
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String
+  description String?
+
+  graceMinutes            Int     @default(10)
+  halfDayMinutes          Int     @default(240)
+  fullDayMinutes          Int     @default(480)
+  earlyLeaveGraceMinutes  Int     @default(10)
+  overtimeEnabled         Boolean @default(true)
+  overtimeAfterMinutes    Int     @default(480)
+  overtimeDailyCapMinutes Int     @default(240)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company                      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignments AttendancePolicyAssignment[]
+
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+  @@map("attendance_policies")
+}
+
+/// Where and when a policy applies.
+///
+/// Effective dates are what keep history honest: rescoring a day in March has
+/// to use the policy that was in force in March, not whatever is current. A
+/// null `effectiveTo` means "still in force".
+model AttendancePolicyAssignment {
+  id        String                @id @default(cuid())
+  companyId String
+  policyId  String
+  scope     AttendancePolicyScope
+
+  /// Null for COMPANY scope; otherwise the department, team or employee id.
+  /// Deliberately not a foreign key: one column cannot reference three tables,
+  /// and the routes validate the target exists before writing.
+  targetId String?
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  policy  AttendancePolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, scope, targetId])
+  @@index([policyId])
+  @@map("attendance_policy_assignments")
+}
+
+/// Where a timesheet line came from.
+///
+/// CAPTURED lines mirror attendance and are rewritten whenever the timesheet is
+/// synced. MANUAL lines were typed by a person and a sync never touches them,
+/// so the two can coexist on one timesheet without either overwriting the other.
+enum TimesheetEntrySource {
+  MANUAL
+  CAPTURED
 }

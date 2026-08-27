@@ -14,6 +14,8 @@ import {
 import { api, errorMessage } from '@/lib/api';
 import { useDebounced } from '@/lib/use-debounced';
 import { formatDate } from '@/lib/utils';
+import { Link } from 'react-router-dom';
+import { useLookups } from '@/lib/lookups';
 import { usePermissions } from '@/features/auth/session-context';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card } from '@/components/ui/card';
@@ -46,12 +48,15 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export function TeamAttendancePage() {
   const { has } = usePermissions();
+  const { lookups } = useLookups();
   const canManage = has(PERMISSIONS.ATTENDANCE_MANAGE);
   const queryClient = useQueryClient();
 
   const [filters, setFilters] = React.useState(() => ({
     q: '',
     status: '',
+    departmentId: '',
+    teamId: '',
     from: todayIso(),
     to: todayIso(),
     page: 1,
@@ -75,6 +80,8 @@ export function TeamAttendancePage() {
           limit: filters.limit,
           q: debouncedQuery || undefined,
           status: filters.status || undefined,
+          departmentId: filters.departmentId || undefined,
+          teamId: filters.teamId || undefined,
           from: filters.from,
           to: filters.to,
         },
@@ -99,7 +106,17 @@ export function TeamAttendancePage() {
   const rows = query.data?.data ?? [];
   const totals = query.data?.totals;
   const singleDay = filters.from === filters.to;
-  const hasFilters = filters.q !== '' || filters.status !== '' || !singleDay;
+  const hasFilters =
+    filters.q !== '' ||
+    filters.status !== '' ||
+    filters.departmentId !== '' ||
+    filters.teamId !== '' ||
+    !singleDay;
+
+  // Teams belong to departments, so choosing a department narrows the list.
+  const teamOptions = filters.departmentId
+    ? lookups.teams.filter((t) => t.departmentId === filters.departmentId)
+    : lookups.teams;
 
   return (
     <>
@@ -154,10 +171,42 @@ export function TeamAttendancePage() {
           placeholder="Search name or employee number"
           hasActiveFilters={hasFilters}
           onReset={() =>
-            setFilters({ q: '', status: '', from: todayIso(), to: todayIso(), page: 1, limit: 20 })
+            setFilters({
+              q: '',
+              status: '',
+              departmentId: '',
+              teamId: '',
+              from: todayIso(),
+              to: todayIso(),
+              page: 1,
+              limit: 20,
+            })
           }
           filters={
             <>
+              <NativeSelect
+                value={filters.departmentId}
+                // Changing department clears a team that no longer belongs to it.
+                onChange={(e) => update({ departmentId: e.target.value, teamId: '' })}
+                aria-label="Filter by department"
+                className="w-44"
+              >
+                <option value="">All departments</option>
+                {lookups.departments.map((d) => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                value={filters.teamId}
+                onChange={(e) => update({ teamId: e.target.value })}
+                aria-label="Filter by team"
+                className="w-40"
+              >
+                <option value="">All teams</option>
+                {teamOptions.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </NativeSelect>
               <Input
                 type="date"
                 value={filters.from}
@@ -270,7 +319,12 @@ export function TeamAttendancePage() {
 function EmployeeCell({ row }: { row: TeamAttendanceRow }) {
   return (
     <TD className="text-[13px]">
-      <span className="font-medium">{row.employeeName}</span>
+      <Link
+        to={`/attendance/team/${row.employeeId}`}
+        className="font-medium underline-offset-2 hover:underline"
+      >
+        {row.employeeName}
+      </Link>
       <span className="tabular ml-1.5 text-[11.5px] text-muted-foreground">
         {row.employeeNumber}
       </span>

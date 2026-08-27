@@ -154,7 +154,35 @@ screen reuses.
 
 ---
 
-## Phase 6 — Documents
+## Phase 6 — Attendance depth ✅
+
+Attendance was carried from "it works" to "it is configurable and auditable".
+
+- Scoped attendance policies: named threshold sets assigned to an individual,
+  a team, a department or the whole company, most specific winning ✅
+- Effective dates on every assignment, so rescoring a past day uses the policy
+  that was in force on that day rather than today's ✅
+- Company baseline retained as the fallback, so a company that creates no
+  policy behaves exactly as before ✅
+- Check-in IP restriction: company-configurable allow-list of addresses and
+  IPv4 CIDR ranges, enforced server-side and fail-closed ✅
+- Attendance → timesheet: a draft timesheet can be filled from captured
+  attendance, keeping manual lines and skipping days with no check-out ✅
+- Pay-period data: worked, overtime, regular, day counts and exceptions per
+  employee — figures only, no payroll calculation ✅
+- Team attendance filtering by department and team, plus drill-through to one
+  employee's calendar, history and the policy in force ✅
+
+### Deliberately not built
+
+- **Payroll calculation.** Phase 6 prepares the input; deciding what anyone is
+  paid is a module nobody has specified.
+- **Documents.** Moved to Phase 7 below. It needs a storage decision and has no
+  dependency on the attendance work, so it was not started.
+
+---
+
+## Phase 7 — Documents
 
 - Employee document storage with categories
 - Company-wide document library

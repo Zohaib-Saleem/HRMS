@@ -77,6 +77,10 @@ const TeamAttendancePage = lazyPage(
   () => import('@/features/time/team-attendance-page'),
   'TeamAttendancePage',
 );
+const TeamAttendanceDetailPage = lazyPage(
+  () => import('@/features/time/team-attendance-detail-page'),
+  'TeamAttendanceDetailPage',
+);
 const ShiftsPage = lazyPage(() => import('@/features/time/shifts-page'), 'ShiftsPage');
 const TimesheetsPage = lazyPage(() => import('@/features/time/timesheets-page'), 'TimesheetsPage');
 const MyLeavePage = lazyPage(() => import('@/features/leave/my-leave-page'), 'MyLeavePage');
@@ -93,6 +97,10 @@ const CompanySettingsPage = lazyPage(
 const AttendancePolicyPage = lazyPage(
   () => import('@/features/settings/attendance-policy-page'),
   'AttendancePolicyPage',
+);
+const AttendancePoliciesPage = lazyPage(
+  () => import('@/features/settings/attendance-policies-page'),
+  'AttendancePoliciesPage',
 );
 const RolesPage = lazyPage(() => import('@/features/settings/roles-page'), 'RolesPage');
 const AuditLogPage = lazyPage(() => import('@/features/settings/audit-log-page'), 'AuditLogPage');
@@ -218,6 +226,8 @@ export function AppRoutes() {
           <Route path="attendance" element={<AttendancePage />} />
           {/* Scope, not a separate permission, decides who appears here. */}
           <Route path="attendance/team" element={<TeamAttendancePage />} />
+          {/* Scope is enforced server-side, so a guessed id reveals nothing. */}
+          <Route path="attendance/team/:employeeId" element={<TeamAttendanceDetailPage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.SHIFT_READ} />}>
@@ -274,6 +284,7 @@ export function AppRoutes() {
             <Route element={<RequirePermission permission={PERMISSIONS.COMPANY_READ} />}>
               <Route path="company" element={<CompanySettingsPage />} />
               <Route path="attendance" element={<AttendancePolicyPage />} />
+              <Route path="attendance-policies" element={<AttendancePoliciesPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.ROLE_READ} />}>
               <Route path="roles" element={<RolesPage />} />

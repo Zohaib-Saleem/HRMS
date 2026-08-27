@@ -9,6 +9,8 @@ import {
   type AttendanceTodayState,
   type AttendanceTotals,
   type MarkAbsencesResult,
+  type PayPeriodRow,
+  type PayPeriodSummary,
   type TeamAttendanceRow,
   attendanceQuerySchema,
   attendanceSummaryQuerySchema,
@@ -16,6 +18,7 @@ import {
   checkInSchema,
   checkOutSchema,
   markAbsencesSchema,
+  payPeriodQuerySchema,
   regularizationCreateSchema,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
@@ -31,12 +34,17 @@ import {
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
 import {
+  assertCheckInIpAllowed,
   assertCheckInLocationAllowed,
   deriveRange,
   deriveRangeForEmployees,
   shiftOnDate,
 } from './attendance.service.js';
-import { computeAttendance, resolveAttendancePolicy } from './attendance-policy.js';
+import {
+  computeAttendance,
+  resolveAttendancePolicy,
+  resolvePolicyFor,
+} from './attendance-policy.js';
 import { markAbsencesForDate } from './absence.service.js';
 
 const displayName = (e: { firstName: string; lastName: string; displayName: string | null }) =>
@@ -181,7 +189,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       // still computed from the policy, so a hand-entered day is measured the
       // same way as a captured one.
       const [policy, shift] = await Promise.all([
-        resolveAttendancePolicy(auth.companyId),
+        resolvePolicyFor(auth.companyId, input.employeeId, date),
         shiftOnDate(input.employeeId, date),
       ]);
       const computed = computeAttendance({ checkInAt, checkOutAt, shift, policy });
@@ -242,7 +250,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const [[day], shift, policy] = await Promise.all([
       deriveRange(auth.companyId, self.id, today, today),
       shiftOnDate(self.id, today),
-      resolveAttendancePolicy(auth.companyId),
+      resolvePolicyFor(auth.companyId, self.id, today),
     ]);
 
     const workingDay =
@@ -270,6 +278,11 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       reason:
         day?.holidayName ?? day?.leaveTypeName ?? (day?.status === 'WEEKEND' ? 'Weekend' : null),
       locationRequired: policy.locationRestrictionEnabled,
+      // The allow-list itself is never sent to the browser; only whether one
+      // applies, so the widget can explain a refusal without publishing the
+      // company network layout.
+      networkRestricted: policy.ipRestrictionEnabled,
+      policyName: policy.policyName,
     };
 
     return reply.send({ data: state });
@@ -283,7 +296,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const today = toDateOnly(new Date().toISOString());
     const [[day], policy] = await Promise.all([
       deriveRange(auth.companyId, self.id, today, today),
-      resolveAttendancePolicy(auth.companyId),
+      resolvePolicyFor(auth.companyId, self.id, today),
     ]);
 
     // Refuse rather than quietly record a day the calendar says is not worked.
@@ -300,8 +313,11 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       throw new ConflictError('You have already checked in today.');
     }
 
-    // Enforced here, on the server. The browser only supplies coordinates; it
-    // never gets to decide whether they are acceptable.
+    // Both restrictions are enforced here, on the server. The network check
+    // runs first: it needs nothing from the client, so a request from an
+    // unapproved network is refused before any coordinates are considered.
+    assertCheckInIpAllowed({ policy, ip: request.ip ?? null });
+
     const geo = await assertCheckInLocationAllowed({
       employee: self,
       policy,
@@ -365,7 +381,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     if (existing.checkOutAt) throw new ConflictError('You have already checked out today.');
 
     const now = new Date();
-    const policy = await resolveAttendancePolicy(auth.companyId);
+    const policy = await resolvePolicyFor(auth.companyId, self.id, today);
 
     // The shift captured at check-in is the one scored, so a shift reassignment
     // made during the day cannot change how the day is measured after the fact.
@@ -492,8 +508,12 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const where: Prisma.EmployeeWhereInput = {
       AND: [
         { companyId: auth.companyId },
+        // The scope filter comes first and is never optional; the team and
+        // department filters narrow inside it and can only ever remove rows.
         scopeFilter,
         query.employeeId ? { id: query.employeeId } : {},
+        query.teamId ? { teamId: query.teamId } : {},
+        query.departmentId ? { departmentId: query.departmentId } : {},
         ...searchClauses,
       ],
     };
@@ -546,6 +566,129 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       totals,
       range: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
     });
+  });
+
+  /**
+   * Attendance summarised for a pay period.
+   *
+   * Deliberately figures and not money. This is the clean input a payroll run
+   * would consume - worked and overtime minutes, day counts, exceptions - and
+   * nothing here decides what anyone is paid. Building the calculation itself
+   * would be inventing a module nobody has specified.
+   *
+   * Same scope rules as everything else, so a manager gets their team and an
+   * employee gets one row.
+   */
+  app.get('/pay-period', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const query = parseOrThrow(payPeriodQuerySchema, request.query);
+
+    const scopeFilter = await employeeScopeFilter(auth);
+    const from = toDateOnly(query.from);
+    const to = toDateOnly(query.to);
+    assertUsableRange(from, to);
+
+    if (scopeFilter === null) {
+      const empty: PayPeriodSummary = {
+        from: from.toISOString().slice(0, 10),
+        to: to.toISOString().slice(0, 10),
+        rows: [],
+        totals: {
+          employees: 0,
+          workedMinutes: 0,
+          overtimeMinutes: 0,
+          absentDays: 0,
+          leaveDays: 0,
+          incompleteDays: 0,
+        },
+      };
+      return reply.send({ data: empty });
+    }
+
+    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+
+    const employees = await prisma.employee.findMany({
+      where: {
+        AND: [
+          { companyId: auth.companyId },
+          scopeFilter,
+          query.employeeId ? { id: query.employeeId } : {},
+          { status: { not: 'TERMINATED' } },
+        ],
+      },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        displayName: true,
+        employeeNumber: true,
+        locationId: true,
+        department: { select: { name: true } },
+      },
+    });
+
+    const derived = await deriveRangeForEmployees(auth.companyId, employees, from, to);
+
+    // Sources tell a payroll reviewer which days a human touched.
+    const adjusted = await prisma.attendanceRecord.groupBy({
+      by: ['employeeId'],
+      where: {
+        employeeId: { in: employees.map((e) => e.id) },
+        date: { gte: from, lte: to },
+        source: 'ADMIN',
+      },
+      _count: { _all: true },
+    });
+    const adjustedByEmployee = new Map(adjusted.map((a) => [a.employeeId, a._count._all]));
+
+    const rows: PayPeriodRow[] = employees.map((employee) => {
+      const days = derived.get(employee.id) ?? [];
+      const totals = tally(days);
+
+      const earlyLeaveMinutes = days.reduce((sum, d) => sum + (d.earlyLeaveMinutes ?? 0), 0);
+      // Checked in but never out: worked minutes are unknown, and guessing them
+      // is exactly what this system refuses to do.
+      const incompleteDays = days.filter((d) => d.checkInAt !== null && d.checkOutAt === null).length;
+
+      return {
+        employeeId: employee.id,
+        employeeName: displayName(employee),
+        employeeNumber: employee.employeeNumber,
+        departmentName: employee.department?.name ?? null,
+        workedMinutes: totals.workedMinutes,
+        overtimeMinutes: totals.overtimeMinutes,
+        // Overtime is a portion of worked, never an addition, so the regular
+        // part is what is left after it.
+        regularMinutes: Math.max(0, totals.workedMinutes - totals.overtimeMinutes),
+        presentDays: totals.present,
+        halfDays: totals.halfDay,
+        absentDays: totals.absent,
+        leaveDays: totals.onLeave,
+        holidayDays: totals.holiday,
+        weekendDays: totals.weekend,
+        lateMinutes: totals.lateMinutes,
+        earlyLeaveMinutes,
+        incompleteDays,
+        adjustedDays: adjustedByEmployee.get(employee.id) ?? 0,
+      };
+    });
+
+    const summary: PayPeriodSummary = {
+      from: from.toISOString().slice(0, 10),
+      to: to.toISOString().slice(0, 10),
+      rows,
+      totals: {
+        employees: rows.length,
+        workedMinutes: rows.reduce((s, r) => s + r.workedMinutes, 0),
+        overtimeMinutes: rows.reduce((s, r) => s + r.overtimeMinutes, 0),
+        absentDays: rows.reduce((s, r) => s + r.absentDays, 0),
+        leaveDays: rows.reduce((s, r) => s + r.leaveDays, 0),
+        incompleteDays: rows.reduce((s, r) => s + r.incompleteDays, 0),
+      },
+    };
+
+    return reply.send({ data: summary });
   });
 
   /**

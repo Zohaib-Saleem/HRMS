@@ -2,11 +2,14 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import {
   PERMISSIONS,
+  type TimesheetEntrySource,
   type TimesheetRecord,
   type TimesheetStatus,
+  type TimesheetSyncResult,
   idParamSchema,
   timesheetCreateSchema,
   timesheetQuerySchema,
+  timesheetSyncSchema,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
@@ -48,6 +51,8 @@ function toRecord(row: Row): TimesheetRecord {
       date: e.date.toISOString().slice(0, 10),
       minutes: e.minutes,
       description: e.description,
+      source: e.source as TimesheetEntrySource,
+      attendanceRecordId: e.attendanceRecordId,
     })),
   };
 }
@@ -181,6 +186,161 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return reply.status(201).send({ data: toRecord(created) });
+    },
+  );
+
+  /**
+   * Fill a draft timesheet from captured attendance.
+   *
+   * Attendance stays the source of truth for what was actually worked; the
+   * timesheet consumes it rather than competing with it. Three rules keep the
+   * two from fighting:
+   *
+   *   - only CAPTURED lines are touched, so anything a person typed survives;
+   *   - a day with a check-in but no check-out is skipped, not estimated -
+   *     inventing an end time is exactly the guess this system avoids;
+   *   - only DRAFT timesheets sync, so a submitted or approved period cannot
+   *     change underneath the person who approved it.
+   */
+  app.post(
+    '/:id/sync-attendance',
+    { preHandler: requirePermission(PERMISSIONS.TIMESHEET_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const input = parseOrThrow(timesheetSyncSchema, request.body ?? {});
+
+      const timesheet = await prisma.timesheet.findFirst({
+        where: { id, companyId: auth.companyId },
+        include: INCLUDE,
+      });
+      if (!timesheet) throw new NotFoundError('Timesheet');
+
+      // Same rule as reading one: you may only reach a timesheet for someone
+      // your data scope covers.
+      await assertEmployeeInScope(auth, timesheet.employeeId);
+
+      if (timesheet.status !== 'DRAFT') {
+        throw new ConflictError(
+          `That timesheet is ${timesheet.status.toLowerCase()}, so it can no longer be filled from attendance.`,
+        );
+      }
+
+      const records = await prisma.attendanceRecord.findMany({
+        where: {
+          employeeId: timesheet.employeeId,
+          date: { gte: timesheet.periodStart, lte: timesheet.periodEnd },
+        },
+        orderBy: { date: 'asc' },
+      });
+
+      const manual = timesheet.entries.filter((e) => e.source === 'MANUAL');
+      const manualDays = new Set(manual.map((e) => e.date.toISOString().slice(0, 10)));
+
+      let skippedIncomplete = 0;
+      const captured: Array<{
+        date: Date;
+        minutes: number;
+        description: string;
+        attendanceRecordId: string;
+      }> = [];
+
+      for (const record of records) {
+        // Worked minutes only exist once both ends of the day are known.
+        if (record.workedMinutes === null || record.checkInAt === null || record.checkOutAt === null) {
+          if (record.checkInAt !== null) skippedIncomplete += 1;
+          continue;
+        }
+        if (record.workedMinutes <= 0) continue;
+
+        const key = record.date.toISOString().slice(0, 10);
+        // A day someone entered by hand is theirs; the sync does not argue.
+        if (manualDays.has(key)) continue;
+
+        captured.push({
+          date: record.date,
+          minutes: record.workedMinutes,
+          description: `Captured attendance${record.overtimeMinutes ? ` (${record.overtimeMinutes}m overtime)` : ''}`,
+          attendanceRecordId: record.id,
+        });
+      }
+
+      const existingCaptured = timesheet.entries.filter((e) => e.source === 'CAPTURED');
+      const existingCapturedDays = new Set(
+        existingCaptured.map((e) => e.date.toISOString().slice(0, 10)),
+      );
+
+      const toWrite = input.replaceExisting
+        ? captured
+        : captured.filter((c) => !existingCapturedDays.has(c.date.toISOString().slice(0, 10)));
+
+      const removed = input.replaceExisting ? existingCaptured.length : 0;
+
+      await prisma.$transaction(async (tx) => {
+        if (input.replaceExisting) {
+          await tx.timesheetEntry.deleteMany({ where: { timesheetId: id, source: 'CAPTURED' } });
+        }
+
+        if (toWrite.length > 0) {
+          await tx.timesheetEntry.createMany({
+            data: toWrite.map((c) => ({
+              timesheetId: id,
+              date: c.date,
+              minutes: c.minutes,
+              description: c.description,
+              source: 'CAPTURED' as const,
+              attendanceRecordId: c.attendanceRecordId,
+            })),
+          });
+        }
+
+        const remaining = await tx.timesheetEntry.findMany({
+          where: { timesheetId: id },
+          select: { minutes: true },
+        });
+
+        await tx.timesheet.update({
+          where: { id },
+          data: { totalMinutes: remaining.reduce((sum, e) => sum + e.minutes, 0) },
+        });
+      });
+
+      const refreshed = await prisma.timesheet.findUniqueOrThrow({
+        where: { id },
+        include: INCLUDE,
+      });
+
+      const capturedMinutes = refreshed.entries
+        .filter((e) => e.source === 'CAPTURED')
+        .reduce((sum, e) => sum + e.minutes, 0);
+      const manualMinutes = refreshed.entries
+        .filter((e) => e.source === 'MANUAL')
+        .reduce((sum, e) => sum + e.minutes, 0);
+
+      const result: TimesheetSyncResult = {
+        timesheetId: id,
+        daysConsidered: records.length,
+        entriesWritten: toWrite.length,
+        entriesRemoved: removed,
+        manualEntriesKept: manual.length,
+        capturedMinutes,
+        manualMinutes,
+        totalMinutes: refreshed.totalMinutes,
+        skippedIncomplete,
+      };
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'timesheet.sync_attendance',
+        entityType: 'Timesheet',
+        entityId: id,
+        summary: `Filled timesheet from attendance: ${toWrite.length} day(s), ${manual.length} manual entr(ies) kept`,
+        after: { entriesWritten: toWrite.length, totalMinutes: refreshed.totalMinutes },
+        request,
+      });
+
+      return reply.send({ data: result });
     },
   );
 
