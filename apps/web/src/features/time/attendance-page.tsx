@@ -14,6 +14,7 @@ import {
 } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
 import { useLookups } from '@/lib/lookups';
+import { useDebounced } from '@/lib/use-debounced';
 import { formatDate } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card } from '@/components/ui/card';
@@ -53,6 +54,7 @@ export function AttendancePage() {
   const { lookups } = useLookups();
   const [filters, setFilters] = React.useState(INITIAL);
   const [requesting, setRequesting] = React.useState(false);
+  const debouncedQuery = useDebounced(filters.q, 350);
 
   const update = React.useCallback(
     (patch: Partial<typeof INITIAL>) =>
@@ -61,12 +63,13 @@ export function AttendancePage() {
   );
 
   const query = useQuery({
-    queryKey: ['attendance', filters],
+    queryKey: ['attendance', { ...filters, q: debouncedQuery }],
     queryFn: () =>
       api.getPage<AttendanceRecordItem>('/attendance', {
         query: {
           page: filters.page,
           limit: filters.limit,
+          q: debouncedQuery || undefined,
           employeeId: filters.employeeId || undefined,
           status: filters.status || undefined,
         },
@@ -74,7 +77,7 @@ export function AttendancePage() {
     placeholderData: keepPreviousData,
   });
 
-  const hasFilters = filters.employeeId !== '' || filters.status !== '';
+  const hasFilters = filters.q !== '' || filters.employeeId !== '' || filters.status !== '';
   const rows = query.data?.data ?? [];
 
   return (
@@ -94,7 +97,7 @@ export function AttendancePage() {
         <ListToolbar
           search={filters.q}
           onSearchChange={(q) => update({ q })}
-          placeholder="Search is not applied to attendance yet"
+          placeholder="Search employee or notes"
           hasActiveFilters={hasFilters}
           onReset={() => setFilters(INITIAL)}
           filters={

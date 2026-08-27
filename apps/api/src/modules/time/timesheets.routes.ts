@@ -64,12 +64,25 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
 
+    // Free-text search matches the owner of the timesheet, plus its notes.
+    const terms = query.q ? query.q.split(/\s+/).filter(Boolean) : [];
+    const searchClauses: Prisma.TimesheetWhereInput[] = terms.map((term) => ({
+      OR: [
+        { employee: { firstName: { contains: term, mode: 'insensitive' } } },
+        { employee: { lastName: { contains: term, mode: 'insensitive' } } },
+        { employee: { displayName: { contains: term, mode: 'insensitive' } } },
+        { employee: { employeeNumber: { contains: term, mode: 'insensitive' } } },
+        { notes: { contains: term, mode: 'insensitive' } },
+      ],
+    }));
+
     const where: Prisma.TimesheetWhereInput = {
       AND: [
         { companyId: auth.companyId },
         { employee: scopeFilter },
         query.employeeId ? { employeeId: query.employeeId } : {},
         query.status ? { status: query.status } : {},
+        ...searchClauses,
       ],
     };
 

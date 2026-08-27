@@ -16,6 +16,7 @@ import {
 } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { useDebounced } from '@/lib/use-debounced';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -55,6 +56,7 @@ export function TimesheetsPage() {
   const confirm = useConfirm();
   const [filters, setFilters] = React.useState(INITIAL);
   const [creating, setCreating] = React.useState(false);
+  const debouncedQuery = useDebounced(filters.q, 350);
 
   const update = React.useCallback(
     (patch: Partial<typeof INITIAL>) =>
@@ -63,12 +65,13 @@ export function TimesheetsPage() {
   );
 
   const query = useQuery({
-    queryKey: ['timesheets', filters],
+    queryKey: ['timesheets', { ...filters, q: debouncedQuery }],
     queryFn: () =>
       api.getPage<TimesheetRecord>('/timesheets', {
         query: {
           page: filters.page,
           limit: filters.limit,
+          q: debouncedQuery || undefined,
           status: filters.status || undefined,
         },
       }),
@@ -116,8 +119,8 @@ export function TimesheetsPage() {
         <ListToolbar
           search={filters.q}
           onSearchChange={(q) => update({ q })}
-          placeholder="Search is not applied to timesheets yet"
-          hasActiveFilters={filters.status !== ''}
+          placeholder="Search employee or notes"
+          hasActiveFilters={filters.q !== '' || filters.status !== ''}
           onReset={() => setFilters(INITIAL)}
           filters={
             <NativeSelect

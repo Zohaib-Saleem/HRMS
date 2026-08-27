@@ -266,6 +266,30 @@ export async function decide(input: DecisionInput) {
     throw new ForbiddenError('Only the assigned approver can decide this request.');
   }
 
+  /*
+   * Separation of duties.
+   *
+   * A multi-step chain exists so that several different people sign off. The
+   * administrative override in the check above would otherwise let one person
+   * approve step 1 as an override, land on step 2 as the assigned approver,
+   * and approve that too - satisfying a two-person chain single-handedly and
+   * quietly defeating the whole point of the chain.
+   *
+   * Nobody decides two steps of the same request, whatever they hold.
+   */
+  const alreadyDecidedEarlierStep = approval.steps.some(
+    (s) => s.status !== 'PENDING' && s.decidedByUserId === auth.userId,
+  );
+  if (alreadyDecidedEarlierStep) {
+    throw new ForbiddenError(
+      'You have already decided an earlier step of this request. Another approver must decide this one.',
+    );
+  }
+
+  // An override is a legitimate operational escape hatch - an approver who has
+  // left, say - but it must never look like the assigned approver acted.
+  const isOverride = isAdmin && !isAssignedApprover;
+
   // Even an administrator stays inside their data scope.
   await assertApprovalVisible(auth, approvalId);
 
@@ -289,10 +313,14 @@ export async function decide(input: DecisionInput) {
       data: {
         approvalRequestId: approval.id,
         actorUserId: auth.userId,
-        action: decision === 'APPROVED' ? 'approval.step.approved' : 'approval.step.rejected',
+        action:
+          (decision === 'APPROVED' ? 'approval.step.approved' : 'approval.step.rejected') +
+          (isOverride ? '.override' : ''),
         fromStatus: approval.status,
         toStatus: nextStatus,
-        comment: input.comment ?? null,
+        comment: isOverride
+          ? `[administrative override] ${input.comment ?? ''}`.trim()
+          : (input.comment ?? null),
       },
     });
 
@@ -312,10 +340,12 @@ export async function decide(input: DecisionInput) {
   await recordAudit({
     companyId: auth.companyId,
     actorId: auth.userId,
-    action: decision === 'APPROVED' ? 'approval.approve' : 'approval.reject',
+    action:
+      (decision === 'APPROVED' ? 'approval.approve' : 'approval.reject') +
+      (isOverride ? '.override' : ''),
     entityType: 'ApprovalRequest',
     entityId: approval.id,
-    summary: `${decision === 'APPROVED' ? 'Approved' : 'Rejected'} step ${approval.currentStep} of "${approval.title}"`,
+    summary: `${decision === 'APPROVED' ? 'Approved' : 'Rejected'} step ${approval.currentStep} of "${approval.title}"${isOverride ? ' (administrative override)' : ''}`,
     before: { status: approval.status, currentStep: approval.currentStep },
     after: { status: nextStatus, comment: input.comment ?? null },
     request: input.request,

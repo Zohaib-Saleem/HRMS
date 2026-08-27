@@ -37,6 +37,18 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
 
+    // Free-text search matches the person the record belongs to, plus notes.
+    const terms = query.q ? query.q.split(/\s+/).filter(Boolean) : [];
+    const searchClauses: Prisma.AttendanceRecordWhereInput[] = terms.map((term) => ({
+      OR: [
+        { employee: { firstName: { contains: term, mode: 'insensitive' } } },
+        { employee: { lastName: { contains: term, mode: 'insensitive' } } },
+        { employee: { displayName: { contains: term, mode: 'insensitive' } } },
+        { employee: { employeeNumber: { contains: term, mode: 'insensitive' } } },
+        { notes: { contains: term, mode: 'insensitive' } },
+      ],
+    }));
+
     const where: Prisma.AttendanceRecordWhereInput = {
       AND: [
         { companyId: auth.companyId },
@@ -45,6 +57,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         query.status ? { status: query.status } : {},
         query.from ? { date: { gte: toDateOnly(query.from) } } : {},
         query.to ? { date: { lte: toDateOnly(query.to) } } : {},
+        ...searchClauses,
       ],
     };
 
