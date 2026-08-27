@@ -52,6 +52,16 @@ export const PERMISSIONS = {
   TIMESHEET_READ: 'timesheet.read',
   TIMESHEET_MANAGE: 'timesheet.manage',
 
+  // --- Leave & holidays ---
+  /// See leave requests and balances within your data scope.
+  LEAVE_READ: 'leave.read',
+  /// Raise and cancel your own leave.
+  LEAVE_REQUEST: 'leave.request',
+  /// Configure leave types and adjust balances for others.
+  LEAVE_MANAGE: 'leave.manage',
+  HOLIDAY_READ: 'holiday.read',
+  HOLIDAY_MANAGE: 'holiday.manage',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -131,6 +141,18 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.SHIFT_MANAGE, label: 'Manage shifts', description: 'Create shifts and assign employees.' },
       { value: PERMISSIONS.TIMESHEET_READ, label: 'View timesheets', description: 'See timesheets.' },
       { value: PERMISSIONS.TIMESHEET_MANAGE, label: 'Manage timesheets', description: 'Create and submit timesheets.' },
+    ],
+  },
+  {
+    key: 'leave',
+    label: 'Leave and holidays',
+    description: 'Time off, balances and the holiday calendar.',
+    permissions: [
+      { value: PERMISSIONS.LEAVE_READ, label: 'View leave', description: 'See leave requests and balances within your scope.' },
+      { value: PERMISSIONS.LEAVE_REQUEST, label: 'Request leave', description: 'Raise and cancel your own leave.' },
+      { value: PERMISSIONS.LEAVE_MANAGE, label: 'Manage leave', description: 'Configure leave types and adjust balances.' },
+      { value: PERMISSIONS.HOLIDAY_READ, label: 'View holidays', description: 'See the holiday calendar.' },
+      { value: PERMISSIONS.HOLIDAY_MANAGE, label: 'Manage holidays', description: 'Create and edit holidays.' },
     ],
   },
   {
@@ -214,6 +236,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.SHIFT_MANAGE,
     PERMISSIONS.TIMESHEET_READ,
     PERMISSIONS.TIMESHEET_MANAGE,
+    PERMISSIONS.LEAVE_READ,
+    PERMISSIONS.LEAVE_REQUEST,
+    PERMISSIONS.LEAVE_MANAGE,
+    PERMISSIONS.HOLIDAY_READ,
+    PERMISSIONS.HOLIDAY_MANAGE,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -229,6 +256,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.ATTENDANCE_READ,
     PERMISSIONS.SHIFT_READ,
     PERMISSIONS.TIMESHEET_READ,
+    PERMISSIONS.LEAVE_READ,
+    PERMISSIONS.LEAVE_REQUEST,
+    PERMISSIONS.HOLIDAY_READ,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -241,6 +271,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.SHIFT_READ,
     PERMISSIONS.TIMESHEET_READ,
     PERMISSIONS.TIMESHEET_MANAGE,
+    PERMISSIONS.LEAVE_READ,
+    PERMISSIONS.LEAVE_REQUEST,
+    PERMISSIONS.HOLIDAY_READ,
   ],
 };
 

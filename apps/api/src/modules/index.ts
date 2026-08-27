@@ -14,6 +14,9 @@ import { notificationRoutes } from './notifications/notifications.routes.js';
 import { attendanceRoutes } from './time/attendance.routes.js';
 import { shiftRoutes } from './time/shifts.routes.js';
 import { timesheetRoutes } from './time/timesheets.routes.js';
+import { leaveTypeRoutes } from './leave/leave-types.routes.js';
+import { leaveBalanceRoutes, leaveRequestRoutes } from './leave/leave-requests.routes.js';
+import { holidayRoutes } from './leave/holidays.routes.js';
 
 /**
  * Module registry.
@@ -48,9 +51,14 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/shifts', plugin: shiftRoutes },
   { prefix: '/timesheets', plugin: timesheetRoutes },
 
-  // --- phase 4+ ---------------------------------------------------------
-  // { prefix: '/leave',    plugin: leaveRoutes },
-  // { prefix: '/holidays', plugin: holidayRoutes },
+  // --- phase 4: leave and holidays --------------------------------------
+  { prefix: '/leave-types', plugin: leaveTypeRoutes },
+  { prefix: '/leave/requests', plugin: leaveRequestRoutes },
+  { prefix: '/leave/balances', plugin: leaveBalanceRoutes },
+  { prefix: '/holidays', plugin: holidayRoutes },
+
+  // --- phase 5+ ---------------------------------------------------------
+  // { prefix: '/documents', plugin: documentRoutes },
 ];
 
 export const registerModules: FastifyPluginAsync = async (app) => {

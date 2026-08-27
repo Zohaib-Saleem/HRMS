@@ -488,6 +488,18 @@ export async function syncSubjectStatus(
         },
       });
       return;
+    case 'LEAVE_REQUEST':
+      await prisma.leaveRequest.updateMany({
+        where: { id: subjectId },
+        data: {
+          status,
+          // Timestamps make the decision legible on the leave screen without
+          // having to join the approval tables.
+          ...(status === 'CANCELLED' ? { cancelledAt: new Date() } : {}),
+          ...(status === 'APPROVED' || status === 'REJECTED' ? { decidedAt: new Date() } : {}),
+        },
+      });
+      return;
     default:
       return;
   }

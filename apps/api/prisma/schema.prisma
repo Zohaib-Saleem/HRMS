@@ -124,6 +124,12 @@ model Company {
   shiftChangeRequests ShiftChangeRequest[]
   timesheets          Timesheet[]
 
+  // --- phase 4 ---
+  leaveTypes    LeaveType[]
+  leaveBalances LeaveBalance[]
+  leaveRequests LeaveRequest[]
+  holidays      Holiday[]
+
   @@map("companies")
 }
 
@@ -203,6 +209,7 @@ model Location {
 
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employees Employee[]
+  holidays  Holiday[]
 
   @@unique([companyId, name])
   @@index([companyId, isActive])
@@ -327,6 +334,10 @@ model Employee {
   shiftAssignments    EmployeeShiftAssignment[]
   shiftChangeRequests ShiftChangeRequest[]
   timesheets          Timesheet[]
+
+  // --- phase 4 ---
+  leaveBalances LeaveBalance[]
+  leaveRequests LeaveRequest[]
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
@@ -873,4 +884,148 @@ model TimesheetEntry {
 
   @@index([timesheetId, date])
   @@map("timesheet_entries")
+}
+
+// ===========================================================================
+// PHASE 4 - leave and holidays
+// ===========================================================================
+
+/// Half-day support. A range longer than one day is always FULL_DAY; the half
+/// options only make sense for a single-day request.
+enum LeaveDayPart {
+  FULL_DAY
+  FIRST_HALF
+  SECOND_HALF
+}
+
+/// Leave policy, entirely data-driven. Nothing about entitlement, accrual or
+/// carry-forward is hard-coded in the services - they read these columns.
+model LeaveType {
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String
+  code        String?
+  description String?
+
+  /// Days granted per full year. Accrual is capped at this figure so an
+  /// employee can never silently exceed their entitlement.
+  annualEntitlementDays Decimal @db.Decimal(6, 2)
+
+  /// Days earned per completed month. Usually annualEntitlement / 12, but kept
+  /// separate so a policy can accrue faster or slower than a flat twelfth.
+  monthlyAccrualDays Decimal @db.Decimal(6, 2)
+
+  carryForwardEnabled Boolean  @default(false)
+  /// Maximum days that survive a year boundary. Null means uncapped, which is
+  /// only meaningful when carryForwardEnabled is true.
+  carryForwardCapDays Decimal? @db.Decimal(6, 2)
+
+  /// Unpaid leave still consumes a balance but is flagged for payroll later.
+  isPaid   Boolean @default(true)
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requests LeaveRequest[]
+  balances LeaveBalance[]
+
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+  @@map("leave_types")
+}
+
+/// Per employee, per leave type, per year.
+///
+/// Deliberately stores only what cannot be derived: the opening balance carried
+/// in from last year, and any manual adjustment an administrator has made.
+/// Accrued, used and pending are all computed from the leave type policy and
+/// the request rows, so a stored total can never drift from reality.
+model LeaveBalance {
+  id          String @id @default(cuid())
+  companyId   String
+  employeeId  String
+  leaveTypeId String
+  year        Int
+
+  /// Carried forward from the previous year, already capped on write.
+  openingDays    Decimal @default(0) @db.Decimal(6, 2)
+  /// Administrative correction, positive or negative.
+  adjustmentDays Decimal @default(0) @db.Decimal(6, 2)
+  adjustmentNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@index([companyId, year])
+  @@map("leave_balances")
+}
+
+model LeaveRequest {
+  id          String @id @default(cuid())
+  companyId   String
+  employeeId  String
+  leaveTypeId String
+
+  startDate DateTime     @db.Date
+  endDate   DateTime     @db.Date
+  dayPart   LeaveDayPart @default(FULL_DAY)
+
+  /// Working days consumed, weekends and applicable holidays already removed.
+  /// Stored because the holiday calendar may change after approval and the
+  /// figure the decision was made on must not move retrospectively.
+  totalDays Decimal @db.Decimal(6, 2)
+
+  reason String
+
+  status            ApprovalStatus @default(PENDING)
+  approvalRequestId String?        @unique
+
+  decidedAt   DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([employeeId, startDate])
+  @@index([employeeId, status])
+  @@map("leave_requests")
+}
+
+/// A non-working day. `locationId` null means the holiday applies company-wide;
+/// employees otherwise inherit the calendar of the location they are assigned to.
+model Holiday {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  date      DateTime @db.Date
+
+  /// Null = all locations.
+  locationId String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  // Postgres treats NULLs as distinct, so this stops duplicates for a named
+  // location only. The company-wide case is enforced in the service layer.
+  @@unique([companyId, date, locationId])
+  @@index([companyId, date])
+  @@index([locationId, date])
+  @@map("holidays")
 }

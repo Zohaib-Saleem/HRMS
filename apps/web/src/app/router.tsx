@@ -26,6 +26,10 @@ import { AttendancePage } from '@/features/time/attendance-page';
 import { ShiftsPage } from '@/features/time/shifts-page';
 import { TimesheetsPage } from '@/features/time/timesheets-page';
 import { ForgotPasswordPage, ResetPasswordPage } from '@/features/auth/password-reset-pages';
+import { MyLeavePage } from '@/features/leave/my-leave-page';
+import { LeaveRequestsPage } from '@/features/leave/leave-requests-page';
+import { LeaveTypesPage } from '@/features/leave/leave-types-page';
+import { HolidaysPage } from '@/features/leave/holidays-page';
 import { CompanySettingsPage } from '@/features/settings/company-page';
 import { RolesPage } from '@/features/settings/roles-page';
 import { AuditLogPage } from '@/features/settings/audit-log-page';
@@ -131,6 +135,20 @@ export function AppRoutes() {
         <Route element={<RequirePermission permission={PERMISSIONS.APPROVAL_READ} />}>
           <Route path="approvals" element={<ApprovalsListPage />} />
           <Route path="approvals/:id" element={<ApprovalDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.LEAVE_READ} />}>
+          <Route path="leave" element={<Navigate to="/leave/me" replace />} />
+          <Route path="leave/me" element={<MyLeavePage />} />
+          <Route path="leave/requests" element={<LeaveRequestsPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.LEAVE_MANAGE} />}>
+          <Route path="leave/types" element={<LeaveTypesPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.HOLIDAY_READ} />}>
+          <Route path="holidays" element={<HolidaysPage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.ATTENDANCE_READ} />}>

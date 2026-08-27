@@ -18,8 +18,8 @@ The suggested ordering was adjusted in three places, for reasons given below.
 | 1 | Foundation | ✅ Complete |
 | 2 | Organization & Employees | ✅ Complete |
 | 3 | Approvals engine & Notifications | ✅ Complete |
-| 4 | Leave & Holidays | ← next |
-| 5 | Attendance & Shifts | |
+| 4 | Leave & Holidays | ✅ Complete |
+| 5 | Attendance & Shifts | ← next |
 | 6 | Documents | |
 | 7 | Payroll | |
 | 8 | Advanced permissions & field security | |
@@ -109,7 +109,7 @@ screen reuses.
 
 ---
 
-## Phase 4 — Leave & Holidays
+## Phase 4 — Leave & Holidays ✅
 
 - Configurable leave types per company
 - Accrual, carry-forward and balance tracking per type per year

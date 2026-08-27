@@ -359,6 +359,100 @@ async function main(): Promise<void> {
   }
   console.log(`  shifts           ${shifts.size}`);
 
+  // --- leave types ----------------------------------------------------------
+  // Policy is data-driven: entitlement, accrual and carry-forward all live in
+  // these rows, not in the services that read them.
+  const leaveTypeSpecs = [
+    {
+      name: 'Annual Leave',
+      code: 'AL',
+      description: 'Paid time off, accrued monthly.',
+      annualEntitlementDays: 24,
+      monthlyAccrualDays: 2,
+      carryForwardEnabled: true,
+      carryForwardCapDays: 5,
+      isPaid: true,
+    },
+    {
+      name: 'Sick Leave',
+      code: 'SL',
+      description: 'Paid leave for illness.',
+      annualEntitlementDays: 12,
+      monthlyAccrualDays: 1,
+      carryForwardEnabled: false,
+      carryForwardCapDays: null,
+      isPaid: true,
+    },
+    {
+      name: 'Casual Leave',
+      code: 'CL',
+      description: 'Short-notice personal leave.',
+      annualEntitlementDays: 6,
+      monthlyAccrualDays: 0.5,
+      carryForwardEnabled: false,
+      carryForwardCapDays: null,
+      isPaid: true,
+    },
+    {
+      name: 'Unpaid Leave',
+      code: 'UL',
+      description: 'Approved time off without pay.',
+      annualEntitlementDays: 30,
+      monthlyAccrualDays: 2.5,
+      carryForwardEnabled: false,
+      carryForwardCapDays: null,
+      isPaid: false,
+    },
+  ];
+
+  const leaveTypes = new Map<string, string>();
+  for (const spec of leaveTypeSpecs) {
+    const record = await prisma.leaveType.upsert({
+      where: { companyId_name: { companyId: company.id, name: spec.name } },
+      create: { companyId: company.id, ...spec },
+      update: {
+        annualEntitlementDays: spec.annualEntitlementDays,
+        monthlyAccrualDays: spec.monthlyAccrualDays,
+        carryForwardEnabled: spec.carryForwardEnabled,
+        carryForwardCapDays: spec.carryForwardCapDays,
+        isPaid: spec.isPaid,
+      },
+    });
+    leaveTypes.set(spec.name, record.id);
+  }
+  console.log(`  leave types      ${leaveTypes.size}`);
+
+  // --- holidays -------------------------------------------------------------
+  // Fictional dates. A null locationId means the holiday applies everywhere.
+  const year = new Date().getUTCFullYear();
+  const holidaySpecs = [
+    { name: 'New Year', month: 0, day: 1, location: null },
+    { name: 'Spring Break', month: 3, day: 6, location: null },
+    { name: 'Founders Day', month: 6, day: 14, location: 'Head Office' },
+    { name: 'Autumn Holiday', month: 9, day: 12, location: null },
+    { name: 'Winter Holiday', month: 11, day: 25, location: null },
+  ];
+
+  let holidayCount = 0;
+  for (const spec of holidaySpecs) {
+    const date = new Date(Date.UTC(year, spec.month, spec.day));
+    const locationId = spec.location ? (locations.get(spec.location) ?? null) : null;
+
+    const existing = await prisma.holiday.findFirst({
+      where: { companyId: company.id, date, locationId },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.holiday.update({ where: { id: existing.id }, data: { name: spec.name } });
+    } else {
+      await prisma.holiday.create({
+        data: { companyId: company.id, name: spec.name, date, locationId },
+      });
+    }
+    holidayCount += 1;
+  }
+  console.log(`  holidays         ${holidayCount}`);
+
   // --- demo manager account -------------------------------------------------
   // Exists so the data-scope rules are testable: this account holds MANAGER,
   // whose scope is REPORTS_AND_OWN, and so sees only itself plus its reports.
