@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Slot } from '@radix-ui/react-slot';
+import { Slot, Slottable } from '@radix-ui/react-slot';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -48,7 +48,16 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         {...props}
       >
         {loading ? <Loader2 className="animate-spin" aria-hidden /> : null}
-        {children}
+        {/*
+          Slottable is required, not cosmetic. With `asChild`, Radix's Slot
+          merges props onto a single child element - but the spinner slot above
+          means this component always passes two children, so Slot cannot tell
+          which one to merge onto and throws. Slottable marks `children` as the
+          element to merge into, letting the spinner render beside it. Outside a
+          Slot it is a transparent passthrough, so the plain <button> path is
+          unaffected.
+        */}
+        <Slottable>{children}</Slottable>
       </Comp>
     );
   },
