@@ -51,6 +51,21 @@ enum WeekDay {
   SUNDAY
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+  OTHER
+}
+
 // ------------------------------------------------------------------- company
 
 model Company {
@@ -76,12 +91,14 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  departments Department[]
-  teams       Team[]
-  employees   Employee[]
-  users       User[]
-  roles       Role[]
-  auditLogs   AuditLog[]
+  departments  Department[]
+  teams        Team[]
+  designations Designation[]
+  locations    Location[]
+  employees    Employee[]
+  users        User[]
+  roles        Role[]
+  auditLogs    AuditLog[]
 
   @@map("companies")
 }
@@ -100,6 +117,11 @@ model Department {
   headEmployeeId String?   @unique
   headEmployee   Employee? @relation("DepartmentHead", fields: [headEmployeeId], references: [id], onDelete: SetNull)
 
+  // Self-hierarchy. Cycles are prevented in the service layer, not the database.
+  parentDepartmentId String?
+  parentDepartment   Department?  @relation("DepartmentHierarchy", fields: [parentDepartmentId], references: [id], onDelete: SetNull)
+  childDepartments   Department[] @relation("DepartmentHierarchy")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -109,7 +131,58 @@ model Department {
 
   @@unique([companyId, name])
   @@index([companyId, isActive])
+  @@index([parentDepartmentId])
   @@map("departments")
+}
+
+/// Job title as a lookup record rather than free text, so reporting and
+/// filtering stay consistent across the organisation.
+model Designation {
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String
+  code        String?
+  description String?
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employees Employee[]
+
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+  @@map("designations")
+}
+
+/// Physical work location. Holiday calendars, shifts and attendance policies
+/// hang off this in later phases.
+model Location {
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  code      String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String?
+  timezone     String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employees Employee[]
+
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+  @@map("locations")
 }
 
 model Team {
@@ -140,21 +213,65 @@ model Employee {
   companyId      String
   employeeNumber String
 
+  // --- identity -------------------------------------------------------------
   firstName     String
+  middleName    String?
   lastName      String
+  displayName   String?
   workEmail     String?
   personalEmail String?
   phone         String?
-  jobTitle      String?
+  personalPhone String?
+  photoUrl      String?
 
-  departmentId String?
-  teamId       String?
-  managerId    String?
+  // --- job ------------------------------------------------------------------
+  /// Retained alongside designationId as a free-text fallback for imported
+  /// records whose title does not yet map to a Designation.
+  jobTitle           String?
+  designationId      String?
+  departmentId       String?
+  teamId             String?
+  locationId         String?
+  managerId          String?
+  /// Dual reporting - a second manager for matrix organisations.
+  secondaryManagerId String?
 
-  employmentType  EmploymentType @default(FULL_TIME)
-  status          EmployeeStatus @default(ACTIVE)
-  hireDate        DateTime?      @db.Date
-  terminationDate DateTime?      @db.Date
+  employmentType        EmploymentType @default(FULL_TIME)
+  status                EmployeeStatus @default(ACTIVE)
+  hireDate              DateTime?      @db.Date
+  confirmationDate      DateTime?      @db.Date
+  terminationDate       DateTime?      @db.Date
+  sourceOfHire          String?
+  linkedinUrl           String?
+  /// Prior experience in whole months, kept as a number so it can be summed.
+  priorExperienceMonths Int?
+
+  // --- personal -------------------------------------------------------------
+  dateOfBirth   DateTime?      @db.Date
+  gender        Gender?
+  maritalStatus MaritalStatus?
+  nationality   String?
+  bloodGroup    String?
+
+  presentAddress   String?
+  permanentAddress String?
+
+  emergencyContactName         String?
+  emergencyContactPhone        String?
+  emergencyContactRelationship String?
+
+  // --- restricted ------------------------------------------------------------
+  // Readable only with employee.sensitive.read. Field-level enforcement and
+  // read-auditing land in phase 8; until then the API strips these from
+  // responses for callers without that permission.
+  nationalId        String?
+  passportNumber    String?
+  passportExpiry    DateTime? @db.Date
+  visaNumber        String?
+  visaExpiry        DateTime? @db.Date
+  bankAccountNumber String?
+
+  notes String?
 
   // Optional link to a login account (1:1)
   userId String? @unique
@@ -162,12 +279,18 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  department Department? @relation("EmployeeDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
-  team       Team?       @relation("EmployeeTeam", fields: [teamId], references: [id], onDelete: SetNull)
-  manager    Employee?   @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
-  reports    Employee[]  @relation("EmployeeManager")
-  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  company          Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department       Department?  @relation("EmployeeDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  team             Team?        @relation("EmployeeTeam", fields: [teamId], references: [id], onDelete: SetNull)
+  designation      Designation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  location         Location?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  manager          Employee?    @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports          Employee[]   @relation("EmployeeManager")
+  secondaryManager Employee?    @relation("EmployeeSecondaryManager", fields: [secondaryManagerId], references: [id], onDelete: SetNull)
+  secondaryReports Employee[]   @relation("EmployeeSecondaryManager")
+  user             User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  workExperience EmployeeWorkExperience[]
 
   headOfDepartment Department? @relation("DepartmentHead")
   leadOfTeam       Team?       @relation("TeamLead")
@@ -175,8 +298,31 @@ model Employee {
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
   @@index([companyId, departmentId])
+  @@index([companyId, designationId])
+  @@index([companyId, locationId])
+  @@index([managerId])
   @@index([lastName, firstName])
   @@map("employees")
+}
+
+/// Repeating sub-record: employment history before joining this company.
+model EmployeeWorkExperience {
+  id         String @id @default(cuid())
+  employeeId String
+
+  companyName String
+  jobTitle    String?
+  fromDate    DateTime? @db.Date
+  toDate      DateTime? @db.Date
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("employee_work_experience")
 }
 
 // ---------------------------------------------------------------- auth & rbac

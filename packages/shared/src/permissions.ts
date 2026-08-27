@@ -16,10 +16,19 @@ export const PERMISSIONS = {
   DEPARTMENT_MANAGE: 'department.manage',
   TEAM_READ: 'team.read',
   TEAM_MANAGE: 'team.manage',
+  DESIGNATION_READ: 'designation.read',
+  DESIGNATION_MANAGE: 'designation.manage',
+  LOCATION_READ: 'location.read',
+  LOCATION_MANAGE: 'location.manage',
 
   // --- People ---
   EMPLOYEE_READ: 'employee.read',
   EMPLOYEE_MANAGE: 'employee.manage',
+  /// Restricted identity and financial fields: national ID, passport, visa,
+  /// bank account. Stripped from responses without this grant.
+  EMPLOYEE_SENSITIVE_READ: 'employee.sensitive.read',
+  EMPLOYEE_IMPORT: 'employee.import',
+  EMPLOYEE_EXPORT: 'employee.export',
 
   // --- Access control ---
   USER_READ: 'user.read',
@@ -52,6 +61,10 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.DEPARTMENT_MANAGE, label: 'Manage departments', description: 'Create, edit and remove departments.' },
       { value: PERMISSIONS.TEAM_READ, label: 'View teams', description: 'See the team list.' },
       { value: PERMISSIONS.TEAM_MANAGE, label: 'Manage teams', description: 'Create, edit and remove teams.' },
+      { value: PERMISSIONS.DESIGNATION_READ, label: 'View designations', description: 'See the job title list.' },
+      { value: PERMISSIONS.DESIGNATION_MANAGE, label: 'Manage designations', description: 'Create, edit and remove job titles.' },
+      { value: PERMISSIONS.LOCATION_READ, label: 'View locations', description: 'See the work location list.' },
+      { value: PERMISSIONS.LOCATION_MANAGE, label: 'Manage locations', description: 'Create, edit and remove work locations.' },
     ],
   },
   {
@@ -61,6 +74,13 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     permissions: [
       { value: PERMISSIONS.EMPLOYEE_READ, label: 'View employees', description: 'See employee records.' },
       { value: PERMISSIONS.EMPLOYEE_MANAGE, label: 'Manage employees', description: 'Create, edit and deactivate employees.' },
+      {
+        value: PERMISSIONS.EMPLOYEE_SENSITIVE_READ,
+        label: 'View restricted fields',
+        description: 'See national ID, passport, visa and bank details. Grant sparingly.',
+      },
+      { value: PERMISSIONS.EMPLOYEE_IMPORT, label: 'Import employees', description: 'Bulk-create employees from a file.' },
+      { value: PERMISSIONS.EMPLOYEE_EXPORT, label: 'Export employees', description: 'Download employee data as a file.' },
     ],
   },
   {
@@ -87,6 +107,33 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
 
 export const ALL_PERMISSIONS: readonly Permission[] = Object.values(PERMISSIONS);
 
+/**
+ * How much data a grant reaches, independent of which operation it allows.
+ *
+ * Permissions answer "may you read employees?"; scope answers "which ones?".
+ * The two are orthogonal - a manager and an HR admin both hold `employee.read`,
+ * but only one of them should see the whole company.
+ */
+export const DATA_SCOPES = {
+  NONE: 'NONE',
+  OWN: 'OWN',
+  REPORTS: 'REPORTS',
+  REPORTS_AND_OWN: 'REPORTS_AND_OWN',
+  DEPARTMENT: 'DEPARTMENT',
+  ALL: 'ALL',
+} as const;
+
+export type DataScope = (typeof DATA_SCOPES)[keyof typeof DATA_SCOPES];
+
+export const DATA_SCOPE_LABELS: Record<DataScope, string> = {
+  NONE: 'No data',
+  OWN: 'Own record only',
+  REPORTS: 'Direct reports',
+  REPORTS_AND_OWN: 'Direct reports and own record',
+  DEPARTMENT: 'Whole department',
+  ALL: 'Entire organisation',
+};
+
 /** Role keys seeded in every company. `SUPER_ADMIN` is protected from edits. */
 export const SYSTEM_ROLES = {
   SUPER_ADMIN: 'SUPER_ADMIN',
@@ -107,17 +154,42 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.DEPARTMENT_MANAGE,
     PERMISSIONS.TEAM_READ,
     PERMISSIONS.TEAM_MANAGE,
+    PERMISSIONS.DESIGNATION_READ,
+    PERMISSIONS.DESIGNATION_MANAGE,
+    PERMISSIONS.LOCATION_READ,
+    PERMISSIONS.LOCATION_MANAGE,
     PERMISSIONS.EMPLOYEE_READ,
     PERMISSIONS.EMPLOYEE_MANAGE,
+    PERMISSIONS.EMPLOYEE_SENSITIVE_READ,
+    PERMISSIONS.EMPLOYEE_IMPORT,
+    PERMISSIONS.EMPLOYEE_EXPORT,
     PERMISSIONS.USER_READ,
     PERMISSIONS.ROLE_READ,
     PERMISSIONS.AUDIT_READ,
   ],
+  // Managers hold employee.read, but their DataScope narrows it to their own
+  // reporting line - the permission says what, the scope says which.
   MANAGER: [
     PERMISSIONS.COMPANY_READ,
     PERMISSIONS.DEPARTMENT_READ,
     PERMISSIONS.TEAM_READ,
+    PERMISSIONS.DESIGNATION_READ,
+    PERMISSIONS.LOCATION_READ,
     PERMISSIONS.EMPLOYEE_READ,
   ],
-  EMPLOYEE: [PERMISSIONS.COMPANY_READ, PERMISSIONS.DEPARTMENT_READ, PERMISSIONS.TEAM_READ],
+  EMPLOYEE: [
+    PERMISSIONS.COMPANY_READ,
+    PERMISSIONS.DEPARTMENT_READ,
+    PERMISSIONS.TEAM_READ,
+    PERMISSIONS.DESIGNATION_READ,
+    PERMISSIONS.LOCATION_READ,
+  ],
+};
+
+/** Default data scope per system role, applied when Phase 2 seeds roles. */
+export const DEFAULT_ROLE_SCOPES: Record<SystemRoleKey, DataScope> = {
+  SUPER_ADMIN: DATA_SCOPES.ALL,
+  HR_ADMIN: DATA_SCOPES.ALL,
+  MANAGER: DATA_SCOPES.REPORTS_AND_OWN,
+  EMPLOYEE: DATA_SCOPES.OWN,
 };
