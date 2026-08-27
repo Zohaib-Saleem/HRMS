@@ -35,6 +35,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
+import { AttendanceToday } from './attendance-today';
+import { AttendanceCalendar } from './attendance-calendar';
 
 
 const STATUS_TONE: Record<AttendanceStatus, 'success' | 'destructive' | 'warning' | 'neutral'> = {
@@ -84,7 +86,7 @@ export function AttendancePage() {
     <>
       <PageHeader
         title="Attendance"
-        description="Daily attendance records. Corrections go through approval rather than editing history."
+        description="Check in and out, review your month, and request corrections through approval."
         actions={
           <Button size="sm" variant="outline" onClick={() => setRequesting(true)}>
             <Plus />
@@ -92,6 +94,9 @@ export function AttendancePage() {
           </Button>
         }
       />
+
+      <AttendanceToday />
+      <AttendanceCalendar />
 
       <Card className="overflow-hidden">
         <ListToolbar

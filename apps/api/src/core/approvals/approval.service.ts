@@ -7,6 +7,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { notify } from '../notifications/notification.service.js';
 import type { AuthContext } from '../../auth/session.js';
 import { employeeScopeFilter } from '../../auth/scope.js';
+import { applyRegularization, applyShiftChange } from '../../modules/time/attendance.service.js';
 
 /**
  * Approval engine.
@@ -476,9 +477,14 @@ export async function syncSubjectStatus(
         where: { id: subjectId },
         data: { status },
       });
+      // Mirroring the status is not enough: an approved correction has to
+      // actually reach the attendance record, or the decision changes nothing
+      // anyone reads.
+      if (status === 'APPROVED') await applyRegularization(subjectId);
       return;
     case 'SHIFT_CHANGE':
       await prisma.shiftChangeRequest.updateMany({ where: { id: subjectId }, data: { status } });
+      if (status === 'APPROVED') await applyShiftChange(subjectId);
       return;
     case 'TIMESHEET':
       await prisma.timesheet.updateMany({

@@ -34,6 +34,12 @@ import {
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { Can, usePermissions } from '@/features/auth/session-context';
 import { useDebounced } from '@/lib/use-debounced';
+import { useLookups, LOOKUPS_QUERY_KEY } from '@/lib/lookups';
+import { formatDate } from '@/lib/utils';
+import { CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState as EmptyStateAlias } from '@/components/feedback/states';
+import type { ShiftAssignmentRecord, ShiftAssignmentInput } from '@hrms/shared';
+import { shiftAssignmentSchema } from '@hrms/shared';
 
 const INITIAL = { q: '', page: 1, limit: 20 };
 
@@ -180,6 +186,8 @@ export function ShiftsPage() {
           </>
         )}
       </Card>
+
+      <ShiftAssignments canManage={canManage} />
 
       <ShiftDrawer
         open={creating || editing !== null}
@@ -368,5 +376,170 @@ function ShiftChangeDrawer({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Employee shift assignments.
+ *
+ * The API for this existed from phase 3 but nothing consumed it, so the
+ * "Assigned" count on the table above had no way to be inspected. This is that
+ * missing screen rather than a new capability.
+ */
+function ShiftAssignments({ canManage }: { canManage: boolean }) {
+  const queryClient = useQueryClient();
+  const { lookups } = useLookups();
+  const [assigning, setAssigning] = React.useState(false);
+
+  const query = useQuery({
+    queryKey: ['shifts', 'assignments'],
+    queryFn: () =>
+      api.getPage<ShiftAssignmentRecord>('/shifts/assignments', { query: { limit: 50 } }),
+  });
+
+  const shifts = useQuery({
+    queryKey: ['shifts', 'options'],
+    queryFn: () => api.getPage<ShiftRecord>('/shifts', { query: { limit: 100 } }),
+    enabled: assigning,
+  });
+
+  const { register, handleSubmit, formState, reset, setError } = useForm<ShiftAssignmentInput>({
+    resolver: zodResolver(shiftAssignmentSchema),
+    values: {
+      employeeId: '',
+      shiftId: '',
+      effectiveFrom: new Date().toISOString().slice(0, 10),
+      effectiveTo: '',
+    },
+  });
+
+  const mutation = useMutation({
+    mutationFn: (values: ShiftAssignmentInput) => api.post('/shifts/assignments', values),
+    onSuccess: async () => {
+      toast.success('Shift assigned.');
+      await queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      await queryClient.invalidateQueries({ queryKey: LOOKUPS_QUERY_KEY });
+      reset();
+      setAssigning(false);
+    },
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.isValidation && error.details) {
+        for (const [field, messages] of Object.entries(error.details)) {
+          setError(field as keyof ShiftAssignmentInput, { message: messages[0] });
+        }
+        return;
+      }
+      toast.error(errorMessage(error));
+    },
+  });
+
+  const rows = query.data?.data ?? [];
+
+  return (
+    <>
+      <Card className="mt-6 overflow-hidden">
+        <CardHeader bordered className="flex-row items-center justify-between">
+          <CardTitle>Shift assignments</CardTitle>
+          {canManage ? (
+            <Button size="sm" variant="outline" onClick={() => setAssigning(true)}>
+              <Plus />
+              Assign shift
+            </Button>
+          ) : null}
+        </CardHeader>
+
+        {query.isError ? (
+          <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+        ) : (
+          <TableWrapper>
+            <Table>
+              <THead>
+                <TR className="hover:bg-transparent">
+                  <TH>Employee</TH>
+                  <TH>Shift</TH>
+                  <TH className="w-40">Effective from</TH>
+                  <TH className="w-40">Until</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {query.isLoading ? (
+                  <TableSkeleton rows={4} columns={4} />
+                ) : rows.length === 0 ? (
+                  <TR className="hover:bg-transparent">
+                    <TD colSpan={4} className="p-0">
+                      <EmptyStateAlias
+                        icon={Clock}
+                        title="No shift assignments yet"
+                        description="Assign a shift so attendance can tell how late a check-in is."
+                      />
+                    </TD>
+                  </TR>
+                ) : (
+                  rows.map((row) => (
+                    <TR key={row.id}>
+                      <TD className="text-[13px]">{row.employeeName}</TD>
+                      <TD className="text-[13px]">{row.shiftName}</TD>
+                      <TD className="tabular text-[13px]">{formatDate(row.effectiveFrom)}</TD>
+                      <TD className="tabular text-[13px] text-muted-foreground">
+                        {row.effectiveTo ? formatDate(row.effectiveTo) : 'Ongoing'}
+                      </TD>
+                    </TR>
+                  ))
+                )}
+              </TBody>
+            </Table>
+          </TableWrapper>
+        )}
+      </Card>
+
+      <Dialog open={assigning} onOpenChange={(next) => (next ? null : setAssigning(false))}>
+        <DialogContent variant="drawer" size="md">
+          <form onSubmit={handleSubmit((values) => mutation.mutate(values))} className="contents">
+            <DialogHeader>
+              <DialogTitle>Assign a shift</DialogTitle>
+              <DialogDescription>
+                Any shift already in force for that employee is closed off the day before.
+              </DialogDescription>
+            </DialogHeader>
+
+            <DialogBody className="space-y-4">
+              <FormField label="Employee" htmlFor="sa-emp" error={formState.errors.employeeId?.message} required>
+                <NativeSelect {...register('employeeId')} autoFocus>
+                  <option value="">Choose an employee</option>
+                  {lookups.managers.map((o) => (
+                    <option key={o.id} value={o.id}>{o.label}</option>
+                  ))}
+                </NativeSelect>
+              </FormField>
+              <FormField label="Shift" htmlFor="sa-shift" error={formState.errors.shiftId?.message} required>
+                <NativeSelect {...register('shiftId')}>
+                  <option value="">Choose a shift</option>
+                  {(shifts.data?.data ?? []).filter((s) => s.isActive).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.startTime}–{s.endTime})
+                    </option>
+                  ))}
+                </NativeSelect>
+              </FormField>
+              <FormField label="Effective from" htmlFor="sa-from" error={formState.errors.effectiveFrom?.message} required>
+                <Input type="date" {...register('effectiveFrom')} />
+              </FormField>
+              <FormField label="Until" htmlFor="sa-to" error={formState.errors.effectiveTo?.message} hint="Leave blank for ongoing.">
+                <Input type="date" {...register('effectiveTo')} />
+              </FormField>
+            </DialogBody>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setAssigning(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" loading={mutation.isPending}>
+                Assign shift
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

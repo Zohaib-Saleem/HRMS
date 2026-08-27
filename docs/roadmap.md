@@ -19,8 +19,8 @@ The suggested ordering was adjusted in three places, for reasons given below.
 | 2 | Organization & Employees | ✅ Complete |
 | 3 | Approvals engine & Notifications | ✅ Complete |
 | 4 | Leave & Holidays | ✅ Complete |
-| 5 | Attendance & Shifts | ← next |
-| 6 | Documents | |
+| 5 | Attendance & Shifts | ✅ Complete |
+| 6 | Documents | ← next |
 | 7 | Payroll | |
 | 8 | Advanced permissions & field security | |
 | 9 | Reports & Analytics | |
@@ -122,7 +122,7 @@ screen reuses.
 
 ---
 
-## Phase 5 — Attendance & Shifts
+## Phase 5 — Attendance & Shifts ✅
 
 - Check-in / check-out with timestamp, notes and location mode (office / remote)
 - Attendance summary: list, tabular and calendar views

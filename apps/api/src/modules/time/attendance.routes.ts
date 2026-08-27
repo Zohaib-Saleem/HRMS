@@ -2,10 +2,15 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import {
   PERMISSIONS,
+  type AttendanceDay,
   type AttendanceRecordItem,
   type AttendanceStatus,
+  type AttendanceTodayState,
   attendanceQuerySchema,
+  attendanceSummaryQuerySchema,
   attendanceUpsertSchema,
+  checkInSchema,
+  checkOutSchema,
   regularizationCreateSchema,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
@@ -20,6 +25,7 @@ import {
   resolveDefaultApprovers,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
+import { deriveRange, lateMinutesAgainst, shiftOnDate } from './attendance.service.js';
 
 const displayName = (e: { firstName: string; lastName: string; displayName: string | null }) =>
   e.displayName ?? `${e.firstName} ${e.lastName}`.trim();
@@ -156,6 +162,197 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(before ? 200 : 201).send({ data: { id: record.id } });
     },
   );
+
+  // --- self-service capture ------------------------------------------------
+
+  /**
+   * Today's state for the caller. Drives the check-in widget: it says whether
+   * today is even a working day before offering a button.
+   */
+  app.get('/today', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const self = await callerEmployeeOrThrow(auth);
+
+    const today = toDateOnly(new Date().toISOString());
+    const [day] = await deriveRange(auth.companyId, self.id, today, today);
+    const shift = await shiftOnDate(self.id, today);
+
+    const workingDay =
+      day !== undefined && day.status !== 'WEEKEND' && day.status !== 'HOLIDAY' && day.status !== 'ON_LEAVE';
+
+    const state: AttendanceTodayState = {
+      date: today.toISOString().slice(0, 10),
+      status: day?.status ?? 'ABSENT',
+      checkedIn: Boolean(day?.checkInAt),
+      checkedOut: Boolean(day?.checkOutAt),
+      checkInAt: day?.checkInAt ?? null,
+      checkOutAt: day?.checkOutAt ?? null,
+      workedMinutes: day?.workedMinutes ?? null,
+      lateMinutes: day?.lateMinutes ?? null,
+      mode: day?.mode ?? null,
+      shiftName: shift?.name ?? null,
+      shiftStartTime: shift?.startTime ?? null,
+      shiftEndTime: shift?.endTime ?? null,
+      isWorkingDay: workingDay,
+      reason: day?.holidayName ?? day?.leaveTypeName ?? (day?.status === 'WEEKEND' ? 'Weekend' : null),
+    };
+
+    return reply.send({ data: state });
+  });
+
+  app.post('/check-in', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const input = parseOrThrow(checkInSchema, request.body ?? {});
+    const self = await callerEmployeeOrThrow(auth);
+
+    const today = toDateOnly(new Date().toISOString());
+    const [day] = await deriveRange(auth.companyId, self.id, today, today);
+
+    // Refuse rather than quietly record a day the calendar says is not worked.
+    if (day && (day.status === 'WEEKEND' || day.status === 'HOLIDAY' || day.status === 'ON_LEAVE')) {
+      throw new ConflictError(
+        `Today is recorded as ${day.status.toLowerCase().replace('_', ' ')}${day.holidayName ? ` (${day.holidayName})` : ''}, so there is nothing to check in to.`,
+      );
+    }
+
+    const existing = await prisma.attendanceRecord.findUnique({
+      where: { employeeId_date: { employeeId: self.id, date: today } },
+    });
+    if (existing?.checkInAt) {
+      throw new ConflictError('You have already checked in today.');
+    }
+
+    const now = new Date();
+    const shift = await shiftOnDate(self.id, today);
+
+    const record = await prisma.attendanceRecord.upsert({
+      where: { employeeId_date: { employeeId: self.id, date: today } },
+      create: {
+        companyId: auth.companyId,
+        employeeId: self.id,
+        date: today,
+        status: 'PRESENT',
+        checkInAt: now,
+        mode: input.mode,
+        notes: input.notes ?? null,
+        source: 'SELF',
+        shiftId: shift?.id ?? null,
+        lateMinutes: lateMinutesAgainst(now, shift?.startTime ?? null),
+      },
+      update: {
+        status: 'PRESENT',
+        checkInAt: now,
+        mode: input.mode,
+        notes: input.notes ?? null,
+        source: 'SELF',
+        shiftId: shift?.id ?? null,
+        lateMinutes: lateMinutesAgainst(now, shift?.startTime ?? null),
+      },
+    });
+
+    await recordAudit({
+      companyId: auth.companyId,
+      actorId: auth.userId,
+      action: 'attendance.check_in',
+      entityType: 'AttendanceRecord',
+      entityId: record.id,
+      summary: `Checked in (${input.mode.toLowerCase()})${record.lateMinutes ? `, ${record.lateMinutes} minute(s) late` : ''}`,
+      request,
+    });
+
+    return reply.status(201).send({
+      data: {
+        id: record.id,
+        checkInAt: record.checkInAt?.toISOString() ?? null,
+        lateMinutes: record.lateMinutes,
+      },
+    });
+  });
+
+  app.post('/check-out', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const input = parseOrThrow(checkOutSchema, request.body ?? {});
+    const self = await callerEmployeeOrThrow(auth);
+
+    const today = toDateOnly(new Date().toISOString());
+    const existing = await prisma.attendanceRecord.findUnique({
+      where: { employeeId_date: { employeeId: self.id, date: today } },
+    });
+
+    if (!existing?.checkInAt) throw new ConflictError('You have not checked in today.');
+    if (existing.checkOutAt) throw new ConflictError('You have already checked out today.');
+
+    const now = new Date();
+    const workedMinutes = Math.max(
+      0,
+      Math.round((now.getTime() - existing.checkInAt.getTime()) / 60_000),
+    );
+
+    const record = await prisma.attendanceRecord.update({
+      where: { id: existing.id },
+      data: {
+        checkOutAt: now,
+        workedMinutes,
+        notes: input.notes ?? existing.notes,
+      },
+    });
+
+    await recordAudit({
+      companyId: auth.companyId,
+      actorId: auth.userId,
+      action: 'attendance.check_out',
+      entityType: 'AttendanceRecord',
+      entityId: record.id,
+      summary: `Checked out after ${(workedMinutes / 60).toFixed(1)} hour(s)`,
+      request,
+    });
+
+    return reply.send({
+      data: { id: record.id, checkOutAt: now.toISOString(), workedMinutes },
+    });
+  });
+
+  /**
+   * Day-by-day view over a range. Days without a record are still returned,
+   * classified as weekend, holiday, leave or absent rather than simply missing.
+   */
+  app.get('/summary', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const query = parseOrThrow(attendanceSummaryQuerySchema, request.query);
+
+    let employeeId = query.employeeId;
+    if (employeeId) {
+      await assertEmployeeInScope(auth, employeeId);
+    } else {
+      const self = await callerEmployeeOrThrow(auth);
+      employeeId = self.id;
+    }
+
+    const now = new Date();
+    const from = toDateOnly(
+      query.from ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString(),
+    );
+    const to = toDateOnly(
+      query.to ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).toISOString(),
+    );
+
+    const days: AttendanceDay[] = await deriveRange(auth.companyId, employeeId, from, to);
+
+    const totals = days.reduce(
+      (acc, d) => ({
+        present: acc.present + (d.status === 'PRESENT' ? 1 : 0),
+        absent: acc.absent + (d.status === 'ABSENT' ? 1 : 0),
+        onLeave: acc.onLeave + (d.status === 'ON_LEAVE' ? 1 : 0),
+        holiday: acc.holiday + (d.status === 'HOLIDAY' ? 1 : 0),
+        weekend: acc.weekend + (d.status === 'WEEKEND' ? 1 : 0),
+        workedMinutes: acc.workedMinutes + (d.workedMinutes ?? 0),
+        lateMinutes: acc.lateMinutes + (d.lateMinutes ?? 0),
+      }),
+      { present: 0, absent: 0, onLeave: 0, holiday: 0, weekend: 0, workedMinutes: 0, lateMinutes: 0 },
+    );
+
+    return reply.send({ data: { days, totals } });
+  });
 
   // --- regularisation requests --------------------------------------------
 

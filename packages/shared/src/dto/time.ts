@@ -225,3 +225,62 @@ export const resetPasswordSchema = z
   });
 
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+
+// -------------------------------------------------- attendance capture (P5)
+
+export const ATTENDANCE_MODES = ['OFFICE', 'REMOTE'] as const;
+export type AttendanceMode = (typeof ATTENDANCE_MODES)[number];
+
+export const ATTENDANCE_MODE_LABELS: Record<AttendanceMode, string> = {
+  OFFICE: 'Office',
+  REMOTE: 'Remote',
+};
+
+export const checkInSchema = z.object({
+  mode: z.enum(ATTENDANCE_MODES).default('OFFICE'),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+
+export const checkOutSchema = z.object({
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+
+export const attendanceSummaryQuerySchema = z.object({
+  employeeId: z.string().trim().max(64).optional(),
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+});
+
+/** One calendar day, whether or not a record exists for it. */
+export interface AttendanceDay {
+  date: string;
+  status: AttendanceStatus;
+  checkInAt: string | null;
+  checkOutAt: string | null;
+  workedMinutes: number | null;
+  lateMinutes: number | null;
+  mode: string | null;
+  shiftName: string | null;
+  notes: string | null;
+  leaveTypeName: string | null;
+  holidayName: string | null;
+  hasRecord: boolean;
+}
+
+export interface AttendanceTodayState {
+  date: string;
+  status: AttendanceStatus;
+  checkedIn: boolean;
+  checkedOut: boolean;
+  checkInAt: string | null;
+  checkOutAt: string | null;
+  workedMinutes: number | null;
+  lateMinutes: number | null;
+  mode: string | null;
+  shiftName: string | null;
+  shiftStartTime: string | null;
+  shiftEndTime: string | null;
+  /** False on weekends, holidays and approved leave. */
+  isWorkingDay: boolean;
+  reason: string | null;
+}

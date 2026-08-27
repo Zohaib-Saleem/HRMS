@@ -97,10 +97,13 @@ model Company {
   employeeNumberPrefix String @default("EMP-")
 
   // Localisation defaults inherited by every module added later
-  timezone     String  @default("UTC")
-  currency     String  @default("USD") @db.Char(3)
-  dateFormat   String  @default("dd MMM yyyy")
-  weekStartsOn WeekDay @default(MONDAY)
+  timezone     String    @default("UTC")
+  currency     String    @default("USD") @db.Char(3)
+  dateFormat   String    @default("dd MMM yyyy")
+  weekStartsOn WeekDay   @default(MONDAY)
+  /// Non-working days of the week. Data-driven so a Sunday-to-Thursday working
+  /// week is configuration, not a code change.
+  weekendDays  WeekDay[] @default([SATURDAY, SUNDAY])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -571,6 +574,12 @@ enum AttendanceSource {
   ADMIN
 }
 
+/// Where the person worked from. Recorded at check-in.
+enum AttendanceMode {
+  OFFICE
+  REMOTE
+}
+
 enum TimesheetStatus {
   DRAFT
   SUBMITTED
@@ -728,12 +737,19 @@ model AttendanceRecord {
   workedMinutes Int?
   notes         String?
   source        AttendanceSource @default(SELF)
+  mode          AttendanceMode?
+
+  /// The shift in force on the day, captured at check-in so a later shift
+  /// change cannot retrospectively alter how late someone was.
+  shiftId     String?
+  lateMinutes Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    Shift?   @relation(fields: [shiftId], references: [id], onDelete: SetNull)
 
   @@unique([employeeId, date])
   @@index([companyId, date])
@@ -787,6 +803,7 @@ model Shift {
 
   company     Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   assignments EmployeeShiftAssignment[]
+  attendance  AttendanceRecord[]
   requestedBy ShiftChangeRequest[]      @relation("RequestedShift")
   currentOf   ShiftChangeRequest[]      @relation("CurrentShift")
 
