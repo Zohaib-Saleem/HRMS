@@ -1,9 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { Permission } from '@hrms/shared';
+import type { DataScope, Permission } from '@hrms/shared';
 import { prisma } from '../core/db.js';
 import { clientIp } from '../core/audit.js';
 import { env, isProduction } from '../config/env.js';
+import { widestScope } from './scope.js';
 
 /**
  * Server-side sessions.
@@ -35,6 +36,8 @@ export interface AuthContext {
   companyId: string;
   email: string;
   permissions: Set<Permission>;
+  /** Widest scope across the caller's roles. See auth/scope.ts. */
+  dataScope: DataScope;
   mustChangePassword: boolean;
 }
 
@@ -116,7 +119,9 @@ export async function resolveAuthContext(request: FastifyRequest): Promise<AuthC
   }
 
   const permissions = new Set<Permission>();
+  const scopes: DataScope[] = [];
   for (const { role } of session.user.userRoles) {
+    scopes.push(role.dataScope as DataScope);
     for (const { permission } of role.rolePermissions) {
       permissions.add(permission.key as Permission);
     }
@@ -128,6 +133,7 @@ export async function resolveAuthContext(request: FastifyRequest): Promise<AuthC
     companyId: session.user.companyId,
     email: session.user.email,
     permissions,
+    dataScope: widestScope(scopes),
     mustChangePassword: session.user.mustChangePassword,
   };
 }

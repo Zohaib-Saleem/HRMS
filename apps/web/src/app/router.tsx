@@ -11,6 +11,15 @@ import { LoginPage } from '@/features/auth/login-page';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
 import { ProfilePage } from '@/features/profile/profile-page';
 import { SettingsLayout } from '@/features/settings/settings-layout';
+import { EmployeeListPage } from '@/features/people/employee-list-page';
+import { EmployeeDetailPage } from '@/features/people/employee-detail-page';
+import { OrgChartPage } from '@/features/people/org-chart-page';
+import { OrganisationLayout } from '@/features/organisation/organisation-layout';
+import { DepartmentsPage } from '@/features/organisation/departments-page';
+import { TeamsPage } from '@/features/organisation/teams-page';
+import { DesignationsPage } from '@/features/organisation/designations-page';
+import { LocationsPage } from '@/features/organisation/locations-page';
+import { StructurePage } from '@/features/organisation/structure-page';
 import { CompanySettingsPage } from '@/features/settings/company-page';
 import { RolesPage } from '@/features/settings/roles-page';
 import { AuditLogPage } from '@/features/settings/audit-log-page';
@@ -71,6 +80,22 @@ function RequirePermission({
   return <Outlet />;
 }
 
+/** Sends /organisation to the first section the user can actually open. */
+function OrganisationIndexRedirect() {
+  const { permissions } = useSession();
+  if (permissions.has(PERMISSIONS.DEPARTMENT_READ)) {
+    return <Navigate to="/organisation/departments" replace />;
+  }
+  if (permissions.has(PERMISSIONS.TEAM_READ)) return <Navigate to="/organisation/teams" replace />;
+  if (permissions.has(PERMISSIONS.DESIGNATION_READ)) {
+    return <Navigate to="/organisation/designations" replace />;
+  }
+  if (permissions.has(PERMISSIONS.LOCATION_READ)) {
+    return <Navigate to="/organisation/locations" replace />;
+  }
+  return <Navigate to="/" replace />;
+}
+
 /** Sends /settings to the first section the user can actually open. */
 function SettingsIndexRedirect() {
   const { permissions } = useSession();
@@ -88,6 +113,44 @@ export function AppRoutes() {
       <Route element={<ProtectedRoutes />}>
         <Route index element={<DashboardPage />} />
         <Route path="profile" element={<ProfilePage />} />
+
+        <Route element={<RequirePermission permission={PERMISSIONS.EMPLOYEE_READ} />}>
+          <Route path="people" element={<EmployeeListPage />} />
+          <Route path="people/org-chart" element={<OrgChartPage />} />
+          <Route path="people/:id" element={<EmployeeDetailPage />} />
+        </Route>
+
+        <Route
+          path="organisation"
+          element={
+            <RequirePermission
+              mode="any"
+              permission={[
+                PERMISSIONS.DEPARTMENT_READ,
+                PERMISSIONS.TEAM_READ,
+                PERMISSIONS.DESIGNATION_READ,
+                PERMISSIONS.LOCATION_READ,
+              ]}
+            />
+          }
+        >
+          <Route element={<OrganisationLayout />}>
+            <Route index element={<OrganisationIndexRedirect />} />
+            <Route element={<RequirePermission permission={PERMISSIONS.DEPARTMENT_READ} />}>
+              <Route path="departments" element={<DepartmentsPage />} />
+              <Route path="structure" element={<StructurePage />} />
+            </Route>
+            <Route element={<RequirePermission permission={PERMISSIONS.TEAM_READ} />}>
+              <Route path="teams" element={<TeamsPage />} />
+            </Route>
+            <Route element={<RequirePermission permission={PERMISSIONS.DESIGNATION_READ} />}>
+              <Route path="designations" element={<DesignationsPage />} />
+            </Route>
+            <Route element={<RequirePermission permission={PERMISSIONS.LOCATION_READ} />}>
+              <Route path="locations" element={<LocationsPage />} />
+            </Route>
+          </Route>
+        </Route>
 
         <Route
           path="settings"

@@ -11,6 +11,7 @@ import { hash } from '@node-rs/argon2';
 import {
   ALL_PERMISSIONS,
   DEFAULT_ROLE_PERMISSIONS,
+  DEFAULT_ROLE_SCOPES,
   PERMISSION_GROUPS,
   SYSTEM_ROLES,
   type SystemRoleKey,
@@ -20,6 +21,8 @@ const prisma = new PrismaClient();
 
 const DEMO_ADMIN_EMAIL = 'admin@hrms.local';
 const DEMO_ADMIN_PASSWORD = 'Admin@12345';
+const DEMO_MANAGER_EMAIL = 'manager@hrms.local';
+const DEMO_MANAGER_PASSWORD = 'Manager@12345';
 
 const ROLE_META: Record<SystemRoleKey, { name: string; description: string; protected: boolean }> = {
   SUPER_ADMIN: {
@@ -111,8 +114,14 @@ async function main(): Promise<void> {
         description: meta.description,
         isSystem: true,
         isProtected: meta.protected,
+        dataScope: DEFAULT_ROLE_SCOPES[key],
       },
-      update: { name: meta.name, description: meta.description, isProtected: meta.protected },
+      update: {
+        name: meta.name,
+        description: meta.description,
+        isProtected: meta.protected,
+        dataScope: DEFAULT_ROLE_SCOPES[key],
+      },
     });
     roleIds.set(key, role.id);
 
@@ -170,6 +179,54 @@ async function main(): Promise<void> {
   }
   console.log(`  teams            ${teams.size}`);
 
+  // --- designations ---------------------------------------------------------
+  const designationSpecs = [
+    { name: 'Systems Administrator', code: 'SYSADMIN' },
+    { name: 'Software Engineer', code: 'SWE' },
+    { name: 'Senior Software Engineer', code: 'SSWE' },
+    { name: 'Engineering Manager', code: 'EM' },
+    { name: 'People Operations Lead', code: 'POPS' },
+    { name: 'Recruiter', code: 'REC' },
+    { name: 'Accountant', code: 'ACC' },
+    { name: 'Support Specialist', code: 'SUP' },
+  ];
+
+  const designations = new Map<string, string>();
+  for (const spec of designationSpecs) {
+    const record = await prisma.designation.upsert({
+      where: { companyId_name: { companyId: company.id, name: spec.name } },
+      create: { companyId: company.id, ...spec },
+      update: { code: spec.code },
+    });
+    designations.set(spec.name, record.id);
+  }
+  console.log(`  designations     ${designations.size}`);
+
+  // --- locations ------------------------------------------------------------
+  const locationSpecs = [
+    {
+      name: 'Head Office',
+      code: 'HQ',
+      addressLine1: '18 Harbour Street',
+      city: 'Springfield',
+      state: 'Illinois',
+      country: 'United States',
+      timezone: 'UTC',
+    },
+    { name: 'Remote', code: 'REM', country: 'Distributed', timezone: 'UTC' },
+  ];
+
+  const locations = new Map<string, string>();
+  for (const spec of locationSpecs) {
+    const record = await prisma.location.upsert({
+      where: { companyId_name: { companyId: company.id, name: spec.name } },
+      create: { companyId: company.id, ...spec },
+      update: {},
+    });
+    locations.set(spec.name, record.id);
+  }
+  console.log(`  locations        ${locations.size}`);
+
   // --- demo admin account ---------------------------------------------------
   const passwordHash = await hash(DEMO_ADMIN_PASSWORD, {
     memoryCost: 19456,
@@ -201,7 +258,7 @@ async function main(): Promise<void> {
   }
 
   // Matching HR record, so the org relationships are exercised end to end.
-  await prisma.employee.upsert({
+  const adminEmployee = await prisma.employee.upsert({
     where: { companyId_employeeNumber: { companyId: company.id, employeeNumber: 'EMP-0001' } },
     create: {
       companyId: company.id,
@@ -210,22 +267,124 @@ async function main(): Promise<void> {
       lastName: 'Administrator',
       workEmail: DEMO_ADMIN_EMAIL,
       jobTitle: 'Systems Administrator',
+      designationId: designations.get('Systems Administrator') ?? null,
       departmentId: departments.get('People Operations') ?? null,
       teamId: teams.get('Talent') ?? null,
+      locationId: locations.get('Head Office') ?? null,
       employmentType: 'FULL_TIME',
       status: 'ACTIVE',
       hireDate: new Date('2024-01-08'),
       userId: admin.id,
     },
-    update: { userId: admin.id },
+    update: {
+      userId: admin.id,
+      designationId: designations.get('Systems Administrator') ?? null,
+      locationId: locations.get('Head Office') ?? null,
+    },
   });
 
   console.log(`  demo admin       ${DEMO_ADMIN_EMAIL}`);
 
+  // --- demo employees -------------------------------------------------------
+  // Entirely fictional. Enough structure to exercise departments, teams,
+  // designations, locations, reporting lines and every status filter.
+  const employeeSpecs = [
+    { number: 'EMP-0002', first: 'Amara', last: 'Osei', designation: 'Engineering Manager', department: 'Engineering', team: 'Platform', location: 'Head Office', manager: null, type: 'FULL_TIME', status: 'ACTIVE', hire: '2024-02-19' },
+    { number: 'EMP-0003', first: 'Tomas', last: 'Lindqvist', designation: 'Senior Software Engineer', department: 'Engineering', team: 'Platform', location: 'Head Office', manager: 'EMP-0002', type: 'FULL_TIME', status: 'ACTIVE', hire: '2024-03-11' },
+    { number: 'EMP-0004', first: 'Priya', last: 'Raghunathan', designation: 'Software Engineer', department: 'Engineering', team: 'Web', location: 'Remote', manager: 'EMP-0002', type: 'FULL_TIME', status: 'ACTIVE', hire: '2024-06-03' },
+    { number: 'EMP-0005', first: 'Diego', last: 'Marchetti', designation: 'Software Engineer', department: 'Engineering', team: 'Quality', location: 'Remote', manager: 'EMP-0002', type: 'CONTRACT', status: 'ACTIVE', hire: '2025-01-13' },
+    { number: 'EMP-0006', first: 'Hannah', last: 'Boateng', designation: 'People Operations Lead', department: 'People Operations', team: 'Talent', location: 'Head Office', manager: null, type: 'FULL_TIME', status: 'ACTIVE', hire: '2024-01-22' },
+    { number: 'EMP-0007', first: 'Yusuf', last: 'Demir', designation: 'Recruiter', department: 'People Operations', team: 'Talent', location: 'Head Office', manager: 'EMP-0006', type: 'FULL_TIME', status: 'ON_LEAVE', hire: '2025-02-17' },
+    { number: 'EMP-0008', first: 'Ingrid', last: 'Halvorsen', designation: 'Accountant', department: 'Finance', team: 'Payroll', location: 'Head Office', manager: null, type: 'PART_TIME', status: 'ACTIVE', hire: '2024-09-02' },
+    { number: 'EMP-0009', first: 'Kwame', last: 'Mensah', designation: 'Support Specialist', department: 'Customer Success', team: 'Support', location: 'Remote', manager: null, type: 'FULL_TIME', status: 'ACTIVE', hire: '2025-04-07' },
+    { number: 'EMP-0010', first: 'Sofia', last: 'Navarro', designation: 'Support Specialist', department: 'Customer Success', team: 'Support', location: 'Remote', manager: 'EMP-0009', type: 'INTERN', status: 'ACTIVE', hire: '2026-01-12' },
+    { number: 'EMP-0011', first: 'Peter', last: 'Vasquez', designation: 'Software Engineer', department: 'Engineering', team: 'Web', location: 'Head Office', manager: 'EMP-0002', type: 'FULL_TIME', status: 'TERMINATED', hire: '2023-08-14', termination: '2025-11-28' },
+  ] as const;
+
+  const byNumber = new Map<string, string>([['EMP-0001', adminEmployee.id]]);
+
+  // Two passes: create everyone first, then wire reporting lines, since a
+  // manager may appear later in the list than their report.
+  for (const spec of employeeSpecs) {
+    const record = await prisma.employee.upsert({
+      where: { companyId_employeeNumber: { companyId: company.id, employeeNumber: spec.number } },
+      create: {
+        companyId: company.id,
+        employeeNumber: spec.number,
+        firstName: spec.first,
+        lastName: spec.last,
+        workEmail: `${spec.first.toLowerCase()}.${spec.last.toLowerCase()}@northwindlabs.example`,
+        designationId: designations.get(spec.designation) ?? null,
+        departmentId: departments.get(spec.department) ?? null,
+        teamId: teams.get(spec.team) ?? null,
+        locationId: locations.get(spec.location) ?? null,
+        employmentType: spec.type,
+        status: spec.status,
+        hireDate: new Date(spec.hire),
+        terminationDate: 'termination' in spec && spec.termination ? new Date(spec.termination) : null,
+      },
+      update: {},
+    });
+    byNumber.set(spec.number, record.id);
+  }
+
+  for (const spec of employeeSpecs) {
+    if (!spec.manager) continue;
+    const employeeId = byNumber.get(spec.number);
+    const managerId = byNumber.get(spec.manager);
+    if (employeeId && managerId) {
+      await prisma.employee.update({ where: { id: employeeId }, data: { managerId } });
+    }
+  }
+
+  console.log(`  demo employees   ${employeeSpecs.length + 1}`);
+
+  // --- demo manager account -------------------------------------------------
+  // Exists so the data-scope rules are testable: this account holds MANAGER,
+  // whose scope is REPORTS_AND_OWN, and so sees only itself plus its reports.
+  const managerEmployeeId = byNumber.get('EMP-0002');
+  const managerRoleId = roleIds.get(SYSTEM_ROLES.MANAGER);
+
+  if (managerEmployeeId && managerRoleId) {
+    const managerHash = await hash(DEMO_MANAGER_PASSWORD, {
+      memoryCost: 19456,
+      timeCost: 2,
+      parallelism: 1,
+    });
+
+    const managerUser = await prisma.user.upsert({
+      where: { email: DEMO_MANAGER_EMAIL },
+      create: {
+        companyId: company.id,
+        email: DEMO_MANAGER_EMAIL,
+        passwordHash: managerHash,
+        firstName: 'Amara',
+        lastName: 'Osei',
+        status: 'ACTIVE',
+        avatarColor: '#0f8a72',
+      },
+      update: { passwordHash: managerHash, status: 'ACTIVE' },
+    });
+
+    await prisma.userRole.upsert({
+      where: { userId_roleId: { userId: managerUser.id, roleId: managerRoleId } },
+      create: { userId: managerUser.id, roleId: managerRoleId },
+      update: {},
+    });
+
+    await prisma.employee.update({
+      where: { id: managerEmployeeId },
+      data: { userId: managerUser.id },
+    });
+
+    console.log(`  demo manager     ${DEMO_MANAGER_EMAIL}`);
+  }
+
   console.log('\nSeed complete.\n');
   console.log('  Sign in with');
-  console.log(`    email     ${DEMO_ADMIN_EMAIL}`);
-  console.log(`    password  ${DEMO_ADMIN_PASSWORD}`);
+  console.log(`    admin    ${DEMO_ADMIN_EMAIL} / ${DEMO_ADMIN_PASSWORD}`);
+  console.log(`    manager  ${DEMO_MANAGER_EMAIL} / ${DEMO_MANAGER_PASSWORD}`);
+  console.log('             (limited data scope - sees only their own reporting line)');
   console.log('\n  Local development only - never reuse these credentials elsewhere.\n');
 }
 

@@ -51,6 +51,17 @@ enum WeekDay {
   SUNDAY
 }
 
+/// How much data a role reaches. Orthogonal to permissions: a permission says
+/// which operation is allowed, the scope says which records it applies to.
+enum DataScope {
+  NONE
+  OWN
+  REPORTS
+  REPORTS_AND_OWN
+  DEPARTMENT
+  ALL
+}
+
 enum Gender {
   MALE
   FEMALE
@@ -81,6 +92,9 @@ model Company {
   state        String?
   postalCode   String?
   country      String?
+
+  /// Prefix for auto-generated employee numbers, e.g. "EMP-" -> EMP-0007.
+  employeeNumberPrefix String @default("EMP-")
 
   // Localisation defaults inherited by every module added later
   timezone     String  @default("UTC")
@@ -366,6 +380,10 @@ model Role {
   key         String
   name        String
   description String?
+
+  /// How far this role can see. Narrows every list query and record fetch,
+  /// independently of which permissions the role holds.
+  dataScope DataScope @default(OWN)
 
   /// Seeded by the system - cannot be deleted.
   isSystem Boolean @default(false)

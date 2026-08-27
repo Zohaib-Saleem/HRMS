@@ -79,38 +79,4 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  /** Read-only for now. Full CRUD lands with the People module in phase 2. */
-  app.get(
-    '/departments',
-    { preHandler: requirePermission(PERMISSIONS.DEPARTMENT_READ) },
-    async (request, reply) => {
-      const auth = requireAuthContext(request);
-      const departments = await prisma.department.findMany({
-        where: { companyId: auth.companyId },
-        orderBy: { name: 'asc' },
-        include: {
-          _count: { select: { employees: true, teams: true } },
-          headEmployee: { select: { id: true, firstName: true, lastName: true } },
-        },
-      });
-      return reply.send({ data: departments });
-    },
-  );
-
-  app.get(
-    '/teams',
-    { preHandler: requirePermission(PERMISSIONS.TEAM_READ) },
-    async (request, reply) => {
-      const auth = requireAuthContext(request);
-      const teams = await prisma.team.findMany({
-        where: { companyId: auth.companyId },
-        orderBy: [{ department: { name: 'asc' } }, { name: 'asc' }],
-        include: {
-          department: { select: { id: true, name: true } },
-          _count: { select: { employees: true } },
-        },
-      });
-      return reply.send({ data: teams });
-    },
-  );
 };

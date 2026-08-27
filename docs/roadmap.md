@@ -16,8 +16,8 @@ The suggested ordering was adjusted in three places, for reasons given below.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Foundation | ✅ Complete |
-| 2 | Organization & Employees | ← current |
-| 3 | Approvals engine & Notifications | moved earlier |
+| 2 | Organization & Employees | ✅ Complete |
+| 3 | Approvals engine & Notifications | ← next |
 | 4 | Leave & Holidays | moved before attendance |
 | 5 | Attendance & Shifts | |
 | 6 | Documents | |
@@ -56,7 +56,7 @@ screen reuses.
 
 ---
 
-## Phase 2 — Organization & Employees ← current
+## Phase 2 — Organization & Employees ✅
 
 **Schema**
 - `Designation` as a first-class entity, replacing free-text `jobTitle`

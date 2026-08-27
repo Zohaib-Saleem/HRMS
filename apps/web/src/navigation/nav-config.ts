@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Banknote,
+  Building2,
   CalendarDays,
   Clock,
   FileText,
@@ -54,8 +55,20 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/people',
         icon: Users,
         permission: PERMISSIONS.EMPLOYEE_READ,
-        status: 'planned',
-        badge: 'Phase 2',
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Organisation',
+        to: '/organisation',
+        icon: Building2,
+        permission: [
+          PERMISSIONS.DEPARTMENT_READ,
+          PERMISSIONS.TEAM_READ,
+          PERMISSIONS.DESIGNATION_READ,
+          PERMISSIONS.LOCATION_READ,
+        ],
+        status: 'ready',
         matchPrefix: true,
       },
       {
@@ -125,6 +138,14 @@ export const NAV_SECTIONS: NavSection[] = [
 /** Breadcrumb labels for routes that are not in the sidebar. */
 export const ROUTE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
+  '/people': 'People',
+  '/people/org-chart': 'Org chart',
+  '/organisation': 'Organisation',
+  '/organisation/departments': 'Departments',
+  '/organisation/teams': 'Teams',
+  '/organisation/designations': 'Designations',
+  '/organisation/locations': 'Locations',
+  '/organisation/structure': 'Structure',
   '/profile': 'My profile',
   '/settings': 'Settings',
   '/settings/company': 'Company',
