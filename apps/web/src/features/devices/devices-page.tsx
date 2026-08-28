@@ -17,6 +17,7 @@ import {
 import {
   DEVICE_PROTOCOLS,
   DEVICE_PROTOCOL_LABELS,
+  isPushProtocol,
   DEVICE_STATUS_LABELS,
   PERMISSIONS,
   PUNCH_PAIRINGS,
@@ -210,7 +211,7 @@ export function DevicesPage() {
                   <TH className="w-44">Address</TH>
                   <TH className="w-40">Protocol</TH>
                   <TH className="w-36">Location</TH>
-                  <TH className="w-40">Last sync</TH>
+                  <TH className="w-40">Last contact</TH>
                   <TH className="w-40">Last punch</TH>
                   <TH className="w-64 text-right">Actions</TH>
                 </TR>
@@ -269,24 +270,26 @@ export function DevicesPage() {
                         {row.locationName ?? '--'}
                       </TD>
                       <TD className="tabular text-[12.5px] text-muted-foreground">
-                        {when(row.lastSyncAt)}
+                        {isPushProtocol(row.protocol) ? when(row.lastPushAt) : when(row.lastSyncAt)}
                       </TD>
                       <TD className="tabular text-[12.5px] text-muted-foreground">
                         {when(row.lastPunchAt)}
                       </TD>
                       <TD>
                         <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            title="Open a real connection to the device"
-                            loading={test.isPending && busyId === row.id}
-                            onClick={() => test.mutate(row)}
-                          >
-                            <Plug />
-                            Test
-                          </Button>
-                          {canManage ? (
+                          {isPushProtocol(row.protocol) ? null : (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Open a real connection to the device"
+                              loading={test.isPending && busyId === row.id}
+                              onClick={() => test.mutate(row)}
+                            >
+                              <Plug />
+                              Test
+                            </Button>
+                          )}
+                          {canManage && !isPushProtocol(row.protocol) ? (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -423,7 +426,7 @@ function DeviceDrawer({
   const isEdit = device !== null;
   const { lookups } = useLookups();
 
-  const { register, handleSubmit, formState, setError } = useForm<DeviceInput>({
+  const { register, handleSubmit, formState, setError, watch } = useForm<DeviceInput>({
     resolver: zodResolver(deviceInputSchema),
     values: device
       ? {
@@ -437,6 +440,7 @@ function DeviceDrawer({
           isEnabled: device.isEnabled,
           syncIntervalMinutes: device.syncIntervalMinutes,
           punchPairing: device.punchPairing,
+          allowedPushCidrs: device.allowedPushCidrs,
         }
       : {
           name: '',
@@ -449,8 +453,12 @@ function DeviceDrawer({
           isEnabled: true,
           syncIntervalMinutes: 15,
           punchPairing: 'FIRST_IN_LAST_OUT',
+          allowedPushCidrs: [],
         },
   });
+
+  // A pushing device is never polled, so the settings it needs are different.
+  const isPush = isPushProtocol(watch('protocol'));
 
   const mutation = useMutation({
     mutationFn: (values: DeviceInput) => {
@@ -460,6 +468,7 @@ function DeviceDrawer({
         serialNumber: values.serialNumber || null,
         // An empty box means "leave the stored key alone", never "clear it".
         commKey: values.commKey ? values.commKey : undefined,
+        pushToken: values.pushToken ? values.pushToken : undefined,
       };
       return isEdit
         ? api.patch(`/attendance/devices/${device.id}`, payload)
@@ -557,6 +566,72 @@ function DeviceDrawer({
             >
               <Input type="password" {...register('commKey')} placeholder={device?.hasCommKey ? '••••••' : ''} />
             </FormField>
+            {isPush ? (
+              <div className="grid gap-4 rounded-md border border-border bg-muted/30 p-3 sm:col-span-2">
+                <p className="text-[12.5px] text-muted-foreground">
+                  This device posts its records to the server rather than being polled, so the sync
+                  interval above does not apply to it. Point the terminal at the address below.
+                </p>
+
+                {isEdit ? (
+                  <FormField label="Server address for the device" htmlFor="dev-pushurl" hint={
+                    device.pushUrl
+                      ? 'Type this into the terminal ADMS or Cloud Server settings.'
+                      : 'Set DEVICE_PUSH_ORIGIN on the server to the address terminals can reach it on, then reopen this.'
+                  }>
+                    <Input
+                      id="dev-pushurl"
+                      readOnly
+                      value={device.pushUrl ?? 'Not configured on this server'}
+                      className="tabular"
+                    />
+                  </FormField>
+                ) : null}
+
+                <FormField
+                  label="Push token"
+                  htmlFor="dev-pushtoken"
+                  error={formState.errors.pushToken?.message}
+                  hint={
+                    device?.hasPushToken
+                      ? 'A token is stored. Leave blank to keep it; type a new one to replace it.'
+                      : 'Optional. A serial number is printed on the device case, so it is not a secret; a token in the server path is.'
+                  }
+                >
+                  <Input
+                    type="password"
+                    {...register('pushToken')}
+                    placeholder={device?.hasPushToken ? '••••••' : ''}
+                  />
+                </FormField>
+
+                <FormField
+                  label="Allowed networks"
+                  htmlFor="dev-cidrs"
+                  error={formState.errors.allowedPushCidrs?.message}
+                  hint="Comma separated, e.g. 192.168.1.0/24. Leave empty to accept the device from anywhere."
+                >
+                  <Input
+                    id="dev-cidrs"
+                    className="tabular"
+                    placeholder="192.168.1.0/24"
+                    {...register('allowedPushCidrs', {
+                      setValueAs: (value: unknown) =>
+                        typeof value === 'string'
+                          ? value.split(',').map((entry) => entry.trim()).filter(Boolean)
+                          : ((value as string[] | undefined) ?? []),
+                    })}
+                  />
+                </FormField>
+
+                {isEdit && device.lastPushAt ? (
+                  <p className="text-[12.5px] text-muted-foreground">
+                    Last contact from this device: {when(device.lastPushAt)}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <label className="flex cursor-pointer items-center gap-2.5 text-[13.5px] sm:col-span-2">
               <input
                 type="checkbox"

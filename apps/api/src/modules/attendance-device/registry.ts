@@ -32,3 +32,6 @@ export function adapterFor(protocol: AttendanceDeviceProtocol): AttendanceDevice
 export function isPollable(protocol: AttendanceDeviceProtocol): boolean {
   return ADAPTERS[protocol] !== undefined;
 }
+
+/** The protocols the scheduler may contact, for querying devices directly. */
+export const POLLABLE_PROTOCOLS = Object.keys(ADAPTERS) as AttendanceDeviceProtocol[];

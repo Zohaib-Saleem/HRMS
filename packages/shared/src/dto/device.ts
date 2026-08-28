@@ -11,6 +11,11 @@ export const DEVICE_PROTOCOL_LABELS: Record<DeviceProtocol, string> = {
   ZKTECO_ADMS: 'ZKTeco ADMS (device pushes)',
 };
 
+/** A pushing device is never polled, so half the settings do not apply to it. */
+export function isPushProtocol(protocol: DeviceProtocol): boolean {
+  return protocol === 'ZKTECO_ADMS';
+}
+
 export const DEVICE_STATUSES = ['UNKNOWN', 'ONLINE', 'OFFLINE', 'ERROR'] as const;
 export type DeviceStatus = (typeof DEVICE_STATUSES)[number];
 
@@ -72,6 +77,31 @@ export const deviceInputSchema = z.object({
    * clear it. It is never returned by any endpoint.
    */
   commKey: z.string().trim().max(64).optional().nullable(),
+  /**
+   * Write-only, same rules as the comm key.
+   *
+   * A pushing device identifies itself with a serial number printed on its own
+   * case, which is not a secret. This token goes in the server path the device
+   * is configured with, so the endpoint needs more than a guessable label.
+   */
+  pushToken: z
+    .union([
+      z.string().trim().min(8, 'Use at least 8 characters, or leave it blank.').max(64),
+      // Blank is how the form says "leave the stored token alone", and it is
+      // what an untouched field submits. A minimum length that rejects it makes
+      // the whole device unsaveable.
+      z.literal(''),
+      z.null(),
+    ])
+    .optional(),
+  /**
+   * Addresses the device may push from. Empty means anywhere, which is what a
+   * terminal needs on the day it is plugged in and nobody knows its address.
+   */
+  allowedPushCidrs: z
+    .array(z.string().trim().min(1).max(64))
+    .max(20, 'Twenty entries is plenty.')
+    .default([]),
 });
 
 export type DeviceInput = z.infer<typeof deviceInputSchema>;
@@ -99,6 +129,17 @@ export interface DeviceRecord {
   isSyncing: boolean;
   /** Whether a comm key is stored. The key itself is never sent. */
   hasCommKey: boolean;
+  /** Whether a push token is stored. The token itself is never sent. */
+  hasPushToken: boolean;
+  allowedPushCidrs: string[];
+  /** Last time the device posted anything, whether or not it carried records. */
+  lastPushAt: string | null;
+  /**
+   * Where this device should be pointed, ready to type into its configuration
+   * screen. Includes the token when one is set, because there is nowhere else
+   * an administrator could get it back from.
+   */
+  pushUrl: string | null;
   mappedUsers: number;
   createdAt: string;
 }

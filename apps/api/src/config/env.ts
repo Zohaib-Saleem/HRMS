@@ -42,6 +42,15 @@ const schema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
+  /**
+   * The address attendance terminals can reach this server on.
+   *
+   * Separate from API_HOST because that is usually 127.0.0.1, which a device on
+   * the LAN cannot use. Only affects the URL shown to administrators; leaving it
+   * unset does not stop a correctly configured device from pushing.
+   */
+  DEVICE_PUSH_ORIGIN: z.string().url().optional(),
+
   // --- Mail -----------------------------------------------------------------
   // `console` writes the message to the log instead of sending it, which is the
   // right behaviour for development. Switching to `smtp` requires the SMTP_*

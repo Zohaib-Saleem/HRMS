@@ -8,6 +8,15 @@ import { registerErrorHandler } from './core/error-handler.js';
 import { prisma } from './core/db.js';
 import { resolveAuthContext } from './auth/session.js';
 import { registerModules } from './modules/index.js';
+import { admsRoutes } from './modules/attendance-device/adms.routes.js';
+
+/**
+ * The secret path segment a pushing terminal is configured with.
+ *
+ * Matched only when it is followed by one of the endpoints a device actually
+ * calls, so an ordinary `/iclock/cdata` request keeps its readable URL.
+ */
+const PUSH_TOKEN_IN_PATH = /^\/iclock\/[^/?]+(?=\/(?:cdata|getrequest|devicecmd))/;
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -22,6 +31,18 @@ export async function buildApp(): Promise<FastifyInstance> {
           }
         : {}),
       redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers["set-cookie"]'],
+      serializers: {
+        // A pushing terminal carries its token in the URL path, because that is
+        // the only place its firmware can put one. Logging the request line
+        // verbatim would write that credential to disk on every poll.
+        req(request) {
+          return {
+            method: request.method,
+            url: String(request.url).replace(PUSH_TOKEN_IN_PATH, '/iclock/[redacted]'),
+            remoteAddress: request.ip,
+          };
+        },
+      },
     },
     trustProxy: true,
     bodyLimit: 2 * 1024 * 1024,
@@ -77,6 +98,11 @@ export async function buildApp(): Promise<FastifyInstance> {
       },
     };
   });
+
+  // Attendance terminals push to the server root, not the versioned API: the
+  // path is set on the device itself and most firmware cannot express a prefix.
+  // These routes carry no session; they authenticate the device instead.
+  await app.register(admsRoutes);
 
   await app.register(registerModules, { prefix: '/api/v1' });
 

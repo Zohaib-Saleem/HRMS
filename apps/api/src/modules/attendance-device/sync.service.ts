@@ -5,7 +5,7 @@ import { logger } from '../../core/logger.js';
 import { decryptSecret } from '../../core/secrets.js';
 import { dayKeyInZone } from '../../core/zoned-time.js';
 import { resolveAttendancePolicy } from '../time/attendance-policy.js';
-import { adapterFor } from './registry.js';
+import { adapterFor, POLLABLE_PROTOCOLS } from './registry.js';
 import { recalculateDays } from './attendance-import.service.js';
 import { DeviceAuthError, type DeviceConnection, type DevicePunch } from './adapter.js';
 
@@ -61,13 +61,12 @@ const MAX_ERROR_DETAILS = 20;
 
 /** Carries how many attempts were made, so a failed run can still report it. */
 export class DeviceReadError extends Error {
-  constructor(
-    message: string,
-    readonly attempts: number,
-    override readonly cause?: unknown,
-  ) {
-    super(message);
+  readonly attempts: number;
+
+  constructor(message: string, attempts: number, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = 'DeviceReadError';
+    this.attempts = attempts;
   }
 }
 
@@ -106,7 +105,7 @@ export class SyncInProgressError extends Error {
  * a storage failure should hold the cursor so the record is tried again, while
  * a record that is simply corrupt would then block the cursor forever.
  */
-class MalformedPunchError extends Error {
+export class MalformedPunchError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'MalformedPunchError';
@@ -150,7 +149,7 @@ export function connectionFor(device: AttendanceDevice): DeviceConnection {
 }
 
 /** Rejects a transaction this system cannot store meaningfully. */
-function assertUsable(punch: DevicePunch): void {
+export function assertUsable(punch: DevicePunch): void {
   if (!punch.deviceUserId || punch.deviceUserId.trim() === '') {
     throw new MalformedPunchError('the transaction carries no device user ID');
   }
@@ -241,7 +240,7 @@ async function fetchWithRetry(
   throw new DeviceReadError(
     lastError instanceof Error ? lastError.message : 'The device could not be read.',
     MAX_ATTEMPTS,
-    lastError,
+    { cause: lastError },
   );
 }
 
@@ -355,79 +354,23 @@ export async function syncDevice(
     ]);
     const employeeByDeviceUser = new Map(mappings.map((m) => [m.deviceUserId, m.employeeId]));
 
-    const touched = new Map<string, { employeeId: string; dayKey: string }>();
+    const tally = await ingestPunches({
+      device,
+      syncId: sync.id,
+      punches: fetched.punches,
+      companyTimeZone: policy.timeZone,
+      employeeByDeviceUser,
+    });
 
-    for (const punch of fetched.punches) {
-      try {
-        assertUsable(punch);
-
-        const outcome = await importPunch({
-          device,
-          syncId: sync.id,
-          punch,
-          companyTimeZone: policy.timeZone,
-          employeeId: employeeByDeviceUser.get(punch.deviceUserId) ?? null,
-        });
-
-        if (outcome.duplicate) {
-          duplicatesIgnored += 1;
-          logger.debug(
-            { event: 'DUPLICATE_IGNORED', deviceId, deviceUserId: punch.deviceUserId },
-            'duplicate punch ignored',
-          );
-        } else {
-          recordsImported += 1;
-          logger.debug(
-            { event: 'RECORD_IMPORTED', deviceId, deviceUserId: punch.deviceUserId },
-            'punch imported',
-          );
-        }
-
-        if (!outcome.employeeId) {
-          unmappedRecords += 1;
-          logger.info(
-            { event: 'UNMAPPED_USER', deviceId, deviceUserId: punch.deviceUserId },
-            'punch has no employee mapping',
-          );
-        }
-
-        // Only a stored record may move the cursor.
-        if (!latestStoredAt || punch.punchedAt > latestStoredAt) latestStoredAt = punch.punchedAt;
-
-        if (outcome.employeeId && !outcome.duplicate) {
-          touched.set(`${outcome.employeeId}:${outcome.dayKey}`, {
-            employeeId: outcome.employeeId,
-            dayKey: outcome.dayKey,
-          });
-        }
-      } catch (error) {
-        const permanent = error instanceof MalformedPunchError;
-        const reason = error instanceof Error ? error.message : 'unknown failure';
-
-        noteError({
-          deviceUserId: punch.deviceUserId || null,
-          rawTimestamp: punch.rawTimestamp || null,
-          reason,
-          permanent,
-        });
-
-        logger.warn(
-          { event: 'RECORD_ERROR', deviceId, deviceUserId: punch.deviceUserId, permanent, reason },
-          'punch could not be imported',
-        );
-
-        // A record that can never be read must not hold the watermark hostage;
-        // one that merely failed to store must be tried again, so the cursor
-        // stays behind it.
-        if (!permanent) {
-          const at = punch.punchedAt?.getTime();
-          if (at === undefined || Number.isNaN(at)) cursorUnsafe = true;
-          else if (!earliestUnstoredAt || punch.punchedAt < earliestUnstoredAt) {
-            earliestUnstoredAt = punch.punchedAt;
-          }
-        }
-      }
-    }
+    recordsImported = tally.imported;
+    duplicatesIgnored = tally.duplicates;
+    unmappedRecords = tally.unmapped;
+    errors = tally.errors;
+    errorDetails.push(...tally.errorDetails);
+    latestStoredAt = tally.latestStoredAt;
+    earliestUnstoredAt = tally.earliestUnstoredAt;
+    cursorUnsafe = tally.cursorUnsafe;
+    const touched = tally.touched;
 
     const recalc = await recalculateDays({
       companyId: device.companyId,
@@ -538,7 +481,7 @@ export async function syncDevice(
  * two workers importing the same transaction at the same moment both attempt
  * the insert and the database settles it.
  */
-async function importPunch(input: {
+export async function importPunch(input: {
   device: AttendanceDevice;
   syncId: string;
   punch: DevicePunch;
@@ -576,10 +519,139 @@ async function importPunch(input: {
   return { duplicate: created.count === 0, employeeId, dayKey };
 }
 
+/**
+ * Counters and cursor inputs produced by ingesting a batch of punches.
+ *
+ * Shared so a pushed batch and a polled one are folded in by identical code.
+ * If these ever diverged, the same terminal would be scored differently
+ * depending on which direction the bytes travelled.
+ */
+export interface IngestTally {
+  imported: number;
+  duplicates: number;
+  unmapped: number;
+  errors: number;
+  errorDetails: Array<Record<string, unknown>>;
+  latestStoredAt: Date | null;
+  earliestUnstoredAt: Date | null;
+  cursorUnsafe: boolean;
+  touched: Map<string, { employeeId: string; dayKey: string }>;
+}
+
+/**
+ * Stores a batch of punches, one at a time.
+ *
+ * Per record, never per batch: one unreadable transaction costs its own import
+ * and nothing else. The distinction between a record that can never be read and
+ * one that merely failed to store is what the cursor inputs carry back.
+ */
+export async function ingestPunches(input: {
+  device: AttendanceDevice;
+  syncId: string;
+  punches: readonly DevicePunch[];
+  companyTimeZone: string;
+  employeeByDeviceUser: Map<string, string>;
+}): Promise<IngestTally> {
+  const { device, syncId, punches, companyTimeZone, employeeByDeviceUser } = input;
+
+  const tally: IngestTally = {
+    imported: 0,
+    duplicates: 0,
+    unmapped: 0,
+    errors: 0,
+    errorDetails: [],
+    latestStoredAt: null,
+    earliestUnstoredAt: null,
+    cursorUnsafe: false,
+    touched: new Map(),
+  };
+
+  for (const punch of punches) {
+    try {
+      assertUsable(punch);
+
+      const outcome = await importPunch({
+        device,
+        syncId,
+        punch,
+        companyTimeZone,
+        employeeId: employeeByDeviceUser.get(punch.deviceUserId) ?? null,
+      });
+
+      if (outcome.duplicate) {
+        tally.duplicates += 1;
+        logger.debug(
+          { event: 'DUPLICATE_IGNORED', deviceId: device.id, deviceUserId: punch.deviceUserId },
+          'duplicate punch ignored',
+        );
+      } else {
+        tally.imported += 1;
+        logger.debug(
+          { event: 'RECORD_IMPORTED', deviceId: device.id, deviceUserId: punch.deviceUserId },
+          'punch imported',
+        );
+      }
+
+      if (!outcome.employeeId) {
+        tally.unmapped += 1;
+        logger.info(
+          { event: 'UNMAPPED_USER', deviceId: device.id, deviceUserId: punch.deviceUserId },
+          'punch has no employee mapping',
+        );
+      }
+
+      // Only a stored record may move the cursor.
+      if (!tally.latestStoredAt || punch.punchedAt > tally.latestStoredAt) {
+        tally.latestStoredAt = punch.punchedAt;
+      }
+
+      if (outcome.employeeId && !outcome.duplicate) {
+        tally.touched.set(`${outcome.employeeId}:${outcome.dayKey}`, {
+          employeeId: outcome.employeeId,
+          dayKey: outcome.dayKey,
+        });
+      }
+    } catch (error) {
+      const permanent = error instanceof MalformedPunchError;
+      const reason = error instanceof Error ? error.message : 'unknown failure';
+
+      tally.errors += 1;
+      if (tally.errorDetails.length < MAX_ERROR_DETAILS) {
+        tally.errorDetails.push({
+          deviceUserId: punch.deviceUserId || null,
+          rawTimestamp: punch.rawTimestamp || null,
+          reason,
+          permanent,
+        });
+      }
+
+      logger.warn(
+        { event: 'RECORD_ERROR', deviceId: device.id, deviceUserId: punch.deviceUserId, permanent, reason },
+        'punch could not be imported',
+      );
+
+      // A record that can never be read must not hold the watermark hostage;
+      // one that merely failed to store must be tried again.
+      if (!permanent) {
+        const at = punch.punchedAt?.getTime();
+        if (at === undefined || Number.isNaN(at)) tally.cursorUnsafe = true;
+        else if (!tally.earliestUnstoredAt || punch.punchedAt < tally.earliestUnstoredAt) {
+          tally.earliestUnstoredAt = punch.punchedAt;
+        }
+      }
+    }
+  }
+
+  return tally;
+}
+
 /** Every enabled device that is due, for the scheduler. */
 export async function syncDueDevices(): Promise<SyncOutcome[]> {
   const devices = await prisma.attendanceDevice.findMany({
-    where: { isEnabled: true },
+    // A pushing device has no connection to open. Polling one would fail on
+    // every tick, and a terminal that is working perfectly would be recorded
+    // as broken every fifteen minutes.
+    where: { isEnabled: true, protocol: { in: POLLABLE_PROTOCOLS } },
     select: { id: true, lastSyncAt: true, syncIntervalMinutes: true },
   });
 

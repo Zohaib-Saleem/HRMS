@@ -182,7 +182,65 @@ Attendance was carried from "it works" to "it is configurable and auditable".
 
 ---
 
-## Phase 7 — Documents
+## Attendance terminals — ZKTeco integration ✅
+
+Real biometric hardware feeding the existing attendance engine, rather than a
+second attendance system beside it.
+
+- ZKTeco standalone SDK protocol implemented from the wire format: framing,
+  session handshake, comm-key authentication, chunked bulk transfer ✅
+- Device registry, encrypted comm keys, connection test, device user listing
+  and device-user-to-employee mapping ✅
+- Raw punches stored verbatim and preserved, then paired into attendance days
+  by the existing policy engine ✅
+- Timezone handling rebuilt: `Company.timezone` was stored but never read, so
+  every derived day was a UTC day. Punch instants now come from the device
+  zone, working days from the company zone ✅
+- A terminal simulator that speaks the real protocol over a real socket, so the
+  adapter is exercised end to end without hardware ✅
+
+## Phase 7 — Production reliability ✅
+
+Hardening the integration before a physical device is connected.
+
+- Persistent socket error handling: a failure after connect no longer risks an
+  uncaught exception ✅
+- Bounded retry with backoff, and the attempt count reported even on total
+  failure ✅
+- Cursor safety: the watermark never advances past a record that was not
+  actually stored, so a failed import is retried rather than skipped ✅
+- Per-record isolation: one malformed transaction costs its own import and
+  nothing else, with permanent and retryable failures distinguished ✅
+- Idempotent import, per-device sync locking, sync history with diagnostics ✅
+- Manual attendance is never overwritten by a device sync ✅
+
+**The physical K50 is still pending.** The reliability layer is ready for
+physical-device testing; nothing here has been verified against real hardware.
+
+## Phase 8 — ADMS push ✅
+
+Terminals that post to the server instead of being polled, which is the only
+way a device behind NAT or on a mobile link can be integrated.
+
+- `/iclock` endpoints: configuration handshake, attendance push, command poll
+  and command result — unauthenticated by necessity, gated on a registered
+  serial, an optional encrypted path token and an optional network allow-list ✅
+- The ATTLOG text format parsed tolerantly: spaces for tabs, `
+`, short
+  records and trailing fields all handled, with one bad line failing alone ✅
+- Pushed batches go through the *same* ingest as polled ones — the pairing,
+  scoring and duplicate rules are shared code, not a second copy ✅
+- Push batches appear in the ordinary sync history with a `PUSH` trigger ✅
+- The poll scheduler skips pushing devices, so a healthy terminal is no longer
+  recorded as failing every interval ✅
+- No route here can read data back out, and the server never issues a device
+  command ✅
+
+See `docs/attendance-devices.md` for setup.
+
+---
+
+## Later — Documents
 
 - Employee document storage with categories
 - Company-wide document library
@@ -191,7 +249,7 @@ Attendance was carried from "it works" to "it is configurable and auditable".
 
 ---
 
-## Phase 7 — Payroll
+## Later — Payroll
 
 Blocked on your specification (see feature map §14).
 

@@ -22,7 +22,8 @@ import { buildMeta, toSkipTake } from '../../core/pagination.js';
 import { diff, recordAudit } from '../../core/audit.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { encryptSecret } from '../../core/secrets.js';
+import { decryptSecret, encryptSecret } from '../../core/secrets.js';
+import { env } from '../../config/env.js';
 import { isValidTimeZone } from '../../core/zoned-time.js';
 import { adapterFor, isPollable } from './registry.js';
 import { SyncInProgressError, connectionFor, syncDevice } from './sync.service.js';
@@ -40,6 +41,45 @@ import { recalculateDays } from './attendance-import.service.js';
  * back out, and no endpoint returns it in any form.
  */
 
+/**
+ * Rejects an allow-list entry that could never match anything.
+ *
+ * An allow-list is a security control, and a typo in one fails open in the
+ * worst way: the administrator believes the device is restricted to a network,
+ * while the entry silently matches nothing and the device is simply blocked -
+ * or, worse, the list is dropped and everything is allowed. Better to refuse
+ * the value than to store a rule nobody can rely on.
+ */
+function assertUsableCidrs(entries: readonly string[]): void {
+  const problems: string[] = [];
+
+  for (const raw of entries) {
+    const entry = raw.trim();
+    const [address, bitsRaw] = entry.split('/');
+    const octets = (address ?? '').split('.');
+
+    const validAddress =
+      octets.length === 4 &&
+      octets.every((part) => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+
+    // IPv4 only, matching what ipMatches can actually apply a prefix to. A v6
+    // entry would be compared literally and never match a real client.
+    if (!validAddress) {
+      problems.push(`"${entry}" is not an IPv4 address or range.`);
+      continue;
+    }
+
+    if (bitsRaw !== undefined) {
+      const bits = Number(bitsRaw);
+      if (!/^\d{1,2}$/.test(bitsRaw) || !Number.isInteger(bits) || bits < 0 || bits > 32) {
+        problems.push(`"${entry}" does not have a prefix length between 0 and 32.`);
+      }
+    }
+  }
+
+  if (problems.length > 0) throw new ValidationError({ allowedPushCidrs: problems });
+}
+
 const displayName = (e: { firstName: string; lastName: string; displayName: string | null }) =>
   e.displayName ?? `${e.firstName} ${e.lastName}`.trim();
 
@@ -50,7 +90,36 @@ type DeviceRow = Prisma.AttendanceDeviceGetPayload<{
   };
 }>;
 
-function toRecord(row: DeviceRow): DeviceRecord {
+/**
+ * The server address to type into the device.
+ *
+ * Only built for pushing devices, and only when an origin is configured: a URL
+ * pointing at 127.0.0.1 would be worse than none, because it looks like an
+ * answer and no terminal on the network can use it.
+ *
+ * The token appears here and nowhere else. It has to: it is write-only
+ * everywhere, so an administrator who cannot read it back has no way to
+ * configure the device with it. That is why it is limited to callers holding
+ * `device.manage`.
+ */
+function pushUrlFor(row: DeviceRow, includeToken: boolean): string | null {
+  if (row.protocol !== 'ZKTECO_ADMS') return null;
+  const origin = env.DEVICE_PUSH_ORIGIN;
+  if (!origin) return null;
+
+  const base = origin.replace(/[/]+$/, '');
+  if (!row.pushTokenCipher) return `${base}/iclock`;
+
+  // Reading the list is not the same as being allowed to configure a terminal,
+  // so the token only comes back to a caller who could set it in the first
+  // place. Everyone else sees that a token exists, not what it is.
+  if (!includeToken) return null;
+
+  const token = decryptSecret(row.pushTokenCipher);
+  return token ? `${base}/iclock/${encodeURIComponent(token)}` : null;
+}
+
+function toRecord(row: DeviceRow, canManage: boolean): DeviceRecord {
   return {
     id: row.id,
     name: row.name,
@@ -73,6 +142,10 @@ function toRecord(row: DeviceRow): DeviceRecord {
     isSyncing: row.syncLockedAt !== null,
     // Whether one is set, never what it is.
     hasCommKey: row.commKeyCipher !== null,
+    hasPushToken: row.pushTokenCipher !== null,
+    allowedPushCidrs: row.allowedPushCidrs,
+    lastPushAt: row.lastPushAt?.toISOString() ?? null,
+    pushUrl: pushUrlFor(row, canManage),
     mappedUsers: row._count.mappings,
     createdAt: row.createdAt.toISOString(),
   };
@@ -108,7 +181,7 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     return reply.send({
-      data: rows.map(toRecord),
+      data: rows.map((row) => toRecord(row, auth.permissions.has(PERMISSIONS.DEVICE_MANAGE))),
       meta: buildMeta(query.page, query.limit, total),
     });
   });
@@ -130,12 +203,14 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
       });
       if (duplicate) throw new ConflictError('A device with that name already exists.');
 
-      const { commKey, ...rest } = input;
+      const { commKey, pushToken, ...rest } = input;
+      assertUsableCidrs(rest.allowedPushCidrs);
       const created = await prisma.attendanceDevice.create({
         data: {
           companyId: auth.companyId,
           ...rest,
           commKeyCipher: commKey ? encryptSecret(commKey) : null,
+          pushTokenCipher: pushToken ? encryptSecret(pushToken) : null,
         },
         include: INCLUDE,
       });
@@ -152,7 +227,7 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
         request,
       });
 
-      return reply.status(201).send({ data: toRecord(created) });
+      return reply.status(201).send({ data: toRecord(created, true) });
     },
   );
 
@@ -179,7 +254,8 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
       });
       if (clash) throw new ConflictError('A device with that name already exists.');
 
-      const { commKey, ...rest } = input;
+      const { commKey, pushToken, ...rest } = input;
+      assertUsableCidrs(rest.allowedPushCidrs);
       const updated = await prisma.attendanceDevice.update({
         where: { id },
         data: {
@@ -189,6 +265,12 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
           ...(commKey === undefined
             ? {}
             : { commKeyCipher: commKey === null || commKey === '' ? null : encryptSecret(commKey) }),
+          ...(pushToken === undefined
+            ? {}
+            : {
+                pushTokenCipher:
+                  pushToken === null || pushToken === '' ? null : encryptSecret(pushToken),
+              }),
         },
         include: INCLUDE,
       });
@@ -204,13 +286,13 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
         action: 'device.update',
         entityType: 'AttendanceDevice',
         entityId: id,
-        summary: `Updated device "${updated.name}"${commKey !== undefined ? ' (comm key changed)' : ''}${changes.changed.length ? ` (${changes.changed.join(', ')})` : ''}`,
+        summary: `Updated device "${updated.name}"${commKey !== undefined ? ' (comm key changed)' : ''}${pushToken !== undefined ? ' (push token changed)' : ''}${changes.changed.length ? ` (${changes.changed.join(', ')})` : ''}`,
         before: changes.before,
         after: changes.after,
         request,
       });
 
-      return reply.send({ data: toRecord(updated) });
+      return reply.send({ data: toRecord(updated, true) });
     },
   );
 

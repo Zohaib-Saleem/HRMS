@@ -1246,6 +1246,8 @@ enum AttendanceSyncTrigger {
   SCHEDULED
   MANUAL
   STARTUP
+  /// The device sent the records itself; nothing was polled.
+  PUSH
 }
 
 /// A physical attendance terminal.
@@ -1288,6 +1290,21 @@ model AttendanceDevice {
   /// Held for the duration of a sync so two never overlap on one device.
   syncLockedAt  DateTime?
   syncLockToken String?
+
+  // --- ADMS push (phase 8) -------------------------------------------------
+
+  /// Last time the device posted anything, whether or not it carried records.
+  lastPushAt DateTime?
+
+  /// Secret path segment the device must include in its server URL, encrypted
+  /// at rest. ADMS itself authenticates with nothing but a serial number, so
+  /// this is what turns a guessable identifier into a credential.
+  pushTokenCipher String?
+
+  /// Networks the device may push from. Empty means any source, which is the
+  /// out-of-the-box behaviour: a terminal is plugged in and starts posting
+  /// before anyone has had a chance to write down its address.
+  allowedPushCidrs String[] @default([])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

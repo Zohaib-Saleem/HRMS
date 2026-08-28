@@ -241,7 +241,7 @@ The reference tracks **Employee status** (Active / Terminated) separately from
 | Team view — reportees' attendance | **KEEP** |
 | Absent auto-scheduler (marks absentees automatically) | **KEEP** |
 | Pay period definition | **KEEP** — needed by payroll |
-| Biometric / FTP device import | **EXCLUDE** — no device in use |
+| Biometric / FTP device import | **BUILT** — ZKTeco pull and ADMS push; see docs/attendance-devices.md |
 | IP / geo-restricted check-in | **OPTIONAL** |
 
 ---
