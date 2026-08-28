@@ -66,6 +66,20 @@ export const PERMISSIONS = {
   HOLIDAY_READ: 'holiday.read',
   HOLIDAY_MANAGE: 'holiday.manage',
 
+  // --- Payroll ---
+  /// See payroll runs, lines and figures within your data scope. Salary is
+  /// money about a named person, so this is deliberately separate from
+  /// attendance and from employee.read.
+  PAYROLL_READ: 'payroll.read',
+  /// Configure payroll, set salaries and components, create and calculate runs.
+  PAYROLL_MANAGE: 'payroll.manage',
+  /// Approve and finalize a run. Held separately so a company that wants two
+  /// pairs of eyes on payroll can revoke it from whoever prepares the run.
+  PAYROLL_APPROVE: 'payroll.approve',
+  /// See payslips within your data scope. Every member of staff holds this with
+  /// an OWN scope, which is what lets them see their own and nothing else.
+  PAYSLIP_READ: 'payslip.read',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -132,6 +146,17 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.APPROVAL_READ, label: 'View approvals', description: 'See requests within your data scope.' },
       { value: PERMISSIONS.APPROVAL_ACT, label: 'Decide approvals', description: 'Approve or reject requests assigned to you.' },
       { value: PERMISSIONS.APPROVAL_MANAGE, label: 'Administer approvals', description: 'See and decide any request in the company.' },
+    ],
+  },
+  {
+    key: 'payroll',
+    label: 'Payroll',
+    description: 'Salaries, payroll runs and payslips.',
+    permissions: [
+      { value: PERMISSIONS.PAYROLL_READ, label: 'View payroll', description: 'See payroll runs and figures within your data scope.' },
+      { value: PERMISSIONS.PAYROLL_MANAGE, label: 'Manage payroll', description: 'Set salaries and components, create and calculate runs.' },
+      { value: PERMISSIONS.PAYROLL_APPROVE, label: 'Approve payroll', description: 'Approve and finalize a run. Grant sparingly.' },
+      { value: PERMISSIONS.PAYSLIP_READ, label: 'View payslips', description: 'See payslips within your data scope.' },
     ],
   },
   {
@@ -249,6 +274,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LEAVE_MANAGE,
     PERMISSIONS.HOLIDAY_READ,
     PERMISSIONS.HOLIDAY_MANAGE,
+    PERMISSIONS.PAYROLL_READ,
+    PERMISSIONS.PAYROLL_MANAGE,
+    PERMISSIONS.PAYROLL_APPROVE,
+    PERMISSIONS.PAYSLIP_READ,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -282,6 +311,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LEAVE_READ,
     PERMISSIONS.LEAVE_REQUEST,
     PERMISSIONS.HOLIDAY_READ,
+    PERMISSIONS.PAYSLIP_READ,
   ],
 };
 

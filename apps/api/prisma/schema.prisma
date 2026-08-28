@@ -174,6 +174,19 @@ model Company {
   leaveRequests LeaveRequest[]
   holidays      Holiday[]
 
+  // --- phase 9 ---
+  payrollSettings          PayrollSettings?
+  payrollProfiles          PayrollProfile[]
+  employeeSalaries         EmployeeSalary[]
+  salaryComponents         SalaryComponent[]
+  employeeSalaryComponents EmployeeSalaryComponent[]
+  payrollPeriods           PayrollPeriod[]
+  payrollRuns              PayrollRun[]
+  payrollLines             PayrollLine[]
+  payrollAdjustments       PayrollAdjustment[]
+  payslips                 Payslip[]
+  payrollExceptions        PayrollException[]
+
   @@map("companies")
 }
 
@@ -392,6 +405,14 @@ model Employee {
   // --- phase 4 ---
   leaveBalances LeaveBalance[]
   leaveRequests LeaveRequest[]
+
+  // --- phase 9 ---
+  payrollProfile     PayrollProfile?
+  salaries           EmployeeSalary[]
+  salaryComponents   EmployeeSalaryComponent[]
+  payrollLines       PayrollLine[]
+  payrollAdjustments PayrollAdjustment[]
+  payslips           Payslip[]
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
@@ -1447,4 +1468,629 @@ model AttendanceRawPunch {
   @@index([deviceId, punchedAt])
   @@index([companyId, employeeId, processedAt])
   @@map("attendance_raw_punches")
+}
+
+// ===========================================================================
+// PHASE 9 - payroll
+//
+// The engine above decides what happened; this decides what it is worth. The
+// boundary matters: nothing here reads a punch, re-derives a day or second
+// guesses an attendance status. Payroll consumes DerivedDay, the same shape the
+// attendance screens are built from, so a figure on a payslip can always be
+// traced to a day an administrator can look at.
+//
+// Two rules shape most of these tables:
+//
+//   - Nothing is hard-coded. What a day is worth, what an absence costs, what
+//     overtime multiplies by - all of it is configuration, because no two
+//     companies agree and the ones that do change their minds.
+//   - A finalized run is immutable. Every figure it used is copied onto the
+//     line at calculation time, so a later salary edit, attendance correction
+//     or policy change cannot silently rewrite what someone was paid.
+// ===========================================================================
+
+/// How an employee is paid. Effective-dated on the salary record rather than
+/// the profile: moving someone from monthly to hourly is a change to their
+/// terms, and last month's payroll must keep using the old ones.
+enum PayrollSalaryType {
+  MONTHLY
+  DAILY
+  HOURLY
+}
+
+/// What a monthly salary is divided by to reach a daily rate.
+///
+/// The single most argued-about number in payroll. A company paying by calendar
+/// days and one paying by a fixed thirty produce different figures from the
+/// same salary and the same attendance, and both are correct for their own
+/// contracts, so this cannot be a constant in the code.
+enum PayrollBasis {
+  /// The actual number of days in the pay period.
+  CALENDAR_DAYS
+  /// A fixed figure, whatever the month contains. Usually 30 or 26.
+  FIXED_DAYS
+  /// Scheduled working days: the period less weekends and holidays.
+  WORKING_DAYS
+}
+
+/// How overtime is priced.
+enum PayrollOvertimeMode {
+  /// Overtime is not paid at all. Hours are still recorded and reported.
+  NONE
+  /// The employee's hourly rate multiplied by a factor.
+  MULTIPLIER
+  /// A flat amount per hour, ignoring the employee's own rate.
+  FIXED_RATE
+}
+
+/// How lateness and early leaving translate into money.
+enum PayrollTimeDeductionMode {
+  NONE
+  /// A rate for every minute past the grace period.
+  PER_MINUTE
+  /// A flat amount each time it happens, regardless of how long.
+  PER_OCCURRENCE
+}
+
+enum PayrollComponentKind {
+  EARNING
+  DEDUCTION
+}
+
+/// How a component's amount is arrived at.
+enum PayrollComponentCalc {
+  FIXED
+  PERCENT_OF_BASIC
+  PERCENT_OF_GROSS
+}
+
+/// Whether a component repeats every period or applies once.
+enum PayrollComponentFrequency {
+  RECURRING
+  ONE_TIME
+}
+
+enum PayrollPeriodStatus {
+  OPEN
+  /// A finalized run exists for this period; it no longer accepts new runs.
+  CLOSED
+}
+
+/// The life of a payroll run.
+///
+/// CALCULATING is a real state, not a UI nicety: a run being calculated must
+/// refuse a second calculation, and a process that dies mid-calculation has to
+/// be distinguishable from one that never started.
+enum PayrollRunStatus {
+  DRAFT
+  CALCULATING
+  REVIEW
+  APPROVED
+  FINALIZED
+  CANCELLED
+}
+
+/// Something the calculation could not resolve confidently.
+///
+/// Recorded rather than guessed at. A payroll that quietly pays zero because a
+/// salary was missing is worse than one that refuses to finalize and says so.
+enum PayrollExceptionCode {
+  MISSING_SALARY
+  MISSING_PROFILE
+  OVERLAPPING_SALARY
+  INVALID_ATTENDANCE
+  MISSING_SHIFT
+  UNAPPROVED_OVERTIME
+  NON_POSITIVE_NET
+  INCOMPLETE_EMPLOYEE
+}
+
+/// BLOCKING stops finalization; WARNING is recorded and shown but does not.
+enum PayrollExceptionSeverity {
+  BLOCKING
+  WARNING
+}
+
+/// Company-wide payroll configuration.
+///
+/// One row per company, created on demand with defaults that reproduce the most
+/// common arrangement. Everything here can be overridden per employee on their
+/// PayrollProfile; a null there means "inherit this".
+model PayrollSettings {
+  id        String @id @default(cuid())
+  companyId String @unique
+
+  // --- what a day is worth --------------------------------------------------
+  basis          PayrollBasis @default(FIXED_DAYS)
+  /// Only consulted when basis is FIXED_DAYS.
+  fixedBasisDays Int          @default(30)
+  /// Used to turn a daily rate into an hourly one for monthly and daily staff.
+  standardHoursPerDay Decimal @default(8) @db.Decimal(6, 2)
+
+  // --- overtime -------------------------------------------------------------
+  overtimeMode       PayrollOvertimeMode @default(MULTIPLIER)
+  overtimeMultiplier Decimal             @default(1.5) @db.Decimal(6, 3)
+  /// Only consulted when overtimeMode is FIXED_RATE.
+  overtimeFixedRate  Decimal             @default(0) @db.Decimal(14, 4)
+  /// When true - the default - only overtime on an APPROVED timesheet is paid.
+  /// Unapproved hours are still counted and reported as an exception.
+  requireApprovedOvertime Boolean @default(true)
+
+  // --- what an absence costs ------------------------------------------------
+  /// Whether a day recorded as ABSENT reduces pay.
+  deductUnpaidAbsence Boolean @default(true)
+  /// Whether leave on an unpaid leave type reduces pay.
+  deductUnpaidLeave   Boolean @default(true)
+
+  lateDeductionMode     PayrollTimeDeductionMode @default(NONE)
+  /// Per minute or per occurrence depending on the mode above.
+  lateDeductionRate     Decimal                  @default(0) @db.Decimal(14, 4)
+  /// Lateness at or below this many minutes never costs anything, on top of
+  /// whatever the attendance policy already forgave.
+  lateGraceMinutes      Int                      @default(0)
+
+  earlyLeaveDeductionMode PayrollTimeDeductionMode @default(NONE)
+  earlyLeaveDeductionRate Decimal                  @default(0) @db.Decimal(14, 4)
+  earlyLeaveGraceMinutes  Int                      @default(0)
+
+  // --- presentation ---------------------------------------------------------
+  /// Decimal places money is rounded to when a line is written.
+  roundingDecimals Int    @default(2)
+  payslipPrefix    String @default("PS-")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("payroll_settings")
+}
+
+/// Per-employee payroll configuration.
+///
+/// Deliberately holds no amount. Money is effective-dated on EmployeeSalary;
+/// this is the stable configuration that says how that money should be read.
+/// Every override is nullable, and null means "use the company setting" - so a
+/// company that changes its mind changes one row, not four hundred.
+model PayrollProfile {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String @unique
+
+  /// Excluded from every run while false, without deleting anything.
+  isActive Boolean @default(true)
+
+  basis          PayrollBasis?
+  fixedBasisDays Int?
+  standardHoursPerDay Decimal? @db.Decimal(6, 2)
+
+  overtimeMode       PayrollOvertimeMode?
+  overtimeMultiplier Decimal?             @db.Decimal(6, 3)
+  overtimeFixedRate  Decimal?             @db.Decimal(14, 4)
+  /// Set when this employee is paid a different hourly rate for overtime than
+  /// their salary implies. Null derives it from the salary and the basis.
+  hourlyRateOverride Decimal?             @db.Decimal(14, 4)
+
+  deductUnpaidAbsence Boolean?
+  deductUnpaidLeave   Boolean?
+
+  /// Free text: bank, cash, cheque. Not a payment integration, just a note on
+  /// how this person is paid, so a payslip can say so.
+  paymentMethod String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, isActive])
+  @@map("payroll_profiles")
+}
+
+/// What an employee is paid, from a date.
+///
+/// The rule the whole model exists for: a raise in July must not change what
+/// June was worth. Records are never edited in place once a run has used them;
+/// a new row is opened and the previous one closed, exactly as
+/// EmployeeShiftAssignment already does for shifts.
+///
+/// `effectiveTo` null means "still in force". Overlapping open-ended rows are
+/// rejected by the service and reported as an exception if they exist anyway.
+model EmployeeSalary {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  salaryType PayrollSalaryType @default(MONTHLY)
+  /// The monthly figure, the daily figure or the hourly figure, according to
+  /// salaryType. One column because it is one contractual number; which unit it
+  /// is read in is the type's business.
+  amount     Decimal           @db.Decimal(14, 2)
+  /// ISO 4217. Defaults from the company but stored per record, because a
+  /// company that changes currency must not restate history.
+  currency   String            @db.Char(3)
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, effectiveFrom])
+  @@index([companyId, effectiveFrom])
+  @@map("employee_salaries")
+}
+
+/// The catalogue of things that can appear on a payslip besides basic pay.
+///
+/// A definition only: transport allowance exists as a concept here, and what
+/// any particular person gets is an assignment below. Splitting the two is what
+/// lets a company rename "Conveyance" to "Transport" without touching anyone's
+/// pay.
+model SalaryComponent {
+  id          String @id @default(cuid())
+  companyId   String
+  name        String
+  code        String?
+  description String?
+
+  kind PayrollComponentKind
+  calc PayrollComponentCalc @default(FIXED)
+
+  /// Marks the component for a future tax module. Nothing computes tax today,
+  /// and storing the flag now is cheaper than backfilling it later.
+  isTaxable Boolean @default(true)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assignments EmployeeSalaryComponent[]
+
+  @@unique([companyId, name])
+  @@index([companyId, kind, isActive])
+  @@map("salary_components")
+}
+
+/// One employee's entitlement to one component, from a date.
+///
+/// Effective-dated for the same reason salary is: a housing allowance that
+/// started in March should not appear on February's payslip when February is
+/// recalculated.
+model EmployeeSalaryComponent {
+  id          String @id @default(cuid())
+  companyId   String
+  employeeId  String
+  componentId String
+
+  /// Read as money for FIXED and as a percentage for the PERCENT_ calcs.
+  value     Decimal                   @db.Decimal(14, 4)
+  frequency PayrollComponentFrequency @default(RECURRING)
+
+  effectiveFrom DateTime  @db.Date
+  /// For ONE_TIME entries this is set equal to effectiveFrom by the service, so
+  /// a bonus cannot silently repeat.
+  effectiveTo   DateTime? @db.Date
+
+  isActive Boolean @default(true)
+  note     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  component SalaryComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, effectiveFrom])
+  @@index([companyId, componentId])
+  @@map("employee_salary_components")
+}
+
+/// A stretch of time payroll is run for.
+///
+/// Kept separate from the run so the same period can be recalculated after a
+/// cancelled attempt without losing the identity of the month itself.
+model PayrollPeriod {
+  id        String @id @default(cuid())
+  companyId String
+  name      String
+
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  /// When people are actually paid. Reporting only; no calculation reads it.
+  payDate   DateTime? @db.Date
+
+  status PayrollPeriodStatus @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  runs    PayrollRun[]
+
+  @@unique([companyId, startDate, endDate])
+  @@index([companyId, status])
+  @@map("payroll_periods")
+}
+
+/// One attempt at paying a period.
+///
+/// A period may have several: a cancelled run and then a good one. Only one may
+/// reach FINALIZED, which is what closes the period.
+model PayrollRun {
+  id        String @id @default(cuid())
+  companyId String
+  periodId  String
+
+  status PayrollRunStatus @default(DRAFT)
+  notes  String?
+
+  /// Copied from company settings when the run is calculated, so the figures
+  /// stay explicable after the settings change.
+  currency String @db.Char(3)
+
+  // --- totals, written by the calculation ------------------------------------
+  employeeCount   Int     @default(0)
+  grossTotal      Decimal @default(0) @db.Decimal(16, 2)
+  deductionTotal  Decimal @default(0) @db.Decimal(16, 2)
+  netTotal        Decimal @default(0) @db.Decimal(16, 2)
+  exceptionCount  Int     @default(0)
+  blockingCount   Int     @default(0)
+
+  calculatedAt DateTime?
+  calculatedBy String?
+  reviewedAt   DateTime?
+  reviewedBy   String?
+  approvedAt   DateTime?
+  approvedBy   String?
+  finalizedAt  DateTime?
+  finalizedBy  String?
+  cancelledAt  DateTime?
+  cancelledBy  String?
+  cancelReason String?
+
+  /// Set while a calculation is in flight, cleared when it ends. A stale value
+  /// is what tells a later request that a previous calculation died.
+  calculationStartedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  period     PayrollPeriod       @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  lines      PayrollLine[]
+  exceptions PayrollException[]
+
+  @@index([companyId, status])
+  @@index([periodId, status])
+  @@map("payroll_runs")
+}
+
+/// One employee's pay for one run.
+///
+/// Everything the calculation used is copied here, not referenced: the salary
+/// amount, the basis, the multiplier, the day counts. That redundancy is the
+/// point - it is what makes a finalized line survive a salary edit, an
+/// attendance correction or a change of company policy without moving.
+model PayrollLine {
+  id         String @id @default(cuid())
+  companyId  String
+  runId      String
+  employeeId String
+
+  // --- snapshot of the terms used -------------------------------------------
+  salaryType     PayrollSalaryType
+  salaryAmount   Decimal           @db.Decimal(14, 2)
+  currency       String            @db.Char(3)
+  basis          PayrollBasis
+  basisDays      Decimal           @db.Decimal(8, 2)
+  dailyRate      Decimal           @db.Decimal(14, 4)
+  hourlyRate     Decimal           @db.Decimal(14, 4)
+  /// Set when more than one salary record covered the period, so a reviewer can
+  /// see at a glance why the basic figure is not the round number they expect.
+  salarySegments Int               @default(1)
+
+  // --- attendance, consumed from the existing engine -------------------------
+  scheduledDays     Decimal @db.Decimal(8, 2)
+  scheduledMinutes  Int     @default(0)
+  presentDays       Decimal @db.Decimal(8, 2)
+  halfDays          Decimal @db.Decimal(8, 2)
+  absentDays        Decimal @db.Decimal(8, 2)
+  paidLeaveDays     Decimal @db.Decimal(8, 2)
+  unpaidLeaveDays   Decimal @db.Decimal(8, 2)
+  holidayDays       Decimal @db.Decimal(8, 2)
+  weekendDays       Decimal @db.Decimal(8, 2)
+  payableDays       Decimal @db.Decimal(8, 2)
+  unpaidDays        Decimal @db.Decimal(8, 2)
+  workedMinutes     Int     @default(0)
+  lateOccurrences   Int     @default(0)
+  lateMinutes       Int     @default(0)
+  earlyLeaveOccurrences Int @default(0)
+  earlyLeaveMinutes Int     @default(0)
+  overtimeMinutes   Int     @default(0)
+  /// The subset of overtimeMinutes that sat on an approved timesheet. Only this
+  /// is paid when the company requires approval.
+  approvedOvertimeMinutes Int @default(0)
+
+  // --- money ----------------------------------------------------------------
+  basicAmount     Decimal @db.Decimal(14, 2)
+  earningsTotal   Decimal @db.Decimal(14, 2)
+  overtimeAmount  Decimal @db.Decimal(14, 2)
+  deductionsTotal Decimal @db.Decimal(14, 2)
+  adjustmentTotal Decimal @default(0) @db.Decimal(14, 2)
+  grossAmount     Decimal @db.Decimal(14, 2)
+  netAmount       Decimal @db.Decimal(14, 2)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  run        PayrollRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  employee   Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  earnings   PayrollEarning[]
+  deductions PayrollDeduction[]
+  exceptions PayrollException[]
+  payslip    Payslip?
+
+  @@unique([runId, employeeId])
+  @@index([companyId, employeeId])
+  @@map("payroll_lines")
+}
+
+/// One earning on one line, kept as its own row so a payslip can itemise.
+///
+/// The component name is copied rather than joined: renaming a component must
+/// not change what a finalized payslip says it paid for.
+model PayrollEarning {
+  id     String @id @default(cuid())
+  lineId String
+
+  /// Null for the derived rows - basic pay and overtime - which have no
+  /// catalogue entry behind them.
+  componentId String?
+  code        String?
+  label       String
+  kind        String  @default("COMPONENT")
+
+  calc      PayrollComponentCalc @default(FIXED)
+  /// The percentage or fixed figure the amount came from, for explicability.
+  rate      Decimal?             @db.Decimal(14, 4)
+  amount    Decimal              @db.Decimal(14, 2)
+  isTaxable Boolean              @default(true)
+
+  createdAt DateTime @default(now())
+
+  line PayrollLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@index([lineId])
+  @@map("payroll_earnings")
+}
+
+/// One deduction on one line. Same reasoning as PayrollEarning.
+model PayrollDeduction {
+  id     String @id @default(cuid())
+  lineId String
+
+  componentId String?
+  code        String?
+  label       String
+  /// ABSENCE, UNPAID_LEAVE, LATE, EARLY_LEAVE, COMPONENT, ADJUSTMENT - what
+  /// produced this row, so a reviewer can tell a policy deduction from a
+  /// deliberate one.
+  kind        String @default("COMPONENT")
+
+  calc   PayrollComponentCalc @default(FIXED)
+  rate   Decimal?             @db.Decimal(14, 4)
+  /// The quantity the rate was applied to: days, minutes or occurrences.
+  units  Decimal?             @db.Decimal(10, 2)
+  amount Decimal              @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+
+  line PayrollLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@index([lineId])
+  @@map("payroll_deductions")
+}
+
+/// A correction to a finalized run.
+///
+/// The only way a finalized figure can be answered for. It never edits the
+/// original line - it is applied to a later run, so both the original and the
+/// correction remain visible and the history stays truthful.
+model PayrollAdjustment {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  /// The finalized line being corrected, when the correction relates to one.
+  originLineId String?
+  /// The run the adjustment is applied in. Null until a run picks it up.
+  appliedRunId String?
+
+  kind   PayrollComponentKind
+  label  String
+  amount Decimal              @db.Decimal(14, 2)
+  reason String
+
+  appliedAt DateTime?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, employeeId])
+  @@index([appliedRunId])
+  @@map("payroll_adjustments")
+}
+
+/// The document an employee is entitled to see.
+///
+/// One per finalized line. It exists separately because it has its own identity
+/// - a number people quote, an issue date, and a moment it became visible -
+/// none of which belong to the calculation.
+model Payslip {
+  id        String @id @default(cuid())
+  companyId String
+  lineId    String @unique
+  employeeId String
+
+  number     String
+  issuedAt   DateTime  @default(now())
+  /// Withheld until an administrator releases it, so a finalized run can be
+  /// checked before anyone sees their own figure.
+  publishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  line     PayrollLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, number])
+  @@index([employeeId, issuedAt])
+  @@map("payslips")
+}
+
+/// Something the calculation could not resolve.
+///
+/// Stored per run, and per line where one exists. A run carrying a BLOCKING
+/// exception cannot be finalized, which is the mechanism behind "do not
+/// silently produce questionable payroll".
+model PayrollException {
+  id        String @id @default(cuid())
+  companyId String
+  runId     String
+  lineId    String?
+  employeeId String?
+
+  code     PayrollExceptionCode
+  severity PayrollExceptionSeverity @default(BLOCKING)
+  message  String
+  /// Whatever the detector saw, for diagnosis. Never money owed to anyone.
+  detail   Json?
+
+  createdAt DateTime @default(now())
+
+  company Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  run     PayrollRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  line    PayrollLine? @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@index([runId, severity])
+  @@index([companyId, code])
+  @@map("payroll_exceptions")
 }

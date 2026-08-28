@@ -37,6 +37,10 @@ sleep 150
 run zkt               npx dotenv -e .env -- npx tsx scripts/audit-zkt.mjs
 run zkt-reliability   npx dotenv -e .env -- npx tsx scripts/audit-zkt-reliability.mjs
 run adms              npx dotenv -e .env -- npx tsx scripts/audit-adms.mjs
+run payroll-calc      npx tsx scripts/verify-payroll-calc.mjs
+# Signs in three times, so it needs the same room as the shell suites above.
+sleep 150
+run payroll           npx dotenv -e .env -- npx tsx scripts/audit-payroll.mjs
 run timezone          npx dotenv -e .env -- npx tsx scripts/verify-timezone.mjs
 run zkt-protocol      npx dotenv -e .env -- npx tsx scripts/verify-zkt-protocol.mjs
 

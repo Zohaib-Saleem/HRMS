@@ -44,6 +44,17 @@ export interface DerivedDay {
   notes: string | null;
   /** Set when the day is covered by approved leave. */
   leaveTypeName: string | null;
+  /**
+   * Whether that leave is paid.
+   *
+   * Read by payroll, which must tell a paid absence from an unpaid one and has
+   * no business querying the leave tables itself. Null when the day is not
+   * leave at all - deliberately not `false`, so "unpaid" and "not leave"
+   * cannot be confused by a caller that forgets to check the status.
+   */
+  leaveIsPaid: boolean | null;
+  /** FULL_DAY, FIRST_HALF or SECOND_HALF; null when the day is not leave. */
+  leaveDayPart: string | null;
   /** Set when the day is a holiday that applies to this employee. */
   holidayName: string | null;
   /** True when a stored record exists; false when the status is inferred. */
@@ -84,7 +95,7 @@ export async function deriveRangeForEmployees(
         startDate: { lte: to },
         endDate: { gte: from },
       },
-      include: { leaveType: { select: { name: true } } },
+      include: { leaveType: { select: { name: true, isPaid: true } } },
     }),
     prisma.holiday.findMany({
       where: { companyId, isActive: true, date: { gte: from, lte: to } },
@@ -148,6 +159,8 @@ export async function deriveRangeForEmployees(
         shiftName: record?.shift?.name ?? null,
         notes: record?.notes ?? null,
         leaveTypeName: onLeave?.leaveType.name ?? null,
+        leaveIsPaid: onLeave ? onLeave.leaveType.isPaid : null,
+        leaveDayPart: onLeave ? onLeave.dayPart : null,
         holidayName,
         hasRecord: record !== undefined,
       });

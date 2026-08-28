@@ -22,6 +22,19 @@ import { timesheetRoutes } from './time/timesheets.routes.js';
 import { leaveTypeRoutes } from './leave/leave-types.routes.js';
 import { leaveBalanceRoutes, leaveRequestRoutes } from './leave/leave-requests.routes.js';
 import { holidayRoutes } from './leave/holidays.routes.js';
+import {
+  payrollProfileRoutes,
+  payrollSalaryRoutes,
+  payrollSettingsRoutes,
+} from './payroll/payroll.routes.js';
+import {
+  employeeComponentRoutes,
+  payrollAdjustmentRoutes,
+  payrollPeriodRoutes,
+  payrollRunRoutes,
+  payslipRoutes,
+  salaryComponentRoutes,
+} from './payroll/payroll-runs.routes.js';
 
 /**
  * Module registry.
@@ -64,6 +77,17 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/leave/requests', plugin: leaveRequestRoutes },
   { prefix: '/leave/balances', plugin: leaveBalanceRoutes },
   { prefix: '/holidays', plugin: holidayRoutes },
+
+  // --- phase 9 ---
+  { prefix: '/payroll/settings', plugin: payrollSettingsRoutes },
+  { prefix: '/payroll/profiles', plugin: payrollProfileRoutes },
+  { prefix: '/payroll/salaries', plugin: payrollSalaryRoutes },
+  { prefix: '/payroll/components', plugin: salaryComponentRoutes },
+  { prefix: '/payroll/employee-components', plugin: employeeComponentRoutes },
+  { prefix: '/payroll/periods', plugin: payrollPeriodRoutes },
+  { prefix: '/payroll/runs', plugin: payrollRunRoutes },
+  { prefix: '/payroll/adjustments', plugin: payrollAdjustmentRoutes },
+  { prefix: '/payslips', plugin: payslipRoutes },
 
   // --- phase 5+ ---------------------------------------------------------
   // { prefix: '/documents', plugin: documentRoutes },

@@ -240,6 +240,42 @@ See `docs/attendance-devices.md` for setup.
 
 ---
 
+## Phase 9 — Payroll backend and calculation engine ✅
+
+Payroll as a consumer of the attendance engine, not a second one.
+
+- 13 additive tables: settings, per-employee profiles, effective-dated
+  salaries, a component catalogue with per-employee assignments, periods, runs,
+  lines, itemised earnings and deductions, adjustments, payslips, exceptions ✅
+- The calculation is a pure function: same facts in, same money out, and the
+  arithmetic is testable without a database ✅
+- Monthly, daily and hourly salary types, with the monthly basis configurable
+  as calendar days, a fixed figure, or scheduled working days ✅
+- Configurable deductions for unpaid absence, unpaid leave, lateness and early
+  leaving - none of it hard-coded to one company's policy ✅
+- Overtime priced by multiplier or flat rate, and only paid when an approved
+  timesheet covers it; unapproved hours are counted and reported, not paid ✅
+- Effective-dated salary: a raise in July pays July at the new figure, leaves
+  June alone, and a mid-period change prorates across both ✅
+- A finalized run is immutable. Every figure it used is copied onto the line,
+  so a later salary edit, attendance correction or policy change cannot rewrite
+  it; corrections go through a payroll adjustment ✅
+- Eight exception codes, three of them blocking, so a questionable payroll
+  cannot be finalized without somebody looking at it ✅
+- Employee isolation asserted directly: changing a payslip id returns 403, and
+  the assertion was verified to fail when the guard is removed ✅
+
+Reuses `AuditLog` rather than a separate payroll audit table, and
+`LeaveType.isPaid`, `Timesheet.status`, `Shift`, `Holiday` and
+`Company.weekendDays` rather than restating any of them.
+
+See `docs/payroll.md`.
+
+**Deliberately not built:** the payroll UI, and tax. The backend, database,
+calculation engine and API are complete; the screens are the next step.
+
+---
+
 ## Later — Documents
 
 - Employee document storage with categories

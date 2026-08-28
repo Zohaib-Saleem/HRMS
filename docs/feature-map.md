@@ -302,20 +302,22 @@ So the reference gives us **integration requirements, not a payroll design**:
 
 | Feature | Classification |
 | --- | --- |
-| Salary structure (basic + allowances + deductions) | **KEEP** |
-| Payroll run per pay period | **KEEP** |
-| Payslip generation | **KEEP** |
-| Loss-of-pay integration from leave | **KEEP** |
-| Attendance-driven pay calculation | **KEEP** |
-| Pay period configuration | **KEEP** |
-| Compensation history per employee | **KEEP** |
+| Salary structure (basic + allowances + deductions) | **BUILT** (Phase 9) |
+| Payroll run per pay period | **BUILT** (Phase 9) |
+| Payslip generation | **BUILT** (Phase 9) - backend; no UI yet |
+| Loss-of-pay integration from leave | **BUILT** (Phase 9) via LeaveType.isPaid |
+| Attendance-driven pay calculation | **BUILT** (Phase 9) |
+| Pay period configuration | **BUILT** (Phase 9) |
+| Compensation history per employee | **BUILT** (Phase 9) - effective-dated salary |
 | Tax computation | **OPTIONAL** — jurisdiction-specific, needs your input |
 | Bank transfer file export | **OPTIONAL** |
 | Statutory filings | **EXCLUDE** — out of scope |
 
-> **Decision needed from you:** payroll must be designed from your actual rules
-> (pay cycle, allowance/deduction types, tax treatment). Nothing usable can be derived
-> from the reference.
+> **Built in Phase 9**, with the company rules left as configuration rather than
+> assumed: the monthly basis, the overtime policy and every attendance deduction
+> are settings, overridable per employee. Tax remains unbuilt - components carry
+> a `isTaxable` flag so a tax module has something to read, but nothing computes
+> tax today. See `docs/payroll.md`.
 
 ---
 
