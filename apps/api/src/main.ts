@@ -1,6 +1,7 @@
 import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { assertDatabaseConnection, prisma } from './core/db.js';
+import { useLogger } from './core/logger.js';
 import { pruneExpiredSessions } from './auth/session.js';
 import { pruneExpiredResetTokens } from './auth/password-reset.service.js';
 import { markAbsencesForPreviousDay } from './modules/time/absence.service.js';
@@ -11,6 +12,10 @@ async function main(): Promise<void> {
   await assertDatabaseConnection();
 
   const app = await buildApp();
+
+  // Background work - the device sync in particular - runs outside any request,
+  // so it needs the application logger rather than a second one of its own.
+  useLogger(app.log);
 
   // A broken mail configuration is reported but never blocks startup - in-app
   // notifications keep working regardless.
@@ -50,27 +55,9 @@ async function main(): Promise<void> {
    */
   const syncDevices = async () => {
     try {
-      for (const outcome of await syncDueDevices()) {
-        if (outcome.status === 'FAILED') {
-          app.log.warn(
-            { deviceId: outcome.deviceId, error: outcome.error },
-            'attendance device sync failed',
-          );
-        } else if (outcome.inserted > 0 || outcome.unmapped > 0) {
-          app.log.info(
-            {
-              deviceId: outcome.deviceId,
-              fetched: outcome.fetched,
-              inserted: outcome.inserted,
-              duplicates: outcome.duplicates,
-              unmapped: outcome.unmapped,
-              rejected: outcome.rejected,
-              recalculatedDays: outcome.recalculatedDays,
-            },
-            'attendance device sync',
-          );
-        }
-      }
+      // Each run logs its own SYNC_* events; nothing to add here beyond making
+      // sure a thrown error never escapes the timer.
+      await syncDueDevices();
     } catch (error) {
       app.log.error({ err: error }, 'attendance device sync tick failed');
     }

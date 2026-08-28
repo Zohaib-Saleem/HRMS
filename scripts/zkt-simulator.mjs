@@ -36,6 +36,9 @@ const DEFAULT_USERS = [
  * @param {number|null} [options.commKey]  when set, the device demands auth
  * @param {number} [options.chunkSize] force chunked transfer to exercise it
  * @param {boolean} [options.refuse]  answer nothing, to simulate a dead device
+ * @param {'ok'|'silent'|'garbage'|'reset'|'truncate'|'dropMidTransfer'} [options.fault]
+ *        how the terminal misbehaves once the attendance log is requested
+ * @param {number} [options.resetAfterPackets] destroy the socket after N packets
  */
 export function startSimulator(options) {
   const {
@@ -45,12 +48,15 @@ export function startSimulator(options) {
     commKey = null,
     chunkSize = 1024,
     refuse = false,
+    fault = 'ok',
+    resetAfterPackets = 0,
   } = options;
 
   const state = { connections: 0, disabled: false, punches: [...punches] };
 
   const server = createServer((socket) => {
     state.connections += 1;
+    let packetsSeen = 0;
     let buffer = Buffer.alloc(0);
     let sessionId = 0;
     let authed = commKey === null;
@@ -100,6 +106,11 @@ export function startSimulator(options) {
         buffer = buffer.subarray(frame.consumed);
 
         const { command, data } = frame.packet;
+        packetsSeen += 1;
+        if (resetAfterPackets > 0 && packetsSeen > resetAfterPackets) {
+          socket.destroy();
+          return;
+        }
 
         if (command === ZK_COMMANDS.CONNECT) {
           sessionId = 0x1234;
@@ -133,9 +144,31 @@ export function startSimulator(options) {
             reply(ZK_COMMANDS.ACK_OK, Buffer.from(`${name}=${option(name)}\0`, 'ascii'));
             break;
           }
-          case ZK_COMMANDS.ATTLOG_RRQ:
-            sendBulk(encodeAttendance(state.punches));
+          case ZK_COMMANDS.ATTLOG_RRQ: {
+            const payload = encodeAttendance(state.punches);
+
+            if (fault === 'silent') break; // accept, then say nothing at all
+            if (fault === 'reset') { socket.destroy(); return; }
+            if (fault === 'garbage') {
+              // Bytes that carry no valid framing magic.
+              socket.write(Buffer.from([0x01, 0x02, 0x03, 0x04, 0xff, 0xee, 0xdd, 0xcc]));
+              break;
+            }
+            if (fault === 'truncate' || fault === 'dropMidTransfer') {
+              // Announce the full size, then send only part of it.
+              const size = Buffer.alloc(4);
+              size.writeUInt32LE(payload.length, 0);
+              reply(ZK_COMMANDS.PREPARE_DATA, size);
+              const half = Math.max(40, Math.floor(payload.length / 2));
+              reply(ZK_COMMANDS.DATA, payload.subarray(0, half));
+              // dropMidTransfer also loses the socket, as a reboot would.
+              if (fault === 'dropMidTransfer') socket.destroy();
+              break;
+            }
+
+            sendBulk(payload);
             break;
+          }
           case ZK_COMMANDS.USERTEMP_RRQ:
             sendBulk(encodeUsers(users));
             break;

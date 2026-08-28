@@ -13,6 +13,7 @@ import {
   type DeviceTestResult,
   type DeviceUserRecord,
   type RawPunchRecord,
+  type SyncErrorDetail,
   type ReprocessResult,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
@@ -334,8 +335,8 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
           action: 'device.sync',
           entityType: 'AttendanceDevice',
           entityId: id,
-          summary: `Synced "${device.name}": ${outcome.fetched} fetched, ${outcome.inserted} new, ${outcome.duplicates} duplicate, ${outcome.unmapped} unmapped`,
-          after: { status: outcome.status, inserted: outcome.inserted },
+          summary: `Synced "${device.name}": ${outcome.recordsFetched} fetched, ${outcome.recordsImported} new, ${outcome.duplicatesIgnored} duplicate, ${outcome.unmappedRecords} unmapped, ${outcome.errors} error(s)`,
+          after: { status: outcome.status, imported: outcome.recordsImported, errors: outcome.errors },
           request,
         });
 
@@ -376,17 +377,23 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
       deviceId: row.deviceId,
       deviceName: device.name,
       startedAt: row.startedAt.toISOString(),
-      finishedAt: row.finishedAt?.toISOString() ?? null,
+      completedAt: row.finishedAt?.toISOString() ?? null,
       status: row.status,
       trigger: row.trigger,
-      fetched: row.fetched,
-      inserted: row.inserted,
-      duplicates: row.duplicates,
-      unmapped: row.unmapped,
-      rejected: row.rejected,
-      cursorFrom: row.cursorFrom?.toISOString() ?? null,
-      cursorTo: row.cursorTo?.toISOString() ?? null,
+      recordsFetched: row.fetched,
+      recordsImported: row.inserted,
+      duplicatesIgnored: row.duplicates,
+      unmappedRecords: row.unmapped,
+      errors: row.rejected,
+      attempts: row.attempts,
+      cursorBefore: row.cursorFrom?.toISOString() ?? null,
+      cursorAfter: row.cursorTo?.toISOString() ?? null,
       error: row.error,
+      // Stored as JSON; narrowed here so a malformed column cannot break the
+      // whole history screen.
+      errorDetails: Array.isArray(row.errorDetails)
+        ? (row.errorDetails as unknown as SyncErrorDetail[])
+        : [],
     }));
 
     return reply.send({ data, meta: buildMeta(query.page, query.limit, total) });

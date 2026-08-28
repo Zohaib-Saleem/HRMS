@@ -142,7 +142,7 @@ export function DevicesPage() {
         toast.error(`Sync failed: ${outcome.error}`);
       } else {
         toast.success(
-          `Fetched ${outcome.fetched}, imported ${outcome.inserted}, ${outcome.duplicates} duplicate${outcome.unmapped ? `, ${outcome.unmapped} unmapped` : ''}.`,
+          `Fetched ${outcome.recordsFetched}, imported ${outcome.recordsImported}, ${outcome.duplicatesIgnored} duplicate${outcome.unmappedRecords ? `, ${outcome.unmappedRecords} unmapped` : ''}${outcome.errors ? `, ${outcome.errors} error(s)` : ''}.`,
         );
       }
       await refresh();
@@ -632,7 +632,14 @@ function SyncHistoryDrawer({ device, onClose }: { device: DeviceRecord | null; o
                   ) : (
                     rows.map((row) => (
                       <TR key={row.id}>
-                        <TD className="tabular text-[12.5px]">{when(row.startedAt)}</TD>
+                        <TD className="tabular text-[12.5px]">
+                          {when(row.startedAt)}
+                          {row.attempts > 1 ? (
+                            <span className="block text-[11px] text-warning-foreground">
+                              {row.attempts} attempts
+                            </span>
+                          ) : null}
+                        </TD>
                         <TD>
                           <Badge variant={SYNC_TONE[row.status]}>{SYNC_STATUS_LABELS[row.status]}</Badge>
                           {row.error ? (
@@ -640,15 +647,25 @@ function SyncHistoryDrawer({ device, onClose }: { device: DeviceRecord | null; o
                               {row.error}
                             </span>
                           ) : null}
+                          {row.errorDetails.length > 0 ? (
+                            <span
+                              className="mt-1 block max-w-56 truncate text-[11px] text-warning-foreground"
+                              title={row.errorDetails
+                                .map((d) => `${d.deviceUserId ?? '?'} @ ${d.rawTimestamp ?? '?'}: ${d.reason}`)
+                                .join('\n')}
+                            >
+                              {row.errorDetails.length} record(s) failed - hover for detail
+                            </span>
+                          ) : null}
                         </TD>
-                        <TD className="tabular text-right text-[13px]">{row.fetched}</TD>
-                        <TD className="tabular text-right text-[13px]">{row.inserted}</TD>
-                        <TD className="tabular text-right text-[13px] text-muted-foreground">{row.duplicates}</TD>
+                        <TD className="tabular text-right text-[13px]">{row.recordsFetched}</TD>
+                        <TD className="tabular text-right text-[13px]">{row.recordsImported}</TD>
+                        <TD className="tabular text-right text-[13px] text-muted-foreground">{row.duplicatesIgnored}</TD>
                         <TD className="tabular text-right text-[13px]">
-                          {row.unmapped > 0 ? <span className="text-warning-foreground">{row.unmapped}</span> : 0}
+                          {row.unmappedRecords > 0 ? <span className="text-warning-foreground">{row.unmappedRecords}</span> : 0}
                         </TD>
                         <TD className="tabular text-right text-[13px]">
-                          {row.rejected > 0 ? <span className="text-destructive">{row.rejected}</span> : 0}
+                          {row.errors > 0 ? <span className="text-destructive">{row.errors}</span> : 0}
                         </TD>
                         <TD className="text-[12px] text-muted-foreground">{row.trigger}</TD>
                       </TR>

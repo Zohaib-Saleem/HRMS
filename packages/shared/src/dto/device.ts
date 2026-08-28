@@ -115,22 +115,34 @@ export interface DeviceTestResult {
   error: string | null;
 }
 
+/** One failed transaction, kept so a partial sync can be diagnosed. */
+export interface SyncErrorDetail {
+  deviceUserId?: string | null;
+  rawTimestamp?: string | null;
+  reason: string;
+  /** True when the record can never be read, so retrying would not help. */
+  permanent: boolean;
+}
+
 export interface DeviceSyncRecord {
   id: string;
   deviceId: string;
   deviceName: string;
   startedAt: string;
-  finishedAt: string | null;
+  completedAt: string | null;
   status: SyncStatus;
   trigger: string;
-  fetched: number;
-  inserted: number;
-  duplicates: number;
-  unmapped: number;
-  rejected: number;
-  cursorFrom: string | null;
-  cursorTo: string | null;
+  recordsFetched: number;
+  recordsImported: number;
+  duplicatesIgnored: number;
+  unmappedRecords: number;
+  errors: number;
+  /** Connection attempts this run took, including the successful one. */
+  attempts: number;
+  cursorBefore: string | null;
+  cursorAfter: string | null;
   error: string | null;
+  errorDetails: SyncErrorDetail[];
 }
 
 export interface RawPunchRecord {
@@ -185,12 +197,16 @@ export interface DeviceSyncOutcome {
   syncId: string;
   deviceId: string;
   status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
-  fetched: number;
-  inserted: number;
-  duplicates: number;
-  unmapped: number;
-  rejected: number;
+  recordsFetched: number;
+  recordsImported: number;
+  /** A repeated transaction is ignored and counted, never an error. */
+  duplicatesIgnored: number;
+  unmappedRecords: number;
+  errors: number;
   recalculatedDays: number;
+  attempts: number;
+  cursorBefore: string | null;
+  cursorAfter: string | null;
   error: string | null;
 }
 

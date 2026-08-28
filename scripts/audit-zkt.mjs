@@ -208,11 +208,11 @@ async function main() {
   const first = await admin(`/attendance/devices/${deviceId}/sync`, { method: 'POST' });
   check('sync succeeds', 200, first.status);
   info(`first sync: ${JSON.stringify(first.data)}`);
-  check('three transactions fetched', 3, first.data.fetched);
-  check('three punches inserted', 3, first.data.inserted);
-  check('no duplicates on a first run', 0, first.data.duplicates);
-  check('with no mappings yet, all three are unmapped', 3, first.data.unmapped);
-  check('nothing was rejected', 0, first.data.rejected);
+  check('three transactions fetched', 3, first.data.recordsFetched);
+  check('three punches inserted', 3, first.data.recordsImported);
+  check('no duplicates on a first run', 0, first.data.duplicatesIgnored);
+  check('with no mappings yet, all three are unmapped', 3, first.data.unmappedRecords);
+  check('nothing was rejected', 0, first.data.errors);
 
   section('8. UNMAPPED PUNCHES ARE KEPT, NOT DROPPED');
   const unmapped = await admin('/attendance/punches?unmappedOnly=true&limit=50');
@@ -242,15 +242,15 @@ async function main() {
   section('5-17. DUPLICATE HANDLING');
   const second = await admin(`/attendance/devices/${deviceId}/sync`, { method: 'POST' });
   info(`re-sync: ${JSON.stringify(second.data)}`);
-  check('nothing new is inserted', 0, second.data.inserted);
-  check('everything re-read is a duplicate', true, second.data.duplicates > 0);
+  check('nothing new is inserted', 0, second.data.recordsImported);
+  check('everything re-read is a duplicate', true, second.data.duplicatesIgnored > 0);
   const punchCount = await prisma.attendanceRawPunch.count({ where: { deviceId } });
   check('the punch count did not grow', 4, punchCount);
 
   // Exactly the same transaction, offered again.
   sim.addPunches([punch('1007', `${D} 08:56:12`, 0)]);
   const third = await admin(`/attendance/devices/${deviceId}/sync`, { method: 'POST' });
-  check('an identical transaction is not imported twice', 0, third.data.inserted);
+  check('an identical transaction is not imported twice', 0, third.data.recordsImported);
   check('still four punches', 4, await prisma.attendanceRawPunch.count({ where: { deviceId } }));
 
   // ------------------------------------------------------------------------
@@ -360,7 +360,7 @@ async function main() {
   ]);
   const catchUp = await admin(`/attendance/devices/${deviceId}/sync`, { method: 'POST' });
   info(`catch-up: ${JSON.stringify(catchUp.data)}`);
-  check('an outage is caught up from the cursor, not just today', 4, catchUp.data.inserted);
+  check('an outage is caught up from the cursor, not just today', 4, catchUp.data.recordsImported);
   check('both missed days were scored', true,
     (await admin(`/attendance?employeeId=${kwame.id}&from=2026-08-20&to=2026-08-21&limit=10`)).data.length === 2);
 
@@ -405,7 +405,7 @@ async function main() {
     body: { deviceUserId: '7', employeeId: kwame.id, deviceUserName: 'Kwame Mensah' },
   });
   const backSync = await admin(`/attendance/devices/${backId}/sync`, { method: 'POST' });
-  check('the second device syncs independently', 2, backSync.data.inserted);
+  check('the second device syncs independently', 2, backSync.data.recordsImported);
   const crossDay = (await admin(`/attendance?employeeId=${kwame.id}&from=2026-08-24&to=2026-08-24&limit=1`)).data[0];
   check('a punch on another terminal still scores the day', 'PRESENT', crossDay.status);
   const bothDevices = (await admin(`/attendance/punches?employeeId=${kwame.id}&limit=100`)).data;
@@ -419,7 +419,7 @@ async function main() {
   sim2.addPunches([punch('7', '2026-08-25 09:00:00', 0)]);
   await admin(`/attendance/devices/${deviceId}/sync`, { method: 'POST' });
   const overlap = await admin(`/attendance/devices/${backId}/sync`, { method: 'POST' });
-  check('the same instant on a different device is a separate punch', 1, overlap.data.inserted);
+  check('the same instant on a different device is a separate punch', 1, overlap.data.recordsImported);
   check('and both are stored', 2,
     (await admin('/attendance/punches?limit=100')).data.filter((x) => x.rawTimestamp === '2026-08-25 09:00:00').length);
 
@@ -429,7 +429,7 @@ async function main() {
   const cursorNow = (await admin('/attendance/devices?limit=50')).data.find((d) => d.id === backId).syncCursorAt;
   sim2.addPunches([punch('7', '2026-08-25 08:30:00', 0)]);
   const lateArrival = await admin(`/attendance/devices/${backId}/sync`, { method: 'POST' });
-  check('a punch back-dated behind the cursor is still imported', 1, lateArrival.data.inserted);
+  check('a punch back-dated behind the cursor is still imported', 1, lateArrival.data.recordsImported);
   info(`cursor was ${cursorNow}; the sync re-read the preceding day`);
 
   // ------------------------------------------------------------------------
@@ -446,8 +446,8 @@ async function main() {
   const history = await admin(`/attendance/devices/${deviceId}/sync-history?limit=50`);
   check('history is recorded', true, history.data.length > 5);
   const successful = history.data.find((h) => h.status === 'SUCCESS');
-  check('a run records what it fetched', true, typeof successful.fetched === 'number');
-  check('and its cursor window', true, successful.cursorFrom !== null);
+  check('a run records what it fetched', true, typeof successful.recordsFetched === 'number');
+  check('and its cursor window', true, successful.cursorBefore !== null);
   const failedRun = (await admin(`/attendance/devices/${deadId}/sync-history?limit=10`)).data[0];
   check('a failed run is kept too', 'FAILED', failedRun.status);
 

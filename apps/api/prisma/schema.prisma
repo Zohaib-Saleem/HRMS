@@ -1359,7 +1359,14 @@ model AttendanceDeviceSync {
   cursorFrom DateTime?
   cursorTo   DateTime?
 
+  /// How many connection attempts this run took, including the successful one.
+  attempts Int @default(1)
+
   error String?
+  /// Per-record failures: what was wrong, and with which transaction. Bounded
+  /// so one broken batch cannot write an unbounded blob, and never carries a
+  /// credential.
+  errorDetails Json?
 
   company Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
   device  AttendanceDevice     @relation(fields: [deviceId], references: [id], onDelete: Cascade)

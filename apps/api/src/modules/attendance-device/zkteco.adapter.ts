@@ -52,20 +52,45 @@ const VERIFY_MODES: Record<number, string> = {
 
 const two = (n: number) => String(n).padStart(2, '0');
 
+/**
+ * One conversation with a terminal.
+ *
+ * The reliability rules this class exists to enforce:
+ *
+ *   - A socket failure at any point resolves the request that was waiting for
+ *     it. Node throws an uncaught exception for an `error` event with no
+ *     listener, so handlers stay attached for the whole life of the socket
+ *     rather than only during connect - a terminal rebooting mid-read would
+ *     otherwise take the API process down with it.
+ *   - Unreadable bytes fail immediately and say so, instead of leaving the
+ *     caller to discover it as a timeout ten seconds later.
+ *   - A bulk transfer that stops early is an error, not a short answer. A
+ *     truncated attendance log silently treated as complete is how a day of
+ *     punches goes missing.
+ */
 class ZkSession {
   private socket: Socket | null = null;
   private buffer = Buffer.alloc(0);
   private sessionId = 0;
   private replyId = 0;
-  private waiter: ((packet: ReturnType<typeof decodeFrame>) => void) | null = null;
+
+  /** Set once the socket is unusable; every later call fails with this. */
+  private dead: Error | null = null;
+  /** True once we are shutting down on purpose, so close is not an error. */
+  private closing = false;
+
+  private pending: {
+    resolve: (packet: { command: number; sessionId: number; data: Buffer }) => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+  } | null = null;
+
   /**
    * One socket, one conversation.
    *
    * The protocol is strictly request then response with no correlation id, so
-   * two commands in flight at once cannot be told apart - the second reply
-   * would be handed to whichever caller happened to be waiting. Every command
-   * queues behind the last, which is why callers may fan out freely without
-   * knowing this.
+   * two commands in flight at once cannot be told apart. Every command queues
+   * behind the last, which is why callers may fan out freely.
    */
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -74,9 +99,37 @@ class ZkSession {
   private serialize<T>(work: () => Promise<T>): Promise<T> {
     const run = this.queue.then(work, work);
     // Keep the chain alive after a rejection so one failed command does not
-    // wedge every command after it.
+    // wedge every command behind it.
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /** Fails whatever is waiting, and marks the session unusable. */
+  private failSession(error: Error): void {
+    this.dead ??= error;
+    const pending = this.pending;
+    this.pending = null;
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+  }
+
+  private describe(error: NodeJS.ErrnoException): DeviceUnreachableError {
+    const where = `${this.connection.host}:${this.connection.port}`;
+    const reason =
+      error.code === 'ECONNREFUSED'
+        ? 'the device refused the connection'
+        : error.code === 'ECONNRESET'
+          ? 'the device reset the connection'
+          : error.code === 'EHOSTUNREACH' || error.code === 'ENETUNREACH'
+            ? 'the device is not reachable on the network'
+            : error.code === 'ETIMEDOUT'
+              ? 'the device did not answer in time'
+              : error.code === 'EPIPE'
+                ? 'the connection closed while writing'
+                : (error.message ?? 'the connection failed');
+    return new DeviceUnreachableError(`Could not reach ${where} - ${reason}.`);
   }
 
   async open(): Promise<void> {
@@ -87,9 +140,7 @@ class ZkSession {
 
     if (reply.command === ZK_COMMANDS.ACK_UNAUTH) {
       if (!this.connection.commKey) {
-        throw new DeviceAuthError(
-          'The device requires a comm key and none is configured for it.',
-        );
+        throw new DeviceAuthError('The device requires a comm key and none is configured for it.');
       }
       const key = Number(this.connection.commKey);
       if (!Number.isFinite(key)) {
@@ -112,55 +163,83 @@ class ZkSession {
       this.socket = socket;
       socket.setTimeout(this.connection.timeoutMs);
 
-      const fail = (message: string) => {
-        socket.destroy();
-        reject(new DeviceUnreachableError(message));
+      let settled = false;
+      const settleConnect = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve();
       };
 
-      socket.once('error', (error: NodeJS.ErrnoException) => {
-        const reason =
-          error.code === 'ECONNREFUSED'
-            ? 'the device refused the connection'
-            : error.code === 'EHOSTUNREACH' || error.code === 'ENETUNREACH'
-              ? 'the device is not reachable on the network'
-              : error.code === 'ETIMEDOUT'
-                ? 'the device did not answer in time'
-                : error.message;
-        fail(`Could not reach ${this.connection.host}:${this.connection.port} - ${reason}.`);
+      // Attached for the life of the socket, not just for connect. An error
+      // with no listener is an uncaught exception, and a terminal that reboots
+      // mid-sync must not be able to stop the server.
+      socket.on('error', (error: NodeJS.ErrnoException) => {
+        const failure = this.describe(error);
+        this.failSession(failure);
+        socket.destroy();
+        settleConnect(failure);
       });
-      socket.once('timeout', () =>
-        fail(`${this.connection.host}:${this.connection.port} did not answer in time.`),
-      );
+
+      socket.on('timeout', () => {
+        const failure = new DeviceUnreachableError(
+          `${this.connection.host}:${this.connection.port} stopped responding.`,
+        );
+        this.failSession(failure);
+        socket.destroy();
+        settleConnect(failure);
+      });
+
+      socket.on('close', () => {
+        if (this.closing) return;
+        const failure = new DeviceUnreachableError(
+          'The device closed the connection unexpectedly.',
+        );
+        this.failSession(failure);
+        settleConnect(failure);
+      });
 
       socket.on('data', (chunk) => {
         this.buffer = Buffer.concat([this.buffer, chunk]);
         this.drain();
       });
 
-      socket.connect(this.connection.port, this.connection.host, () => {
-        socket.setTimeout(this.connection.timeoutMs);
-        resolve();
-      });
+      socket.connect(this.connection.port, this.connection.host, () => settleConnect());
     });
   }
 
+  /**
+   * Hands complete packets to whoever is waiting.
+   *
+   * Bytes that cannot be framed are fatal for the connection: a stream has no
+   * way to resynchronise, so continuing would mean guessing where the next
+   * packet starts.
+   */
   private drain(): void {
-    while (this.waiter) {
+    while (this.pending) {
       let frame: ReturnType<typeof decodeFrame>;
       try {
         frame = decodeFrame(this.buffer);
       } catch {
-        // Unparseable bytes are not recoverable on a stream; drop what we have
-        // rather than looping on the same rubbish forever.
         this.buffer = Buffer.alloc(0);
+        const failure = new DeviceUnreachableError(
+          'The device sent data this protocol could not read; the connection was dropped.',
+        );
+        this.failSession(failure);
+        this.socket?.destroy();
         return;
       }
       if (!frame) return;
 
       this.buffer = this.buffer.subarray(frame.consumed);
-      const waiter = this.waiter;
-      this.waiter = null;
-      waiter(frame);
+      const pending = this.pending;
+      this.pending = null;
+      clearTimeout(pending.timer);
+      pending.resolve({
+        command: frame.packet.command,
+        sessionId: frame.packet.sessionId,
+        data: frame.packet.data,
+      });
     }
   }
 
@@ -177,8 +256,10 @@ class ZkSession {
     data: Buffer,
     options?: { sessionId?: number },
   ): Promise<{ command: number; sessionId: number; data: Buffer }> {
+    if (this.dead) return Promise.reject(this.dead);
+
     const socket = this.socket;
-    if (!socket) throw new DeviceUnreachableError('The connection is not open.');
+    if (!socket) return Promise.reject(new DeviceUnreachableError('The connection is not open.'));
 
     this.replyId = (this.replyId + 1) & 0xffff;
     const packet = encodePacket({
@@ -190,47 +271,51 @@ class ZkSession {
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.waiter = null;
+        this.pending = null;
         reject(new DeviceUnreachableError('The device stopped responding mid-conversation.'));
       }, this.connection.timeoutMs);
 
-      this.waiter = (frame) => {
-        clearTimeout(timer);
-        if (!frame) {
-          reject(new DeviceUnreachableError('The device closed the connection.'));
-          return;
-        }
-        resolve({
-          command: frame.packet.command,
-          sessionId: frame.packet.sessionId,
-          data: frame.packet.data,
-        });
-      };
+      this.pending = { resolve, reject, timer };
 
       socket.write(packet, (error) => {
-        if (error) {
-          clearTimeout(timer);
-          this.waiter = null;
-          reject(new DeviceUnreachableError(`Could not write to the device: ${error.message}`));
-        }
+        if (error) this.failSession(new DeviceUnreachableError(`Could not write to the device: ${error.message}`));
       });
 
-      // Bytes may already be buffered from a previous read.
+      // Bytes may already be buffered from an earlier read.
       this.drain();
     });
+  }
+
+  /** Waits for a packet the device sends unprompted, mid-transfer. */
+  private awaitPacket(): Promise<{ command: number; data: Buffer }> {
+    if (this.dead) return Promise.reject(this.dead);
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending = null;
+        reject(new DeviceUnreachableError('The device stopped part-way through a transfer.'));
+      }, this.connection.timeoutMs);
+
+      this.pending = { resolve, reject, timer };
+      this.drain();
+    });
+  }
+
+  private readBulk(command: number): Promise<Buffer> {
+    return this.serialize(() => this.readBulkNow(command));
   }
 
   /**
    * Issues a command that may answer with a bulk transfer.
    *
-   * Small results come back inline as ACK_DATA. Larger ones are announced with
-   * PREPARE_DATA carrying the total size, then streamed as DATA packets until
-   * that many bytes have arrived.
+   * Small results arrive inline as ACK_DATA. Larger ones are announced with
+   * PREPARE_DATA carrying the total size, then streamed as DATA packets.
+   *
+   * A transfer that ends before that many bytes have arrived is reported
+   * rather than returned. Half an attendance log looks exactly like a complete
+   * one to everything downstream, and would be recorded as a successful sync
+   * of fewer records - quietly losing the rest.
    */
-  private readBulk(command: number): Promise<Buffer> {
-    return this.serialize(() => this.readBulkNow(command));
-  }
-
   private async readBulkNow(command: number): Promise<Buffer> {
     const first = await this.sendNow(command, Buffer.alloc(0));
 
@@ -239,9 +324,7 @@ class ZkSession {
     }
 
     if (first.command !== ZK_COMMANDS.PREPARE_DATA) {
-      throw new DeviceUnreachableError(
-        `The device refused to send data (code ${first.command}).`,
-      );
+      throw new DeviceUnreachableError(`The device refused to send data (code ${first.command}).`);
     }
 
     const expected = first.data.length >= 4 ? first.data.readUInt32LE(0) : 0;
@@ -251,32 +334,22 @@ class ZkSession {
     while (received < expected) {
       const next = await this.awaitPacket();
       if (next.command === ZK_COMMANDS.ACK_OK) break;
-      if (next.command !== ZK_COMMANDS.DATA) break;
+      if (next.command !== ZK_COMMANDS.DATA) {
+        throw new DeviceUnreachableError(
+          `The device interrupted the transfer with code ${next.command} after ${received} of ${expected} bytes.`,
+        );
+      }
       chunks.push(next.data);
       received += next.data.length;
     }
 
+    if (received < expected) {
+      throw new DeviceUnreachableError(
+        `The device sent ${received} of ${expected} bytes and stopped; the transfer is incomplete.`,
+      );
+    }
+
     return Buffer.concat(chunks);
-  }
-
-  /** Waits for a packet the device sends unprompted, mid-transfer. */
-  private awaitPacket(): Promise<{ command: number; data: Buffer }> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiter = null;
-        reject(new DeviceUnreachableError('The device stopped part-way through a transfer.'));
-      }, this.connection.timeoutMs);
-
-      this.waiter = (frame) => {
-        clearTimeout(timer);
-        if (!frame) {
-          reject(new DeviceUnreachableError('The device closed the connection mid-transfer.'));
-          return;
-        }
-        resolve({ command: frame.packet.command, data: frame.packet.data });
-      };
-      this.drain();
-    });
   }
 
   async readOption(name: string): Promise<string | null> {
@@ -296,12 +369,16 @@ class ZkSession {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
-    await this.send(enabled ? ZK_COMMANDS.ENABLE_DEVICE : ZK_COMMANDS.DISABLE_DEVICE, Buffer.alloc(0));
+    await this.send(
+      enabled ? ZK_COMMANDS.ENABLE_DEVICE : ZK_COMMANDS.DISABLE_DEVICE,
+      Buffer.alloc(0),
+    );
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     try {
-      if (this.socket && !this.socket.destroyed) {
+      if (this.socket && !this.socket.destroyed && !this.dead) {
         await this.send(ZK_COMMANDS.EXIT, Buffer.alloc(0)).catch(() => undefined);
       }
     } finally {
@@ -326,9 +403,11 @@ async function withSession<T>(
     quiesced = true;
     return await run(session);
   } finally {
-    // The terminal must never be left disabled because we failed.
+    // The terminal must never be left disabled because we failed. If the
+    // socket is already gone this is a no-op that must not mask the real
+    // error, hence the swallow.
     if (quiesced) await session.setEnabled(true).catch(() => undefined);
-    await session.close();
+    await session.close().catch(() => undefined);
   }
 }
 

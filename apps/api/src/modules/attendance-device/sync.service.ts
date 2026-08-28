@@ -1,25 +1,27 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { AttendanceDevice, AttendanceSyncTrigger } from '@prisma/client';
+import type { AttendanceDevice, AttendanceSyncTrigger, Prisma } from '@prisma/client';
 import { prisma } from '../../core/db.js';
+import { logger } from '../../core/logger.js';
 import { decryptSecret } from '../../core/secrets.js';
 import { dayKeyInZone } from '../../core/zoned-time.js';
 import { resolveAttendancePolicy } from '../time/attendance-policy.js';
 import { adapterFor } from './registry.js';
 import { recalculateDays } from './attendance-import.service.js';
-import type { DeviceConnection, DevicePunch } from './adapter.js';
+import { DeviceAuthError, type DeviceConnection, type DevicePunch } from './adapter.js';
 
 /**
  * Pulling transactions off a terminal and turning them into punches.
  *
- * Three things this has to survive, because all three happen in practice:
+ * Four things this has to survive, because all four happen in practice:
  *
  *   - the same sync running twice, from a schedule and a button at once;
  *   - the HRMS being down for days while the terminal keeps recording;
- *   - one malformed transaction in an otherwise good batch.
+ *   - one malformed transaction in an otherwise good batch;
+ *   - the terminal vanishing mid-conversation.
  *
  * The first is handled by a per-device lock, the second by a cursor rather than
- * a "today" window, and the third by importing punch by punch and counting the
- * failures instead of abandoning the batch.
+ * a "today" window, the third by importing record by record, and the fourth by
+ * never advancing the cursor past something that was not actually stored.
  */
 
 /** A lock older than this is assumed to belong to a crashed process. */
@@ -39,24 +41,53 @@ const FIRST_SYNC_LOOKBACK_DAYS = 30;
  * The cursor is a timestamp watermark, so a transaction that arrives late with
  * an older reading - a terminal whose clock was corrected backwards, or a
  * record written out of order - would otherwise fall behind it and never be
- * seen. Re-reading the last day costs nothing but a few deduplicated inserts,
- * because the protocol returns the whole log either way.
- *
- * Anything back-dated further than this needs a deliberate full resync, which
- * is a real limit rather than something this window quietly hides.
+ * seen. Re-reading the last day costs only deduplicated inserts, because the
+ * protocol returns the whole log either way.
  */
 const CURSOR_OVERLAP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Connection attempts per sync, and how long to wait between them.
+ *
+ * Bounded on purpose. A terminal that is switched off should produce one tidy
+ * failure and be retried on the next scheduled tick, not a process that keeps
+ * dialling. Backoff is short because the scheduler is the real retry loop.
+ */
+const MAX_ATTEMPTS = 3;
+const BACKOFF_MS = [500, 2000];
+
+/** Errors kept per run. Enough to diagnose, not enough to fill the column. */
+const MAX_ERROR_DETAILS = 20;
+
+/** Carries how many attempts were made, so a failed run can still report it. */
+export class DeviceReadError extends Error {
+  constructor(
+    message: string,
+    readonly attempts: number,
+    override readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'DeviceReadError';
+  }
+}
+
+/** A punch instant outside this range is a decode failure, not a real reading. */
+const PLAUSIBLE_FROM = Date.UTC(2000, 0, 1);
+const PLAUSIBLE_TO = Date.UTC(2100, 0, 1);
 
 export interface SyncOutcome {
   syncId: string;
   deviceId: string;
   status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
-  fetched: number;
-  inserted: number;
-  duplicates: number;
-  unmapped: number;
-  rejected: number;
+  recordsFetched: number;
+  recordsImported: number;
+  duplicatesIgnored: number;
+  unmappedRecords: number;
+  errors: number;
   recalculatedDays: number;
+  attempts: number;
+  cursorBefore: string | null;
+  cursorAfter: string | null;
   error: string | null;
 }
 
@@ -69,16 +100,26 @@ export class SyncInProgressError extends Error {
 }
 
 /**
+ * A record this system will never be able to read.
+ *
+ * Kept apart from an ordinary failure because the two need opposite handling:
+ * a storage failure should hold the cursor so the record is tried again, while
+ * a record that is simply corrupt would then block the cursor forever.
+ */
+class MalformedPunchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MalformedPunchError';
+  }
+}
+
+/**
  * The identity of a punch.
  *
  * Built from the device, the person, the exact instant and whatever the device
  * calls the transaction. A timestamp alone would collapse two people punching
  * in the same second; including the device means the same person on two
  * terminals is two events, which is what actually happened.
- *
- * Two punches identical in all of these are indistinguishable even in
- * principle - the terminal read the same finger twice in one second - and
- * collapsing them is the desired behaviour rather than a limitation.
  */
 export function punchFingerprint(input: {
   deviceUserId: string;
@@ -106,6 +147,20 @@ export function connectionFor(device: AttendanceDevice): DeviceConnection {
     commKey: decryptSecret(device.commKeyCipher),
     timeoutMs: 10_000,
   };
+}
+
+/** Rejects a transaction this system cannot store meaningfully. */
+function assertUsable(punch: DevicePunch): void {
+  if (!punch.deviceUserId || punch.deviceUserId.trim() === '') {
+    throw new MalformedPunchError('the transaction carries no device user ID');
+  }
+  const at = punch.punchedAt?.getTime();
+  if (at === undefined || Number.isNaN(at)) {
+    throw new MalformedPunchError(`the timestamp "${punch.rawTimestamp}" could not be read`);
+  }
+  if (at < PLAUSIBLE_FROM || at > PLAUSIBLE_TO) {
+    throw new MalformedPunchError(`the timestamp "${punch.rawTimestamp}" is outside any plausible range`);
+  }
 }
 
 /**
@@ -137,24 +192,106 @@ async function releaseLock(deviceId: string, token: string): Promise<void> {
   });
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Fetches the log, retrying a limited number of times.
+ *
+ * Only connection-level failures are retried. A device that rejects the comm
+ * key will reject it again in two seconds, so that fails immediately rather
+ * than hammering a terminal with bad credentials.
+ */
+async function fetchWithRetry(
+  device: AttendanceDevice,
+  since: Date,
+): Promise<{ punches: DevicePunch[]; attempts: number }> {
+  const adapter = adapterFor(device.protocol);
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      logger.info({ event: 'DEVICE_CONNECT', deviceId: device.id, attempt }, 'connecting to device');
+      const punches = await adapter.getAttendance(connectionFor(device), { since });
+      logger.info(
+        { event: 'DEVICE_DISCONNECT', deviceId: device.id, fetched: punches.length },
+        'device read complete',
+      );
+      return { punches, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+
+      if (error instanceof DeviceAuthError) throw error;
+      if (attempt === MAX_ATTEMPTS) break;
+
+      const wait = BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]!;
+      logger.warn(
+        {
+          event: 'SYNC_RETRY',
+          deviceId: device.id,
+          attempt,
+          waitMs: wait,
+          reason: error instanceof Error ? error.message : 'unknown',
+        },
+        'device read failed, retrying',
+      );
+      await sleep(wait);
+    }
+  }
+
+  throw new DeviceReadError(
+    lastError instanceof Error ? lastError.message : 'The device could not be read.',
+    MAX_ATTEMPTS,
+    lastError,
+  );
+}
+
+/**
+ * Where the watermark may safely move to.
+ *
+ * Extracted because it is the single most consequential decision in a sync and
+ * the one hardest to reach through a socket: moving it too far loses punches
+ * for good, while leaving it behind costs only a re-read that deduplicates.
+ *
+ *   - a failed read tells us nothing reliable, so the cursor does not move;
+ *   - a record expected to be retried holds the cursor behind itself;
+ *   - a record that can never be read does not, or it would block forever.
+ */
+export function computeNextCursor(input: {
+  failed: boolean;
+  cursorUnsafe: boolean;
+  latestStoredAt: Date | null;
+  earliestUnstoredAt: Date | null;
+}): Date | null {
+  if (input.failed || input.cursorUnsafe) return null;
+  if (!input.earliestUnstoredAt) return input.latestStoredAt;
+
+  const safe = new Date(input.earliestUnstoredAt.getTime() - 1000);
+  if (!input.latestStoredAt) return safe;
+  return input.latestStoredAt < safe ? input.latestStoredAt : safe;
+}
+
 /** Synchronises one device. Safe to call concurrently; the loser is told so. */
 export async function syncDevice(
   deviceId: string,
   trigger: AttendanceSyncTrigger = 'SCHEDULED',
 ): Promise<SyncOutcome> {
   const device = await prisma.attendanceDevice.findUniqueOrThrow({ where: { id: deviceId } });
+  const cursorBefore = device.syncCursorAt;
 
   if (!device.isEnabled) {
     return {
       syncId: '',
       deviceId,
       status: 'SKIPPED',
-      fetched: 0,
-      inserted: 0,
-      duplicates: 0,
-      unmapped: 0,
-      rejected: 0,
+      recordsFetched: 0,
+      recordsImported: 0,
+      duplicatesIgnored: 0,
+      unmappedRecords: 0,
+      errors: 0,
       recalculatedDays: 0,
+      attempts: 0,
+      cursorBefore: cursorBefore?.toISOString() ?? null,
+      cursorAfter: cursorBefore?.toISOString() ?? null,
       error: 'The device is disabled.',
     };
   }
@@ -162,10 +299,10 @@ export async function syncDevice(
   const token = await acquireLock(deviceId);
   if (!token) throw new SyncInProgressError();
 
-  // The window: from the cursor, or a bounded look-back on a first run. This
-  // is what makes an outage a normal catch-up rather than lost days.
-  const since = device.syncCursorAt
-    ? new Date(device.syncCursorAt.getTime() - CURSOR_OVERLAP_MS)
+  // From the cursor less the overlap, or a bounded look-back on a first run.
+  // This is what makes an outage an ordinary catch-up rather than lost days.
+  const since = cursorBefore
+    ? new Date(cursorBefore.getTime() - CURSOR_OVERLAP_MS)
     : new Date(Date.now() - FIRST_SYNC_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
 
   const sync = await prisma.attendanceDeviceSync.create({
@@ -178,19 +315,36 @@ export async function syncDevice(
     },
   });
 
-  let fetched = 0;
-  let inserted = 0;
-  let duplicates = 0;
-  let unmapped = 0;
-  let rejected = 0;
+  logger.info(
+    { event: 'SYNC_STARTED', deviceId, syncId: sync.id, trigger, since: since.toISOString() },
+    'device sync started',
+  );
+
+  let recordsFetched = 0;
+  let recordsImported = 0;
+  let duplicatesIgnored = 0;
+  let unmappedRecords = 0;
+  let errors = 0;
   let recalculatedDays = 0;
+  let attempts = 0;
   let failure: string | null = null;
-  let latestPunchAt: Date | null = null;
+
+  // Cursor inputs, kept apart on purpose.
+  let latestStoredAt: Date | null = null;
+  let earliestUnstoredAt: Date | null = null;
+  /** Set when a failure has no usable timestamp, so no safe cursor exists. */
+  let cursorUnsafe = false;
+
+  const errorDetails: Array<Record<string, unknown>> = [];
+  const noteError = (detail: Record<string, unknown>) => {
+    errors += 1;
+    if (errorDetails.length < MAX_ERROR_DETAILS) errorDetails.push(detail);
+  };
 
   try {
-    const adapter = adapterFor(device.protocol);
-    const punches = await adapter.getAttendance(connectionFor(device), { since });
-    fetched = punches.length;
+    const fetched = await fetchWithRetry(device, since);
+    attempts = fetched.attempts;
+    recordsFetched = fetched.punches.length;
 
     const [mappings, policy] = await Promise.all([
       prisma.attendanceDeviceUserMapping.findMany({
@@ -203,8 +357,10 @@ export async function syncDevice(
 
     const touched = new Map<string, { employeeId: string; dayKey: string }>();
 
-    for (const punch of punches) {
+    for (const punch of fetched.punches) {
       try {
+        assertUsable(punch);
+
         const outcome = await importPunch({
           device,
           syncId: sync.id,
@@ -213,11 +369,30 @@ export async function syncDevice(
           employeeId: employeeByDeviceUser.get(punch.deviceUserId) ?? null,
         });
 
-        if (outcome.duplicate) duplicates += 1;
-        else inserted += 1;
-        if (!outcome.employeeId) unmapped += 1;
+        if (outcome.duplicate) {
+          duplicatesIgnored += 1;
+          logger.debug(
+            { event: 'DUPLICATE_IGNORED', deviceId, deviceUserId: punch.deviceUserId },
+            'duplicate punch ignored',
+          );
+        } else {
+          recordsImported += 1;
+          logger.debug(
+            { event: 'RECORD_IMPORTED', deviceId, deviceUserId: punch.deviceUserId },
+            'punch imported',
+          );
+        }
 
-        if (!latestPunchAt || punch.punchedAt > latestPunchAt) latestPunchAt = punch.punchedAt;
+        if (!outcome.employeeId) {
+          unmappedRecords += 1;
+          logger.info(
+            { event: 'UNMAPPED_USER', deviceId, deviceUserId: punch.deviceUserId },
+            'punch has no employee mapping',
+          );
+        }
+
+        // Only a stored record may move the cursor.
+        if (!latestStoredAt || punch.punchedAt > latestStoredAt) latestStoredAt = punch.punchedAt;
 
         if (outcome.employeeId && !outcome.duplicate) {
           touched.set(`${outcome.employeeId}:${outcome.dayKey}`, {
@@ -225,9 +400,32 @@ export async function syncDevice(
             dayKey: outcome.dayKey,
           });
         }
-      } catch {
-        // One unreadable transaction must not cost us the rest of the batch.
-        rejected += 1;
+      } catch (error) {
+        const permanent = error instanceof MalformedPunchError;
+        const reason = error instanceof Error ? error.message : 'unknown failure';
+
+        noteError({
+          deviceUserId: punch.deviceUserId || null,
+          rawTimestamp: punch.rawTimestamp || null,
+          reason,
+          permanent,
+        });
+
+        logger.warn(
+          { event: 'RECORD_ERROR', deviceId, deviceUserId: punch.deviceUserId, permanent, reason },
+          'punch could not be imported',
+        );
+
+        // A record that can never be read must not hold the watermark hostage;
+        // one that merely failed to store must be tried again, so the cursor
+        // stays behind it.
+        if (!permanent) {
+          const at = punch.punchedAt?.getTime();
+          if (at === undefined || Number.isNaN(at)) cursorUnsafe = true;
+          else if (!earliestUnstoredAt || punch.punchedAt < earliestUnstoredAt) {
+            earliestUnstoredAt = punch.punchedAt;
+          }
+        }
       }
     }
 
@@ -237,11 +435,25 @@ export async function syncDevice(
       days: [...touched.values()],
     });
     recalculatedDays = recalc.recalculated;
+    if (recalc.failed > 0) {
+      noteError({ reason: `${recalc.failed} day(s) could not be recalculated`, permanent: false });
+    }
   } catch (error) {
     failure = error instanceof Error ? error.message : 'The synchronisation failed.';
+    if (error instanceof DeviceReadError) attempts = error.attempts;
+    // A read that failed part-way tells us nothing reliable about what the
+    // device holds, so the cursor stays exactly where it was.
+    cursorUnsafe = true;
   }
 
-  const status = failure ? 'FAILED' : rejected > 0 ? 'PARTIAL' : 'SUCCESS';
+  const nextCursor = computeNextCursor({
+    failed: failure !== null,
+    cursorUnsafe,
+    latestStoredAt,
+    earliestUnstoredAt,
+  });
+
+  const status = failure ? 'FAILED' : errors > 0 ? 'PARTIAL' : 'SUCCESS';
   const finishedAt = new Date();
 
   await prisma.attendanceDeviceSync.update({
@@ -249,13 +461,15 @@ export async function syncDevice(
     data: {
       finishedAt,
       status,
-      fetched,
-      inserted,
-      duplicates,
-      unmapped,
-      rejected,
-      cursorTo: latestPunchAt,
+      attempts,
+      fetched: recordsFetched,
+      inserted: recordsImported,
+      duplicates: duplicatesIgnored,
+      unmapped: unmappedRecords,
+      rejected: errors,
+      cursorTo: nextCursor,
       error: failure,
+      errorDetails: errorDetails.length > 0 ? (errorDetails as Prisma.InputJsonValue) : undefined,
     },
   });
 
@@ -269,30 +483,52 @@ export async function syncDevice(
         : {
             lastSeenAt: finishedAt,
             lastSyncAt: finishedAt,
-            // Advanced only on success, and only to the newest punch actually
-            // seen. Moving it to "now" would skip anything the device had not
-            // finished writing.
-            ...(latestPunchAt
-              ? { syncCursorAt: latestPunchAt, lastPunchAt: latestPunchAt }
-              : {}),
+            ...(nextCursor ? { syncCursorAt: nextCursor } : {}),
+            ...(latestStoredAt ? { lastPunchAt: latestStoredAt } : {}),
           }),
     },
   });
 
   await releaseLock(deviceId, token);
 
-  return {
+  const outcome: SyncOutcome = {
     syncId: sync.id,
     deviceId,
     status,
-    fetched,
-    inserted,
-    duplicates,
-    unmapped,
-    rejected,
+    recordsFetched,
+    recordsImported,
+    duplicatesIgnored,
+    unmappedRecords,
+    errors,
     recalculatedDays,
+    attempts,
+    cursorBefore: cursorBefore?.toISOString() ?? null,
+    cursorAfter: (nextCursor ?? cursorBefore)?.toISOString() ?? null,
     error: failure,
   };
+
+  if (failure) {
+    logger.warn({ event: 'SYNC_FAILED', deviceId, syncId: sync.id, attempts, reason: failure }, 'device sync failed');
+  } else {
+    logger.info(
+      {
+        event: 'SYNC_COMPLETED',
+        deviceId,
+        syncId: sync.id,
+        status,
+        recordsFetched,
+        recordsImported,
+        duplicatesIgnored,
+        unmappedRecords,
+        errors,
+        recalculatedDays,
+        cursorAfter: outcome.cursorAfter,
+      },
+      'device sync completed',
+    );
+  }
+
+  return outcome;
 }
 
 /**
@@ -358,9 +594,15 @@ export async function syncDueDevices(): Promise<SyncOutcome[]> {
 
     try {
       outcomes.push(await syncDevice(device.id, 'SCHEDULED'));
-    } catch {
-      // Already running, or unreachable. Either way the next tick retries and
-      // the scheduler must not stop because one terminal is down.
+    } catch (error) {
+      // Already running, or unreachable beyond its retries. Either way the next
+      // tick tries again; one terminal being down must not stop the loop.
+      if (!(error instanceof SyncInProgressError)) {
+        logger.warn(
+          { event: 'SYNC_FAILED', deviceId: device.id, reason: error instanceof Error ? error.message : 'unknown' },
+          'scheduled device sync failed',
+        );
+      }
     }
   }
 
