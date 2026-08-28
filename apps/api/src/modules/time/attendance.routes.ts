@@ -33,6 +33,7 @@ import {
   resolveDefaultApprovers,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
+import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import {
   assertCheckInIpAllowed,
   assertCheckInLocationAllowed,
@@ -95,6 +96,12 @@ function assertUsableRange(from: Date, to: Date): void {
 }
 
 export const attendanceRoutes: FastifyPluginAsync = async (app) => {
+  /** Today in the company zone. UTC midnight is not midnight in Karachi. */
+  const localToday = async (companyId: string): Promise<Date> => {
+    const { timeZone } = await resolveAttendancePolicy(companyId);
+    return dayKeyToDateColumn(todayInZone(timeZone));
+  };
+
   app.addHook('preHandler', requirePermission(PERMISSIONS.ATTENDANCE_READ));
 
   app.get('/', async (request, reply) => {
@@ -192,7 +199,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         resolvePolicyFor(auth.companyId, input.employeeId, date),
         shiftOnDate(input.employeeId, date),
       ]);
-      const computed = computeAttendance({ checkInAt, checkOutAt, shift, policy });
+      const computed = computeAttendance({ day: date, checkInAt, checkOutAt, shift, policy });
 
       const before = await prisma.attendanceRecord.findUnique({
         where: { employeeId_date: { employeeId: input.employeeId, date } },
@@ -246,7 +253,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const self = await callerEmployeeOrThrow(auth);
 
-    const today = toDateOnly(new Date().toISOString());
+    const today = await localToday(auth.companyId);
     const [[day], shift, policy] = await Promise.all([
       deriveRange(auth.companyId, self.id, today, today),
       shiftOnDate(self.id, today),
@@ -293,7 +300,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const input = parseOrThrow(checkInSchema, request.body ?? {});
     const self = await callerEmployeeOrThrow(auth);
 
-    const today = toDateOnly(new Date().toISOString());
+    const today = await localToday(auth.companyId);
     const [[day], policy] = await Promise.all([
       deriveRange(auth.companyId, self.id, today, today),
       resolvePolicyFor(auth.companyId, self.id, today),
@@ -327,7 +334,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
 
     const now = new Date();
     const shift = await shiftOnDate(self.id, today);
-    const computed = computeAttendance({ checkInAt: now, checkOutAt: null, shift, policy });
+    const computed = computeAttendance({ day: today, checkInAt: now, checkOutAt: null, shift, policy });
 
     const values = {
       status: 'PRESENT' as const,
@@ -372,7 +379,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const input = parseOrThrow(checkOutSchema, request.body ?? {});
     const self = await callerEmployeeOrThrow(auth);
 
-    const today = toDateOnly(new Date().toISOString());
+    const today = await localToday(auth.companyId);
     const existing = await prisma.attendanceRecord.findUnique({
       where: { employeeId_date: { employeeId: self.id, date: today } },
     });
@@ -393,6 +400,9 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       : await shiftOnDate(self.id, today);
 
     const computed = computeAttendance({
+      // The record's own day, not today's: an overnight shift checks out after
+      // local midnight and still belongs to the day it started.
+      day: existing.date,
       checkInAt: existing.checkInAt,
       checkOutAt: now,
       shift,

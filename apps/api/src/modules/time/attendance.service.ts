@@ -323,7 +323,7 @@ export async function applyRegularization(regularizationId: string): Promise<voi
   const checkInAt = req.requestedCheckInAt ?? existing?.checkInAt ?? null;
   const checkOutAt = req.requestedCheckOutAt ?? existing?.checkOutAt ?? null;
 
-  const computed = computeAttendance({ checkInAt, checkOutAt, shift, policy });
+  const computed = computeAttendance({ day: date, checkInAt, checkOutAt, shift, policy });
   const status = req.requestedStatus ?? computed.status;
   const note = `Corrected by approved request: ${req.reason}`;
 

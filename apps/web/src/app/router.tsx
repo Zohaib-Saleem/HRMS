@@ -82,6 +82,8 @@ const TeamAttendanceDetailPage = lazyPage(
   'TeamAttendanceDetailPage',
 );
 const ShiftsPage = lazyPage(() => import('@/features/time/shifts-page'), 'ShiftsPage');
+const DevicesPage = lazyPage(() => import('@/features/devices/devices-page'), 'DevicesPage');
+const PunchesPage = lazyPage(() => import('@/features/devices/punches-page'), 'PunchesPage');
 const TimesheetsPage = lazyPage(() => import('@/features/time/timesheets-page'), 'TimesheetsPage');
 const MyLeavePage = lazyPage(() => import('@/features/leave/my-leave-page'), 'MyLeavePage');
 const LeaveRequestsPage = lazyPage(
@@ -228,6 +230,11 @@ export function AppRoutes() {
           <Route path="attendance/team" element={<TeamAttendancePage />} />
           {/* Scope is enforced server-side, so a guessed id reveals nothing. */}
           <Route path="attendance/team/:employeeId" element={<TeamAttendanceDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.DEVICE_READ} />}>
+          <Route path="attendance/devices" element={<DevicesPage />} />
+          <Route path="attendance/punches" element={<PunchesPage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.SHIFT_READ} />}>

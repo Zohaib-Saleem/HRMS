@@ -51,6 +51,10 @@ export const PERMISSIONS = {
   SHIFT_MANAGE: 'shift.manage',
   TIMESHEET_READ: 'timesheet.read',
   TIMESHEET_MANAGE: 'timesheet.manage',
+  /// See attendance terminals, their sync history and the raw punches they send.
+  DEVICE_READ: 'device.read',
+  /// Configure terminals, map device users and trigger a synchronisation.
+  DEVICE_MANAGE: 'device.manage',
 
   // --- Leave & holidays ---
   /// See leave requests and balances within your data scope.
@@ -141,6 +145,8 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.SHIFT_MANAGE, label: 'Manage shifts', description: 'Create shifts and assign employees.' },
       { value: PERMISSIONS.TIMESHEET_READ, label: 'View timesheets', description: 'See timesheets.' },
       { value: PERMISSIONS.TIMESHEET_MANAGE, label: 'Manage timesheets', description: 'Create and submit timesheets.' },
+      { value: PERMISSIONS.DEVICE_READ, label: 'View attendance devices', description: 'See terminals, sync history and raw punches.' },
+      { value: PERMISSIONS.DEVICE_MANAGE, label: 'Manage attendance devices', description: 'Configure terminals, map device users and run a sync.' },
     ],
   },
   {
@@ -236,6 +242,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.SHIFT_MANAGE,
     PERMISSIONS.TIMESHEET_READ,
     PERMISSIONS.TIMESHEET_MANAGE,
+    PERMISSIONS.DEVICE_READ,
+    PERMISSIONS.DEVICE_MANAGE,
     PERMISSIONS.LEAVE_READ,
     PERMISSIONS.LEAVE_REQUEST,
     PERMISSIONS.LEAVE_MANAGE,

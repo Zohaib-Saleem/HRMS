@@ -162,6 +162,12 @@ model Company {
   attendancePolicies           AttendancePolicy[]
   attendancePolicyAssignments  AttendancePolicyAssignment[]
 
+  // --- phase 7 ---
+  attendanceDevices        AttendanceDevice[]
+  attendanceDeviceMappings AttendanceDeviceUserMapping[]
+  attendanceDeviceSyncs    AttendanceDeviceSync[]
+  attendanceRawPunches     AttendanceRawPunch[]
+
   // --- phase 4 ---
   leaveTypes    LeaveType[]
   leaveBalances LeaveBalance[]
@@ -255,6 +261,7 @@ model Location {
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employees Employee[]
   holidays  Holiday[]
+  devices   AttendanceDevice[]
 
   @@unique([companyId, name])
   @@index([companyId, isActive])
@@ -360,6 +367,8 @@ model Employee {
   team             Team?        @relation("EmployeeTeam", fields: [teamId], references: [id], onDelete: SetNull)
   designation      Designation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
   location         Location?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  deviceMappings   AttendanceDeviceUserMapping[]
+  rawPunches       AttendanceRawPunch[]
   manager          Employee?    @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
   reports          Employee[]   @relation("EmployeeManager")
   secondaryManager Employee?    @relation("EmployeeSecondaryManager", fields: [secondaryManagerId], references: [id], onDelete: SetNull)
@@ -616,6 +625,8 @@ enum AttendanceSource {
   SELF
   SYSTEM
   ADMIN
+  /// Derived from punches captured by a physical attendance terminal.
+  DEVICE
 }
 
 /// Where the person worked from. Recorded at check-in.
@@ -1189,4 +1200,227 @@ model AttendancePolicyAssignment {
 enum TimesheetEntrySource {
   MANUAL
   CAPTURED
+}
+
+// ------------------------------------------------- attendance devices (P7)
+
+/// How the HRMS talks to a physical attendance terminal.
+enum AttendanceDeviceProtocol {
+  /// ZKTeco standalone "SDK" protocol. The HRMS opens a socket to the device
+  /// and pulls transaction records. Default port 4370.
+  ZKTECO_TCP
+  /// ZKTeco ADMS / iclock push. The device posts records to the HRMS on a
+  /// schedule it manages itself; nothing is pulled.
+  ZKTECO_ADMS
+}
+
+enum AttendanceDeviceStatus {
+  /// Configured but never contacted.
+  UNKNOWN
+  ONLINE
+  OFFLINE
+  ERROR
+}
+
+/// How raw punches become an in and an out.
+///
+/// Many terminals report a punch state, but plenty are configured so every
+/// punch is state 0. Guessing wrongly turns a genuine second entry into a
+/// check-out, so which rule applies is per-device configuration.
+enum AttendancePunchPairing {
+  /// Earliest punch of the day is the in, latest is the out.
+  FIRST_IN_LAST_OUT
+  /// Trust the state the device reports, and ignore punches carrying none.
+  DEVICE_STATE
+}
+
+enum AttendanceSyncStatus {
+  RUNNING
+  SUCCESS
+  /// Finished, but at least one transaction could not be imported.
+  PARTIAL
+  FAILED
+}
+
+enum AttendanceSyncTrigger {
+  SCHEDULED
+  MANUAL
+  STARTUP
+}
+
+/// A physical attendance terminal.
+model AttendanceDevice {
+  id         String  @id @default(cuid())
+  companyId  String
+  locationId String?
+
+  name         String
+  protocol     AttendanceDeviceProtocol @default(ZKTECO_TCP)
+  host         String
+  port         Int                      @default(4370)
+  serialNumber String?
+
+  /// The zone the device clock is set to. Punches arrive as local wall-clock
+  /// readings with no offset, so without this they cannot be placed on the
+  /// timeline at all.
+  timeZone String @default("UTC")
+
+  /// Comm key, encrypted at rest. Never returned by any endpoint - the API
+  /// exposes only whether one is set.
+  commKeyCipher String?
+
+  isEnabled           Boolean                @default(true)
+  syncIntervalMinutes Int                    @default(15)
+  punchPairing        AttendancePunchPairing @default(FIRST_IN_LAST_OUT)
+
+  status      AttendanceDeviceStatus @default(UNKNOWN)
+  lastSeenAt  DateTime?
+  lastSyncAt  DateTime?
+  lastPunchAt DateTime?
+  /// Most recent failure, kept so the screen can explain a red status without
+  /// an administrator having to read server logs.
+  lastError   String?
+
+  /// Watermark. Only transactions at or after this instant are requested, which
+  /// makes catch-up after an outage an ordinary sync rather than a special case.
+  syncCursorAt DateTime?
+
+  /// Held for the duration of a sync so two never overlap on one device.
+  syncLockedAt  DateTime?
+  syncLockToken String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  mappings AttendanceDeviceUserMapping[]
+  syncs    AttendanceDeviceSync[]
+  punches  AttendanceRawPunch[]
+
+  @@unique([companyId, name])
+  @@unique([companyId, serialNumber])
+  @@index([companyId, isEnabled])
+  @@map("attendance_devices")
+}
+
+/// Device user id to HRMS employee.
+///
+/// Deliberately its own table. The number on the terminal is whatever whoever
+/// enrolled the finger typed; assuming it equals an employee number, let alone a
+/// database id, is how biometric imports end up attributed to the wrong person.
+model AttendanceDeviceUserMapping {
+  id        String @id @default(cuid())
+  companyId String
+  deviceId  String
+
+  /// The identifier the device sends, as a string. Terminals pad and reuse
+  /// these, so it is never treated as a number here.
+  deviceUserId String
+  /// The name held on the device, for recognising a mapping at a glance.
+  deviceUserName String?
+
+  employeeId String
+  isActive   Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  device   AttendanceDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  employee Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// One device user resolves to exactly one employee on a given device.
+  @@unique([deviceId, deviceUserId])
+  @@index([companyId, employeeId])
+  @@map("attendance_device_user_mappings")
+}
+
+/// One synchronisation run, kept whether it succeeded or not.
+model AttendanceDeviceSync {
+  id        String @id @default(cuid())
+  companyId String
+  deviceId  String
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  status  AttendanceSyncStatus  @default(RUNNING)
+  trigger AttendanceSyncTrigger @default(SCHEDULED)
+
+  fetched    Int @default(0)
+  inserted   Int @default(0)
+  duplicates Int @default(0)
+  unmapped   Int @default(0)
+  rejected   Int @default(0)
+
+  /// The window actually requested, so a gap in coverage is visible.
+  cursorFrom DateTime?
+  cursorTo   DateTime?
+
+  error String?
+
+  company Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  device  AttendanceDevice     @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  punches AttendanceRawPunch[]
+
+  @@index([deviceId, startedAt])
+  @@index([companyId, status])
+  @@map("attendance_device_syncs")
+}
+
+/// A transaction exactly as the device reported it.
+///
+/// This is the audit trail and it is never rewritten. Attendance calculations
+/// read punches and write AttendanceRecord; nothing writes back here, so a
+/// recalculation can always be redone from the original evidence.
+model AttendanceRawPunch {
+  id        String  @id @default(cuid())
+  companyId String
+  deviceId  String
+  syncId    String?
+
+  deviceUserId String
+  /// Resolved at import. Null means unmapped - the punch is kept and surfaced
+  /// rather than dropped, and can be attributed later.
+  employeeId String?
+
+  /// The device transaction identifier, where it provides one.
+  deviceTransactionId String?
+  /// The raw reading, untouched, for when a normalisation is ever questioned.
+  rawTimestamp String
+  /// The zone used to normalise it, captured at import in case the device is
+  /// later reconfigured.
+  deviceTimeZone String
+  /// The normalised instant. This is what calculations use.
+  punchedAt DateTime
+  /// The local day the punch belongs to, in the company zone.
+  localDayKey String
+
+  /// Whatever the device said about direction, preserved verbatim.
+  punchState String?
+  /// Fingerprint, card, face, password - as reported.
+  verifyMode String?
+
+  /// Deterministic identity. Built from device, user, instant and whatever
+  /// transaction identifier exists, so re-importing the same transaction is a
+  /// no-op at the database level rather than a matter of application care.
+  fingerprint String
+
+  importedAt DateTime @default(now())
+  /// Set once the punch has been folded into an AttendanceRecord.
+  processedAt DateTime?
+
+  company  Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  device   AttendanceDevice      @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  employee Employee?             @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  sync     AttendanceDeviceSync? @relation(fields: [syncId], references: [id], onDelete: SetNull)
+
+  @@unique([deviceId, fingerprint])
+  @@index([companyId, employeeId, localDayKey])
+  @@index([companyId, deviceUserId])
+  @@index([deviceId, punchedAt])
+  @@index([companyId, employeeId, processedAt])
+  @@map("attendance_raw_punches")
 }

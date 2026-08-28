@@ -1,5 +1,6 @@
 import type { AttendancePolicyScope, WeekDay } from '@prisma/client';
 import { prisma } from '../../core/db.js';
+import { clockBoundary, dateColumnToDayKey, type DayKey } from '../../core/zoned-time.js';
 
 /**
  * The company attendance policy, and the arithmetic that depends on it.
@@ -15,6 +16,12 @@ import { prisma } from '../../core/db.js';
  */
 
 export interface AttendancePolicy {
+  /**
+   * The zone the company works to. Attendance is reasoned about in local wall
+   * clock time and stored in UTC; without this a "09:00" shift would mean
+   * 09:00 UTC, which is only correct for a company sitting on the meridian.
+   */
+  timeZone: string;
   weekendDays: WeekDay[];
   graceMinutes: number;
   halfDayMinutes: number;
@@ -30,6 +37,7 @@ export interface AttendancePolicy {
 }
 
 const POLICY_SELECT = {
+  timezone: true,
   weekendDays: true,
   graceMinutes: true,
   halfDayMinutes: true,
@@ -52,7 +60,11 @@ const POLICY_SELECT = {
  * describe the company, not a person, so they are never overridden per team.
  */
 export async function resolveAttendancePolicy(companyId: string): Promise<AttendancePolicy> {
-  return prisma.company.findUniqueOrThrow({ where: { id: companyId }, select: POLICY_SELECT });
+  const { timezone, ...rest } = await prisma.company.findUniqueOrThrow({
+    where: { id: companyId },
+    select: POLICY_SELECT,
+  });
+  return { ...rest, timeZone: timezone };
 }
 
 /** The thresholds an override can replace. Everything else stays company-wide. */
@@ -198,13 +210,16 @@ function minutesOfDay(hhmm: string | null | undefined): number | null {
   return h * 60 + m;
 }
 
-/** The instant a shift boundary falls on the calendar day of `onDate` (UTC). */
-function boundaryOn(onDate: Date, hhmm: string): Date | null {
-  const mins = minutesOfDay(hhmm);
-  if (mins === null) return null;
-  return new Date(
-    Date.UTC(onDate.getUTCFullYear(), onDate.getUTCMonth(), onDate.getUTCDate()) + mins * 60_000,
-  );
+/**
+ * The instant a shift boundary falls on a given attendance day.
+ *
+ * Anchored on the attendance day and the company zone, not on the UTC calendar
+ * day of the timestamp. Those are the same thing only for a company on UTC; for
+ * one in Asia/Karachi a 20:00 local punch is already tomorrow in UTC, and
+ * measuring it against tomorrow's shift start would be an entire day out.
+ */
+function boundaryOn(dayKey: DayKey, hhmm: string, timeZone: string): Date | null {
+  return clockBoundary(dayKey, hhmm, timeZone);
 }
 
 /**
@@ -221,10 +236,11 @@ function boundaryOn(onDate: Date, hhmm: string): Date | null {
 export function lateMinutesFor(
   checkInAt: Date,
   shift: ShiftWindow | null,
-  policy: Pick<AttendancePolicy, 'graceMinutes'>,
+  policy: Pick<AttendancePolicy, 'graceMinutes' | 'timeZone'>,
+  dayKey: DayKey,
 ): number | null {
   if (!shift) return null;
-  const expected = boundaryOn(checkInAt, shift.startTime);
+  const expected = boundaryOn(dayKey, shift.startTime, policy.timeZone);
   if (!expected) return null;
 
   const raw = Math.round((checkInAt.getTime() - expected.getTime()) / 60_000);
@@ -242,7 +258,8 @@ export function lateMinutesFor(
 export function earlyLeaveMinutesFor(
   checkOutAt: Date,
   shift: ShiftWindow | null,
-  policy: Pick<AttendancePolicy, 'earlyLeaveGraceMinutes'>,
+  policy: Pick<AttendancePolicy, 'earlyLeaveGraceMinutes' | 'timeZone'>,
+  dayKey: DayKey,
 ): number | null {
   if (!shift) return null;
 
@@ -250,7 +267,7 @@ export function earlyLeaveMinutesFor(
   const end = minutesOfDay(shift.endTime);
   if (start === null || end === null || end <= start) return null;
 
-  const expected = boundaryOn(checkOutAt, shift.endTime);
+  const expected = boundaryOn(dayKey, shift.endTime, policy.timeZone);
   if (!expected) return null;
 
   const raw = Math.round((expected.getTime() - checkOutAt.getTime()) / 60_000);
@@ -304,20 +321,30 @@ export interface AttendanceComputation {
  * scored ABSENT for being too short still shows what actually happened.
  */
 export function computeAttendance(input: {
+  /**
+   * The attendance day this record belongs to, in the company zone. Passed in
+   * rather than derived from the timestamps, because for an overnight shift the
+   * check-out falls on the following calendar day and both still belong to the
+   * day the shift started.
+   */
+  day: DayKey | Date;
   checkInAt: Date | null;
   checkOutAt: Date | null;
   shift: ShiftWindow | null;
   policy: AttendancePolicy;
 }): AttendanceComputation {
   const { checkInAt, checkOutAt, shift, policy } = input;
+  const dayKey = typeof input.day === 'string' ? input.day : dateColumnToDayKey(input.day);
 
   const workedMinutes =
     checkInAt && checkOutAt
       ? Math.max(0, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / 60_000))
       : null;
 
-  const lateMinutes = checkInAt ? lateMinutesFor(checkInAt, shift, policy) : null;
-  const earlyLeaveMinutes = checkOutAt ? earlyLeaveMinutesFor(checkOutAt, shift, policy) : null;
+  const lateMinutes = checkInAt ? lateMinutesFor(checkInAt, shift, policy, dayKey) : null;
+  const earlyLeaveMinutes = checkOutAt
+    ? earlyLeaveMinutesFor(checkOutAt, shift, policy, dayKey)
+    : null;
   const overtimeMinutes = overtimeMinutesFor(workedMinutes, policy);
 
   let status: AttendanceComputation['status'];

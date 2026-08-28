@@ -11,6 +11,10 @@ import { locationRoutes } from './organisation/locations.routes.js';
 import { employeeRoutes } from './employees/employees.routes.js';
 import { approvalRoutes } from './approvals/approvals.routes.js';
 import { notificationRoutes } from './notifications/notifications.routes.js';
+import {
+  attendanceDeviceRoutes,
+  attendancePunchRoutes,
+} from './attendance-device/devices.routes.js';
 import { attendancePolicyRoutes } from './time/attendance-policies.routes.js';
 import { attendanceRoutes } from './time/attendance.routes.js';
 import { shiftRoutes } from './time/shifts.routes.js';
@@ -50,6 +54,8 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/notifications', plugin: notificationRoutes },
   { prefix: '/attendance', plugin: attendanceRoutes },
   { prefix: '/attendance-policies', plugin: attendancePolicyRoutes },
+  { prefix: '/attendance/devices', plugin: attendanceDeviceRoutes },
+  { prefix: '/attendance/punches', plugin: attendancePunchRoutes },
   { prefix: '/shifts', plugin: shiftRoutes },
   { prefix: '/timesheets', plugin: timesheetRoutes },
 

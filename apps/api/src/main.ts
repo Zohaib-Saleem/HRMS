@@ -4,6 +4,7 @@ import { assertDatabaseConnection, prisma } from './core/db.js';
 import { pruneExpiredSessions } from './auth/session.js';
 import { pruneExpiredResetTokens } from './auth/password-reset.service.js';
 import { markAbsencesForPreviousDay } from './modules/time/absence.service.js';
+import { syncDueDevices } from './modules/attendance-device/sync.service.js';
 import { verifyEmailProvider } from './core/mail/index.js';
 
 async function main(): Promise<void> {
@@ -38,9 +39,49 @@ async function main(): Promise<void> {
   const pruneTimer = setInterval(() => void prune(), 24 * 60 * 60 * 1000);
   pruneTimer.unref();
 
+  /**
+   * Attendance terminals.
+   *
+   * Ticks every minute and syncs whichever devices are due by their own
+   * interval, so one terminal on a five-minute schedule and another on an hour
+   * do not need separate timers. A device that is unreachable is logged and
+   * retried on the next tick; it never stops the loop, because a terminal being
+   * down is an ordinary Tuesday rather than an exceptional condition.
+   */
+  const syncDevices = async () => {
+    try {
+      for (const outcome of await syncDueDevices()) {
+        if (outcome.status === 'FAILED') {
+          app.log.warn(
+            { deviceId: outcome.deviceId, error: outcome.error },
+            'attendance device sync failed',
+          );
+        } else if (outcome.inserted > 0 || outcome.unmapped > 0) {
+          app.log.info(
+            {
+              deviceId: outcome.deviceId,
+              fetched: outcome.fetched,
+              inserted: outcome.inserted,
+              duplicates: outcome.duplicates,
+              unmapped: outcome.unmapped,
+              rejected: outcome.rejected,
+              recalculatedDays: outcome.recalculatedDays,
+            },
+            'attendance device sync',
+          );
+        }
+      }
+    } catch (error) {
+      app.log.error({ err: error }, 'attendance device sync tick failed');
+    }
+  };
+  const deviceTimer = setInterval(() => void syncDevices(), 60 * 1000);
+  deviceTimer.unref();
+
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutting down');
     clearInterval(pruneTimer);
+    clearInterval(deviceTimer);
     await app.close();
     await prisma.$disconnect();
     process.exit(0);

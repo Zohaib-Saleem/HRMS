@@ -1,12 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, CalendarClock } from 'lucide-react';
+import { ArrowLeft, CalendarClock, Fingerprint } from 'lucide-react';
 import {
   ATTENDANCE_POLICY_SCOPE_LABELS,
   ATTENDANCE_STATUS_LABELS,
+  PERMISSIONS,
   type AttendanceRecordItem,
   type EffectivePolicyView,
   type EmployeeDetail,
+  type RawPunchRecord,
 } from '@hrms/shared';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
@@ -17,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
+import { usePermissions } from '@/features/auth/session-context';
 import { AttendanceCalendar } from './attendance-calendar';
 import { STATUS_TONE, minutesLabel, timeLabel } from './attendance-ui';
 
@@ -29,6 +32,8 @@ import { STATUS_TONE, minutesLabel, timeLabel } from './attendance-ui';
  */
 export function TeamAttendanceDetailPage() {
   const { employeeId = '' } = useParams<{ employeeId: string }>();
+  const { has } = usePermissions();
+  const canSeePunches = has(PERMISSIONS.DEVICE_READ);
 
   const employee = useQuery({
     queryKey: ['employees', employeeId],
@@ -54,6 +59,22 @@ export function TeamAttendanceDetailPage() {
         query: { employeeId, limit: 30 },
       }),
     enabled: Boolean(employeeId),
+  });
+
+  /**
+   * The raw evidence behind the calculated days above.
+   *
+   * Only fetched for people who may read device data; an ordinary attendance
+   * viewer sees the calculation without the terminal log behind it.
+   */
+  const punches = useQuery({
+    queryKey: ['punches', 'employee', employeeId],
+    queryFn: () =>
+      api.getPage<RawPunchRecord>('/attendance/punches', {
+        query: { employeeId, limit: 50 },
+      }),
+    enabled: Boolean(employeeId) && canSeePunches,
+    retry: false,
   });
 
   if (employee.isError) {
@@ -206,6 +227,69 @@ export function TeamAttendanceDetailPage() {
           </TableWrapper>
         )}
       </Card>
+
+      {canSeePunches ? (
+        <Card className="mt-6 overflow-hidden">
+          <CardHeader bordered>
+            <CardTitle>Raw device punches</CardTitle>
+          </CardHeader>
+          {punches.isError ? (
+            <ErrorState error={punches.error} onRetry={() => void punches.refetch()} />
+          ) : (
+            <TableWrapper>
+              <Table>
+                <THead>
+                  <TR className="hover:bg-transparent">
+                    <TH className="w-36">Day</TH>
+                    <TH className="w-32">Device time</TH>
+                    <TH className="w-28">Direction</TH>
+                    <TH>Device</TH>
+                    <TH className="w-28">Verified by</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {punches.isLoading ? (
+                    <TableSkeleton rows={4} columns={5} />
+                  ) : (punches.data?.data ?? []).length === 0 ? (
+                    <TR className="hover:bg-transparent">
+                      <TD colSpan={5} className="p-0">
+                        <EmptyState
+                          icon={Fingerprint}
+                          title="No device punches"
+                          description="This person's attendance has not come from a terminal. Manual check-ins and corrections are shown in the table above."
+                        />
+                      </TD>
+                    </TR>
+                  ) : (
+                    (punches.data?.data ?? []).map((row) => (
+                      <TR key={row.id}>
+                        <TD className="tabular text-[13px]">{formatDate(row.localDayKey)}</TD>
+                        <TD
+                          className="tabular text-[13px] text-muted-foreground"
+                          title={`Reported "${row.rawTimestamp}" in ${row.deviceTimeZone}`}
+                        >
+                          {row.rawTimestamp.slice(11)}
+                        </TD>
+                        <TD className="text-[12.5px]">
+                          {row.punchState ? (
+                            <Badge variant={row.punchState.includes('IN') ? 'success' : 'neutral'}>
+                              {row.punchState}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">Not reported</span>
+                          )}
+                        </TD>
+                        <TD className="text-[13px] text-muted-foreground">{row.deviceName}</TD>
+                        <TD className="text-[12px] text-muted-foreground">{row.verifyMode ?? '--'}</TD>
+                      </TR>
+                    ))
+                  )}
+                </TBody>
+              </Table>
+            </TableWrapper>
+          )}
+        </Card>
+      ) : null}
     </>
   );
 }

@@ -35,6 +35,16 @@ done
 COMPANY=$(curl -s -b a.txt "$B/company")
 POLICY=$(echo "$COMPANY" | ev "const d=j.data;console.log(JSON.stringify({weekendDays:d.weekendDays,graceMinutes:d.graceMinutes,halfDayMinutes:d.halfDayMinutes,fullDayMinutes:d.fullDayMinutes,earlyLeaveGraceMinutes:d.earlyLeaveGraceMinutes,overtimeEnabled:d.overtimeEnabled,overtimeAfterMinutes:d.overtimeAfterMinutes,overtimeDailyCapMinutes:d.overtimeDailyCapMinutes,locationRestrictionEnabled:d.locationRestrictionEnabled,defaultGeofenceRadiusM:d.defaultGeofenceRadiusM}))")
 ORIGINAL=$POLICY
+
+# These assertions are written in UTC wall-clock terms: a 09:20Z check-in
+# against an 09:00 shift is 20 minutes late only if the company works to UTC.
+# The zone is now a real input to the calculation, so the suite states the one
+# it assumes rather than inheriting whatever is configured, and restores it.
+company_profile() { curl -s -b a.txt "$B/company" | ev "const d=j.data;console.log(JSON.stringify({name:d.name,legalName:d.legalName,email:d.email,phone:d.phone,website:d.website,addressLine1:d.addressLine1,addressLine2:d.addressLine2,city:d.city,state:d.state,postalCode:d.postalCode,country:d.country,timezone:d.timezone,currency:d.currency,dateFormat:d.dateFormat,weekStartsOn:d.weekStartsOn}))"; }
+set_timezone() { node -e "const p=JSON.parse(process.argv[1]);p.timezone=process.argv[2];process.stdout.write(JSON.stringify(p))" "$(company_profile)" "$1" > tzbody.json; curl -s -o /dev/null -w '%{http_code}' -b a.txt -X PATCH $B/company -H "$J" --data-binary @tzbody.json; rm -f tzbody.json; }
+TZ_ORIGINAL=$(curl -s -b a.txt "$B/company" | ev "console.log(j.data.timezone)")
+set_timezone UTC > /dev/null
+echo "  INFO  timezone pinned to UTC for this suite (was $TZ_ORIGINAL)"
 echo "  INFO  saved policy: $POLICY"
 
 # Identities used throughout.
@@ -271,6 +281,7 @@ check "but the day is still scored" PRESENT "$(curl -s -b a.txt "$B/attendance?e
 
 echo
 echo "################ RESTORE ################"
+check "timezone restored" 200 "$(set_timezone "$TZ_ORIGINAL")"
 POLICY=$ORIGINAL
 check "policy restored" 200 "$(setpolicy '{}')"
 echo "  INFO  restored: $(curl -s -b a.txt $B/company | ev "console.log(JSON.stringify({weekendDays:j.data.weekendDays,graceMinutes:j.data.graceMinutes,halfDayMinutes:j.data.halfDayMinutes,fullDayMinutes:j.data.fullDayMinutes,overtimeEnabled:j.data.overtimeEnabled,locationRestrictionEnabled:j.data.locationRestrictionEnabled}))")"
