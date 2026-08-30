@@ -64,6 +64,37 @@ const StructurePage = lazyPage(
   () => import('@/features/organisation/structure-page'),
   'StructurePage',
 );
+const PayrollLayout = lazyPage(() => import('@/features/payroll/payroll-layout'), 'PayrollLayout');
+const PayrollDashboardPage = lazyPage(
+  () => import('@/features/payroll/payroll-dashboard-page'),
+  'PayrollDashboardPage',
+);
+const PayrollRunsPage = lazyPage(
+  () => import('@/features/payroll/payroll-runs-page'),
+  'PayrollRunsPage',
+);
+const PayrollRunDetailPage = lazyPage(
+  () => import('@/features/payroll/payroll-run-detail-page'),
+  'PayrollRunDetailPage',
+);
+const PayrollProfilesPage = lazyPage(
+  () => import('@/features/payroll/payroll-profiles-page'),
+  'PayrollProfilesPage',
+);
+const SalaryComponentsPage = lazyPage(
+  () => import('@/features/payroll/salary-components-page'),
+  'SalaryComponentsPage',
+);
+const PayrollReportsPage = lazyPage(
+  () => import('@/features/payroll/payroll-reports-page'),
+  'PayrollReportsPage',
+);
+const PayrollSettingsPage = lazyPage(
+  () => import('@/features/payroll/payroll-settings-page'),
+  'PayrollSettingsPage',
+);
+const PayslipsPage = lazyPage(() => import('@/features/payroll/payslips-page'), 'PayslipsPage');
+const PayslipPage = lazyPage(() => import('@/features/payroll/payslip-page'), 'PayslipPage');
 const ApprovalsListPage = lazyPage(
   () => import('@/features/approvals/approvals-list-page'),
   'ApprovalsListPage',
@@ -235,6 +266,26 @@ export function AppRoutes() {
         <Route element={<RequirePermission permission={PERMISSIONS.DEVICE_READ} />}>
           <Route path="attendance/devices" element={<DevicesPage />} />
           <Route path="attendance/punches" element={<PunchesPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.PAYROLL_READ} />}>
+          <Route path="payroll" element={<PayrollLayout />}>
+            <Route index element={<PayrollDashboardPage />} />
+            <Route path="runs" element={<PayrollRunsPage />} />
+            <Route path="profiles" element={<PayrollProfilesPage />} />
+            <Route path="components" element={<SalaryComponentsPage />} />
+            <Route path="reports" element={<PayrollReportsPage />} />
+            <Route element={<RequirePermission permission={PERMISSIONS.PAYROLL_MANAGE} />}>
+              <Route path="settings" element={<PayrollSettingsPage />} />
+            </Route>
+          </Route>
+          {/* Outside the layout: a single run fills the page on its own. */}
+          <Route path="payroll/runs/:id" element={<PayrollRunDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.PAYSLIP_READ} />}>
+          <Route path="payslips" element={<PayslipsPage />} />
+          <Route path="payslips/:id" element={<PayslipPage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.SHIFT_READ} />}>

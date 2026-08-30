@@ -36,6 +36,15 @@ export interface DayFact {
   scheduledMinutes: number;
   /** False when no shift assignment covers the day. */
   hasShift: boolean;
+  /**
+   * Whether an attendance record exists for the day.
+   *
+   * False means the status was inferred - which for a working day means ABSENT.
+   * That is the attendance engine's answer and payroll takes it, but a whole
+   * period of inferred absence is worth telling somebody about rather than
+   * quietly deducting a month's pay.
+   */
+  hasRecord: boolean;
 }
 
 /** Company settings merged with the employee's overrides. */
@@ -111,6 +120,8 @@ export interface AttendanceTally {
   incompleteDays: number;
   /** Working days with no shift assignment behind them. */
   daysWithoutShift: number;
+  /** Working days with no attendance record at all behind them. */
+  daysWithoutRecord: number;
 }
 
 export interface MoneyLine {
@@ -190,6 +201,7 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
     approvedOvertimeMinutes: 0,
     incompleteDays: 0,
     daysWithoutShift: 0,
+    daysWithoutRecord: 0,
   };
 
   for (const day of days) {
@@ -205,6 +217,7 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
     tally.scheduledDays += 1;
     tally.scheduledMinutes += day.scheduledMinutes;
     if (!day.hasShift) tally.daysWithoutShift += 1;
+    if (!day.hasRecord) tally.daysWithoutRecord += 1;
 
     switch (day.status) {
       case 'PRESENT':

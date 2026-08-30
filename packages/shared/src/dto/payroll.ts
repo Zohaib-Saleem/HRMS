@@ -12,6 +12,15 @@ export const PAYROLL_SALARY_TYPE_LABELS: Record<PayrollSalaryType, string> = {
   HOURLY: 'Hourly rate',
 };
 
+export const PAYROLL_FREQUENCIES = ['MONTHLY', 'BIWEEKLY', 'WEEKLY'] as const;
+export type PayrollFrequency = (typeof PAYROLL_FREQUENCIES)[number];
+
+export const PAYROLL_FREQUENCY_LABELS: Record<PayrollFrequency, string> = {
+  MONTHLY: 'Monthly',
+  BIWEEKLY: 'Every two weeks',
+  WEEKLY: 'Weekly',
+};
+
 export const PAYROLL_BASES = ['CALENDAR_DAYS', 'FIXED_DAYS', 'WORKING_DAYS'] as const;
 export type PayrollBasis = (typeof PAYROLL_BASES)[number];
 
@@ -112,6 +121,14 @@ const money = (max = 99_999_999) =>
 // ------------------------------------------------------------------- settings
 
 export const payrollSettingsSchema = z.object({
+  frequency: z.enum(PAYROLL_FREQUENCIES).default('MONTHLY'),
+  /**
+   * Whether a tax module is in play. Nothing computes tax today; the flag lets
+   * components be marked taxable now so a tax module has something to read
+   * later. No rate is stored, because a rate wrong for a jurisdiction is worse
+   * than no rate at all.
+   */
+  taxEnabled: z.boolean().default(false),
   basis: z.enum(PAYROLL_BASES).default('FIXED_DAYS'),
   fixedBasisDays: z.coerce
     .number()
@@ -453,6 +470,8 @@ export interface PayslipRecord {
   periodName: string;
   periodStart: string;
   periodEnd: string;
+  /** When people are actually paid, from the period. Null when none was set. */
+  payDate: string | null;
   currency: string;
   issuedAt: string;
   publishedAt: string | null;
@@ -467,3 +486,150 @@ export const payslipQuerySchema = paginationQuerySchema.extend({
 export const payrollLineQuerySchema = paginationQuerySchema.extend({
   employeeId: z.string().trim().max(64).optional(),
 });
+
+
+// -------------------------------------------------------------- dashboard
+
+export const payrollDashboardQuerySchema = z.object({
+  periodId: z.string().trim().max(64).optional(),
+  departmentId: z.string().trim().max(64).optional(),
+  locationId: z.string().trim().max(64).optional(),
+  employeeId: z.string().trim().max(64).optional(),
+});
+
+export interface PayrollDashboard {
+  period: {
+    id: string;
+    name: string;
+    startDate: string;
+    endDate: string;
+    status: 'OPEN' | 'CLOSED';
+  } | null;
+  run: { id: string; status: PayrollRunStatus } | null;
+  currency: string;
+  totalEmployees: number;
+  employeesProcessed: number;
+  grossTotal: number;
+  deductionTotal: number;
+  netTotal: number;
+  overtimeCost: number;
+  overtimeHours: number;
+  allowanceTotal: number;
+  pendingApprovals: number;
+  exceptionCount: number;
+  blockingCount: number;
+  recentRuns: Array<{
+    id: string;
+    periodName: string;
+    status: PayrollRunStatus;
+    netTotal: number;
+    employeeCount: number;
+    createdAt: string;
+  }>;
+}
+
+// ---------------------------------------------------------------- reports
+
+export const PAYROLL_REPORT_KEYS = [
+  'summary',
+  'department',
+  'employee',
+  'overtime',
+  'allowance',
+  'deduction',
+  'attendance',
+  'payslip',
+] as const;
+export type PayrollReportKey = (typeof PAYROLL_REPORT_KEYS)[number];
+
+export const PAYROLL_REPORT_LABELS: Record<PayrollReportKey, string> = {
+  summary: 'Payroll summary',
+  department: 'Department payroll',
+  employee: 'Employee payroll',
+  overtime: 'Overtime cost',
+  allowance: 'Allowance report',
+  deduction: 'Deduction report',
+  attendance: 'Attendance vs payroll',
+  payslip: 'Payslip report',
+};
+
+export const PAYROLL_REPORT_DESCRIPTIONS: Record<PayrollReportKey, string> = {
+  summary: 'One row per pay run: what it cost in total.',
+  department: 'The same figures grouped by department.',
+  employee: 'Every employee line, with basic, allowances and overtime split out.',
+  overtime: 'Recorded against approved hours, and what the approved hours cost.',
+  allowance: 'Every allowance and bonus paid, itemised.',
+  deduction: 'Every deduction taken, itemised, with the units it was charged for.',
+  attendance: 'Attendance beside what it cost - why a salary changed.',
+  payslip: 'Payslips issued, with their gross, deductions and net.',
+};
+
+export const payrollReportQuerySchema = z.object({
+  runId: z.string().trim().max(64).optional(),
+  periodId: z.string().trim().max(64).optional(),
+  departmentId: z.string().trim().max(64).optional(),
+  locationId: z.string().trim().max(64).optional(),
+  employeeId: z.string().trim().max(64).optional(),
+  /** Draft runs are working material; excluded unless asked for. */
+  includeDraft: z.enum(['true', 'false']).optional(),
+});
+
+export interface PayrollReportColumn {
+  key: string;
+  label: string;
+  align?: 'right';
+  money?: boolean;
+}
+
+export interface PayrollReportTable {
+  key: PayrollReportKey;
+  title: string;
+  columns: PayrollReportColumn[];
+  rows: Array<Record<string, string | number>>;
+}
+
+// --------------------------------------------------------- reconciliation
+
+export interface PayrollReconciliation {
+  lineId: string;
+  employeeName: string;
+  employeeNumber: string;
+  departmentName: string | null;
+  periodName: string;
+  periodStart: string;
+  periodEnd: string;
+  currency: string;
+  attendance: {
+    scheduledDays: number;
+    presentDays: number;
+    halfDays: number;
+    paidLeaveDays: number;
+    unpaidLeaveDays: number;
+    absentDays: number;
+    holidayDays: number;
+    weekendDays: number;
+    overtimeMinutes: number;
+    approvedOvertimeMinutes: number;
+    lateOccurrences: number;
+    lateMinutes: number;
+    earlyLeaveOccurrences: number;
+    earlyLeaveMinutes: number;
+  };
+  payroll: {
+    salaryType: PayrollSalaryType;
+    salaryAmount: number;
+    basis: PayrollBasis;
+    basisDays: number;
+    dailyRate: number;
+    hourlyRate: number;
+    payableDays: number;
+    unpaidDays: number;
+    basicAmount: number;
+    overtimeAmount: number;
+    grossAmount: number;
+    deductionsTotal: number;
+    netAmount: number;
+  };
+  earnings: PayrollMoneyLine[];
+  deductions: PayrollMoneyLine[];
+}

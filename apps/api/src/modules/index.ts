@@ -35,6 +35,11 @@ import {
   payslipRoutes,
   salaryComponentRoutes,
 } from './payroll/payroll-runs.routes.js';
+import {
+  payrollDashboardRoutes,
+  payrollReconciliationRoutes,
+  payrollReportRoutes,
+} from './payroll/payroll-reports.routes.js';
 
 /**
  * Module registry.
@@ -87,6 +92,9 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/payroll/periods', plugin: payrollPeriodRoutes },
   { prefix: '/payroll/runs', plugin: payrollRunRoutes },
   { prefix: '/payroll/adjustments', plugin: payrollAdjustmentRoutes },
+  { prefix: '/payroll/dashboard', plugin: payrollDashboardRoutes },
+  { prefix: '/payroll/reports', plugin: payrollReportRoutes },
+  { prefix: '/payroll/reconciliation', plugin: payrollReconciliationRoutes },
   { prefix: '/payslips', plugin: payslipRoutes },
 
   // --- phase 5+ ---------------------------------------------------------

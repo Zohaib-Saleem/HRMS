@@ -1064,7 +1064,9 @@ const PAYSLIP_INCLUDE = {
         },
       },
       run: {
-        include: { period: { select: { name: true, startDate: true, endDate: true } } },
+        include: {
+          period: { select: { name: true, startDate: true, endDate: true, payDate: true } },
+        },
       },
     },
   },
@@ -1112,6 +1114,7 @@ export const payslipRoutes: FastifyPluginAsync = async (app) => {
       periodName: row.line.run.period.name,
       periodStart: day(row.line.run.period.startDate)!,
       periodEnd: day(row.line.run.period.endDate)!,
+      payDate: day(row.line.run.period.payDate),
       currency: row.line.currency,
       issuedAt: row.issuedAt.toISOString(),
       publishedAt: row.publishedAt?.toISOString() ?? null,
@@ -1152,6 +1155,7 @@ export const payslipRoutes: FastifyPluginAsync = async (app) => {
       periodName: row.line.run.period.name,
       periodStart: day(row.line.run.period.startDate)!,
       periodEnd: day(row.line.run.period.endDate)!,
+      payDate: day(row.line.run.period.payDate),
       currency: row.line.currency,
       issuedAt: row.issuedAt.toISOString(),
       publishedAt: row.publishedAt?.toISOString() ?? null,

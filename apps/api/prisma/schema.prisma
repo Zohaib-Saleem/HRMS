@@ -1513,6 +1513,17 @@ enum PayrollBasis {
   WORKING_DAYS
 }
 
+/// How often payroll is run.
+///
+/// Reporting and period suggestion only: the calculation reads the period's
+/// actual start and end dates, so a company can run an irregular period without
+/// this having to agree with it.
+enum PayrollFrequency {
+  MONTHLY
+  BIWEEKLY
+  WEEKLY
+}
+
 /// How overtime is priced.
 enum PayrollOvertimeMode {
   /// Overtime is not paid at all. Hours are still recorded and reported.
@@ -1600,6 +1611,9 @@ model PayrollSettings {
   id        String @id @default(cuid())
   companyId String @unique
 
+  /// How often payroll is run. Suggests period dates; nothing calculates from it.
+  frequency PayrollFrequency @default(MONTHLY)
+
   // --- what a day is worth --------------------------------------------------
   basis          PayrollBasis @default(FIXED_DAYS)
   /// Only consulted when basis is FIXED_DAYS.
@@ -1632,6 +1646,12 @@ model PayrollSettings {
   earlyLeaveDeductionMode PayrollTimeDeductionMode @default(NONE)
   earlyLeaveDeductionRate Decimal                  @default(0) @db.Decimal(14, 4)
   earlyLeaveGraceMinutes  Int                      @default(0)
+
+  /// Whether a tax module is in play. Off, and nothing computes tax: the flag
+  /// exists so components can be marked taxable now and a tax module written
+  /// later without backfilling. No rate is stored here, because a rate that is
+  /// wrong for a jurisdiction is worse than no rate at all.
+  taxEnabled Boolean @default(false)
 
   // --- presentation ---------------------------------------------------------
   /// Decimal places money is rounded to when a line is written.

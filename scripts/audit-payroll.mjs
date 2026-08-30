@@ -94,6 +94,7 @@ let runId = null;
 let adminEmployeeId = null;
 let managerEmployeeId = null;
 let staffEmployeeId = null;
+let salariesBefore = 0;
 
 const created = { salaries: [], components: [], assignments: [], adjustments: [] };
 
@@ -198,6 +199,26 @@ try {
     });
     check('attendance fixtures written', written, 22);
 
+    // The salary fixtures below cover 2025. A real salary in that window would
+    // collide with them and every later assertion would fail for a reason that
+    // has nothing to do with the code under test, so say so plainly instead.
+    const colliding = await prisma.employeeSalary.count({
+      where: {
+        employeeId: { in: [adminEmployeeId, managerEmployeeId, staffEmployeeId] },
+        effectiveFrom: { lte: new Date('2025-12-31') },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: new Date('2024-01-01') } }],
+        NOT: { note: { startsWith: 'AUDIT ' } },
+      },
+    });
+    if (colliding > 0) {
+      throw new Error(
+        `${colliding} salary record(s) already cover the fixture window. This suite needs a` +
+          ' database without them - remove demo data first (seed-payroll-demo.mjs --clean).',
+      );
+    }
+
+    salariesBefore = await prisma.employeeSalary.count({ where: { employeeId: staffEmployeeId } });
+
     adminCookie = await login('admin@hrms.local', 'Admin@12345');
     managerCookie = await login('manager@hrms.local', 'Manager@12345');
     employeeCookie = await login('employee@hrms.local', 'Employee@12345');
@@ -237,7 +258,7 @@ try {
     check('an employee cannot set their own salary', staffWrite.status, 403);
 
     const stored = await prisma.employeeSalary.count({ where: { employeeId: staffEmployeeId } });
-    check('and nothing was written', stored, 0);
+    check('and nothing was written', stored, salariesBefore);
 
     const adminRuns = await api(adminCookie, '/payroll/runs');
     check('an administrator can', adminRuns.status, 200);

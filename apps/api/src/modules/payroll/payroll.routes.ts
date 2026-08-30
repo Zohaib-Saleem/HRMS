@@ -99,6 +99,8 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
     const data: PayrollSettingsRecord = {
       companyId: settings.companyId,
       currency: company.currency,
+      frequency: settings.frequency,
+      taxEnabled: settings.taxEnabled,
       basis: settings.basis,
       fixedBasisDays: settings.fixedBasisDays,
       standardHoursPerDay: num(settings.standardHoursPerDay),
@@ -130,6 +132,8 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
       // Merged over what is stored, so a caller sending three fields does not
       // silently reset the other fifteen to their defaults.
       const input = parseOrThrow(payrollSettingsSchema, {
+        frequency: before.frequency,
+        taxEnabled: before.taxEnabled,
         basis: before.basis,
         fixedBasisDays: before.fixedBasisDays,
         standardHoursPerDay: num(before.standardHoursPerDay),

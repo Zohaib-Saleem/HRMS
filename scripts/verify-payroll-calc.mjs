@@ -78,6 +78,7 @@ function day(date, status, extra = {}) {
     overtimeApproved: false,
     scheduledMinutes: 480,
     hasShift: true,
+    hasRecord: status === 'PRESENT' || status === 'HALF_DAY',
     ...extra,
   };
 }
@@ -804,6 +805,20 @@ try {
     const tally = tallyDays(days, config());
     check('a day with no shift is counted', tally.daysWithoutShift, 1);
     check('a day checked in but never out is counted', tally.incompleteDays, 1);
+  }
+
+  {
+    // An employee the terminals never saw: every working day is inferred, which
+    // is a data problem rather than a month of absence to price.
+    const tally = tallyDays(april2026(), config());
+    check('a fully recorded month has nothing missing', tally.daysWithoutRecord, 0);
+
+    const unseen = april2026().map((d) =>
+      d.status === 'WEEKEND' ? d : { ...d, status: 'ABSENT', hasRecord: false },
+    );
+    const missing = tallyDays(unseen, config());
+    check('a month with no attendance at all is counted', missing.daysWithoutRecord, 22);
+    check('and every scheduled day of it', missing.scheduledDays, 22);
   }
 
   {

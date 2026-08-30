@@ -312,6 +312,7 @@ export async function gatherFacts(input: {
         overtimeApproved,
         scheduledMinutes,
         hasShift: assignment !== undefined,
+        hasRecord: day.hasRecord,
       };
     });
 
@@ -666,6 +667,22 @@ async function runCalculation(input: {
         severity: 'WARNING',
         message: `${employee.firstName} ${employee.lastName} has ${result.tally.daysWithoutShift} working day(s) with no shift assigned; ${ASSUMED_SHIFT_MINUTES / 60} hours was assumed.`,
         employeeId: employee.id,
+      });
+    }
+
+    // Every working day inferred rather than recorded. A new joiner is already
+    // handled by the employment clamp, so this is a person the terminals never
+    // saw - which is a data problem, not a month of absence to price.
+    if (
+      result.tally.scheduledDays > 0 &&
+      result.tally.daysWithoutRecord === result.tally.scheduledDays
+    ) {
+      pending.push({
+        code: 'INVALID_ATTENDANCE',
+        severity: 'WARNING',
+        message: `${employee.firstName} ${employee.lastName} has no attendance at all for this period, so every working day was scored as an absence. Check the attendance before paying this.`,
+        employeeId: employee.id,
+        detail: { scheduledDays: result.tally.scheduledDays },
       });
     }
 

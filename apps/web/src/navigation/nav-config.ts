@@ -14,6 +14,7 @@ import {
   FileText,
   Fingerprint,
   LayoutDashboard,
+  Receipt,
   Settings,
   TrendingUp,
   Users,
@@ -185,8 +186,19 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Payroll',
         to: '/payroll',
         icon: Banknote,
-        permission: PERMISSIONS.EMPLOYEE_READ,
-        status: 'planned',
+        permission: PERMISSIONS.PAYROLL_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // Separate from Payroll because almost everyone can reach it and almost
+        // nobody can reach Payroll: a member of staff holds payslip.read with an
+        // OWN scope and sees exactly their own.
+        label: 'Payslips',
+        to: '/payslips',
+        icon: Receipt,
+        permission: PERMISSIONS.PAYSLIP_READ,
+        status: 'ready',
         matchPrefix: true,
       },
       {
