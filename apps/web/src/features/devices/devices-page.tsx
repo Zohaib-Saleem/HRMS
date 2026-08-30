@@ -38,6 +38,7 @@ import { useLookups } from '@/lib/lookups';
 import { formatDate } from '@/lib/utils';
 import { usePermissions } from '@/features/auth/session-context';
 import { PageHeader } from '@/components/layout/page-header';
+import { HelpLink } from '@/features/help/help-link';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -189,12 +190,15 @@ export function DevicesPage() {
         title="Attendance devices"
         description="Biometric terminals that report punches to the HRMS. Punches are raw evidence; the attendance policy still decides what each day is worth."
         actions={
-          canManage ? (
-            <Button size="sm" onClick={() => setEditing('new')}>
-              <Plus />
-              Add device
-            </Button>
-          ) : null
+          <>
+            <HelpLink slug="devices" />
+            {canManage ? (
+              <Button size="sm" onClick={() => setEditing('new')}>
+                <Plus />
+                Add device
+              </Button>
+            ) : null}
+          </>
         }
       />
 

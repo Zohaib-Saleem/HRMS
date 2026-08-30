@@ -95,6 +95,8 @@ const PayrollSettingsPage = lazyPage(
 );
 const PayslipsPage = lazyPage(() => import('@/features/payroll/payslips-page'), 'PayslipsPage');
 const PayslipPage = lazyPage(() => import('@/features/payroll/payslip-page'), 'PayslipPage');
+const HelpHomePage = lazyPage(() => import('@/features/help/help-home-page'), 'HelpHomePage');
+const HelpDocPage = lazyPage(() => import('@/features/help/help-doc-page'), 'HelpDocPage');
 const UsersPage = lazyPage(() => import('@/features/settings/users-page'), 'UsersPage');
 const ApprovalsListPage = lazyPage(
   () => import('@/features/approvals/approvals-list-page'),
@@ -230,6 +232,10 @@ export function AppRoutes() {
       <Route element={<ProtectedRoutes />}>
         <Route index element={<DashboardPage />} />
         <Route path="profile" element={<ProfilePage />} />
+
+        {/* Any signed-in user; the server decides which documents they get. */}
+        <Route path="help" element={<HelpHomePage />} />
+        <Route path="help/:slug" element={<HelpDocPage />} />
 
         <Route element={<RequirePermission permission={PERMISSIONS.EMPLOYEE_READ} />}>
           <Route path="people" element={<EmployeeListPage />} />

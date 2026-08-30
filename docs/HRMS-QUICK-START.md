@@ -5,14 +5,16 @@ order it has to happen.
 
 > ## Read this before you start
 >
-> **There is no way to create a login through the application.** The permissions
-> exist and can be granted, but no user-management screen or API was ever built.
-> Accounts exist only because the seed script created three
-> (`admin@`, `manager@`, `employee@hrms.local`).
+> Recording an employee does **not** give them a way in. An employee record and
+> a login account are separate things, and not everybody needs both.
 >
-> Until that is built, employees can be *recorded* but cannot *sign in* unless
-> someone creates their account directly in the database. Plan around it, or
-> commission the module first. Everything else below works.
+> Logins are created by invitation from **Settings → Users**: you choose the
+> employee and the roles, they receive a link and set their own password. No
+> password is ever generated or shared, so nobody but the account holder ever
+> knows it.
+>
+> The three seeded accounts (`admin@`, `manager@`, `employee@hrms.local`) exist
+> for development. Change their passwords or replace them before going live.
 
 ---
 
@@ -110,7 +112,9 @@ Payroll will refuse to finalize without a salary for everyone in the run.
 
 - [ ] **Settings → Roles and permissions** — review what each of the four roles
       can do before anyone signs in
-- [ ] Create logins — **see the warning at the top of this document**
+- [ ] **Settings → Users** — invite a login for everyone who needs one, with
+      the right roles. Start with one administrator other than the seeded
+      account
 
 ---
 
@@ -134,7 +138,7 @@ Payroll will refuse to finalize without a salary for everyone in the run.
 [ ] Attendance device registered (if used)
 [ ] Device user mapping for every employee (if used)
 [ ] Roles reviewed
-[ ] Logins created  ← blocked: no user-management module
+[ ] Logins invited, with roles
 [ ] Attendance test  (below)
 [ ] Payroll test     (below)
 ```

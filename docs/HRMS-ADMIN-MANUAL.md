@@ -66,9 +66,11 @@ record (`employee.manage`).
 
 ### Employee login
 
-> **There is no way to create a login through the application.** See
-> [Known limitations](#12-known-limitations). The `userId` field links an employee
-> to a login account, but nothing in the interface or the API sets it.
+An employee record and a login account are **separate things**, deliberately.
+Recording somebody does not give them a way in, and not everybody needs one.
+
+To give an employee a login: **Settings → Users → Invite user**, and choose them
+from the employee list. See [User management](#13-user-management).
 
 ### Termination
 
@@ -76,9 +78,12 @@ record (`employee.manage`).
 optionally a reason. What it does:
 
 1. Sets the employee status to `TERMINATED` and records the date.
-2. **Suspends the linked login account.**
-3. **Revokes every active session**, so they are signed out immediately.
-4. Writes an audit entry with the before/after.
+2. **Suspends the linked login account**, recording the reason as
+   *employment terminated* so a later reactivation can tell it apart from a
+   suspension imposed for its own reasons.
+3. **Revokes every active session**, so they are signed out immediately. The
+   session they are holding right now stops working on their next request.
+4. Writes an audit entry naming how many sessions were ended.
 
 A terminated employee is excluded from new payroll runs from the day after
 their termination date, but a run covering a period they worked will still pay
@@ -89,9 +94,10 @@ them — a final salary is still owed.
 **People → open a terminated employee → Reactivate.** Restores their status to
 `ACTIVE` and clears the termination date.
 
-> **It does not restore their login.** The user account stays `SUSPENDED` and
-> there is no screen to change that. A rehired employee currently cannot sign
-> in. See [Known limitations](#12-known-limitations).
+It also **restores their login** — but only if the termination is what suspended
+it. An account an administrator suspended separately, for a reason of its own,
+stays suspended and the audit entry says so. Reactivating an employee is not a
+decision about a security concern somebody raised deliberately.
 
 ### Deletion
 
@@ -185,7 +191,7 @@ Below the cards: recent activity from the audit log, and a setup checklist that
 links to whatever is not yet configured.
 
 > Recorded as a discrepancy rather than corrected: this phase is documentation
-> only. See [contradictions](#13-contradictions-between-interface-and-backend).
+> only. See [contradictions](#14-contradictions-between-interface-and-backend).
 
 ---
 
@@ -527,15 +533,15 @@ is hidden.
 
 ### Blocking for a real deployment
 
-1. **No user-management module.** `user.read` and `user.manage` are grantable in
-   the Roles screen and granted to HR Admin by default, but no API or screen
-   exists behind them. **There is no way to create a login for a new employee.**
-   Accounts exist only because the seed script created three. This is the single
-   biggest gap.
+1. ~~No user-management module.~~ **Resolved.** See
+   [User management](#13-user-management). Accounts are created by invitation,
+   linked to employees, given roles, suspended, restored and signed out from
+   **Settings → Users**.
 
-2. **Reactivation does not restore a login.** Terminating suspends the account
-   and revokes sessions; reactivating only flips the employee status. A rehired
-   employee cannot sign in, and there is no screen to fix it.
+2. ~~Reactivation does not restore a login.~~ **Resolved.** Termination records
+   *why* it suspended the account, and reactivation restores it — unless an
+   administrator had suspended it separately, in which case it stays suspended
+   and the audit says so.
 
 3. **The physical ZKTeco K50 has never been connected.** Everything is verified
    against a protocol simulator. See the
@@ -584,33 +590,167 @@ is hidden.
 
 ---
 
-## 13. Contradictions between interface and backend
+## 13. User management
+
+**Settings → Users.** Requires `user.read` to see, `user.manage` to change.
+Managers and employees hold neither, and the API refuses them with 403
+regardless of what the interface shows.
+
+### Three statuses that are not the same thing
+
+The screen keeps these apart on purpose, because an administrator looking at a
+locked-out person needs to know which one they are looking at:
+
+| | What it means | Where it lives |
+|---|---|---|
+| **Employment status** | Whether they work here | The employee record |
+| **Account status** | Whether the login can sign in | The user record |
+| **Sessions** | Whether they are signed in *right now* | Session rows |
+
+They move independently. Somebody can be employed with no account, have an
+account with no sessions, or be signed out everywhere while their account stays
+perfectly usable.
+
+### Account statuses
+
+| Status | Meaning |
+|---|---|
+| **Invited** | Created, but has never set a password. **Cannot sign in yet** |
+| **Active** | Can sign in |
+| **Suspended** | Cannot sign in. Every session stops working immediately |
+
+### Creating a user
+
+**Settings → Users → Invite user.**
+
+1. Choose the **employee** this login belongs to. Only employees who do not
+   already have one appear, and terminated employees never do. Choosing one
+   fills in the name and work email.
+2. Confirm the **email** — it is both where the invitation goes and the sign-in
+   name.
+3. Choose at least one **role**. An account with no role can sign in and see
+   nothing, so it is refused.
+4. **Send invitation.**
+
+> **No password is created, generated, displayed or transmitted.** The account
+> is created as *Invited* with a stored value no password can ever match, and
+> the person sets their own through the ordinary reset link. That is what makes
+> "an administrator never knows anybody's password" true rather than merely
+> intended. If the invitation does not arrive, send it again from the account's
+> detail panel — a fresh link supersedes the old one.
+
+The account becomes **Active** the moment they set a password.
+
+### Linking to an employee
+
+One account per employee, enforced by a unique index rather than by hope.
+Attempts to give one employee a second account, or to move an account onto an
+employee who already has one, are refused with an explanation.
+
+An account **can** exist with no employee linked — an external auditor or a
+contractor who needs to see the system but has no attendance, leave or payslips
+of their own. Such an account has no data scope anchor, so a narrow scope shows
+it nothing.
+
+Link, unlink and relink from the account's detail panel.
+
+### Roles
+
+Change them from the detail panel. A user must always keep **at least one**.
+
+The last active account that can administer roles cannot have that ability
+removed, and cannot be suspended: a company with nobody holding `role.manage`
+cannot grant it back to anybody, because granting it is the thing that requires
+it. That is unrecoverable without database access, so it is refused.
+
+### Suspending and restoring
+
+**Suspend** asks for a reason, which goes into the audit trail. It:
+
+- sets the account to *Suspended*,
+- records **why** — administrative, as opposed to a termination,
+- remembers what the status was before, and
+- **ends every session immediately**.
+
+A suspended account cannot sign in, cannot be sent a reset link, and cannot
+redeem a reset link issued before the suspension.
+
+**Restore** returns it to the status it had before — an account that was only
+ever *Invited* goes back to *Invited*, not to a working login it never had. It
+also clears any lockout.
+
+An administrator restoring from this screen is acting deliberately, so an
+administrative suspension is theirs to override. What they cannot override is
+the employee still being terminated: that would produce a working login for
+somebody who has left. Reactivate the employee first.
+
+### Revoking sessions
+
+Signs the person out of every device without touching the account. They can
+sign in again immediately. Use it when a laptop is lost or somebody stayed
+signed in somewhere they should not have.
+
+Different from suspension: revoking ends sessions, suspending ends sessions
+**and** stops them coming back.
+
+### Sending a password reset
+
+Sends the ordinary reset link to the account holder's own address. The
+administrator never sees the token, it is never returned by the API, never
+written to the log, and never recorded in the audit trail — the audit records
+only that a link was issued.
+
+### Actions refused on your own account
+
+Suspending yourself, revoking your own sessions and stripping your own roles are
+all refused from this screen. They are ways to lock the last administrator out.
+Sign out from the header; change your password from your profile.
+
+### Onboarding: the normal sequence
+
+```
+1  People → Add employee           department, manager, hire date
+2  Shifts → Assignments            effective from their start date
+3  Payroll → Profiles              a salary, effective-dated
+4  Settings → Users → Invite user  choose the employee, pick roles
+5  They accept the invitation      set a password → account becomes Active
+6  Devices → Device users          map their terminal PIN, if used
+```
+
+Step 4 can happen at any point after step 1. The invitation is the only step
+that involves the employee themselves.
+
+### Offboarding
+
+**People → Terminate** does the account half for you: suspends the login,
+records the reason as *employment terminated*, and ends every session. There is
+nothing to do on the users screen.
+
+If they return, **People → Reactivate** brings the login back.
+
+---
+
+## 14. Contradictions between interface and backend
 
 Found while writing this manual by reading the source against the screens.
 **None of these has been changed** — this phase was documentation only. Each is
 recorded so a decision can be made deliberately.
 
-### 1. Permissions that are grantable but do nothing
+### 1. Permissions that are grantable but do nothing — *partly resolved*
 
-`user.read` and `user.manage` appear in **Settings → Roles and permissions**
-with the descriptions *"See login accounts"* and *"Invite, edit and disable
-login accounts"*. Both are granted to HR Admin by default.
+`user.read` and `user.manage` now do what their descriptions say. See
+[User management](#13-user-management).
 
-**No user-management API or screen exists.** Granting them changes nothing. An
-administrator reading that screen would reasonably conclude they can invite a
-user, and they cannot.
+`employee.import` **still does nothing**: grantable, described as *"Bulk-create
+employees from a file"*, with no import endpoint behind it. Left as it was —
+building import was explicitly out of scope for the user-management work.
 
-`employee.import` is the same: grantable, described as *"Bulk-create employees
-from a file"*, with no import endpoint behind it.
+### 2. ~~Reactivation does not undo termination~~ — *resolved*
 
-### 2. Reactivation does not undo termination
-
-Terminating suspends the login and revokes every session. Reactivating restores
-only the employee status. The user account stays `SUSPENDED`, and because there
-is no user-management screen, **there is no way to restore it through the
-application**.
-
-The interface presents Terminate and Reactivate as opposites. They are not.
+Terminating now records that *the termination* is what suspended the account.
+Reactivating restores it, unless an administrator had suspended it separately
+for a reason of its own — in which case it stays suspended, and both the refusal
+and the reason appear in the audit trail and on the account's detail panel.
 
 ### 3. The dashboard is not scope-narrowed
 

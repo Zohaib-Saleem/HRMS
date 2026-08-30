@@ -34,6 +34,10 @@ run phase5-policy     bash scripts/audit-phase5-policy.sh
 sleep 150
 run phase6            bash scripts/audit-phase6.sh
 sleep 150
+# Signs in about fifteen times, spread across forwarded addresses, so it does
+# not need the rate-limit pause the shell suites take.
+run docs              npx dotenv -e .env -- npx tsx scripts/audit-docs.mjs
+run users             npx dotenv -e .env -- npx tsx scripts/audit-users.mjs
 run zkt               npx dotenv -e .env -- npx tsx scripts/audit-zkt.mjs
 run zkt-reliability   npx dotenv -e .env -- npx tsx scripts/audit-zkt-reliability.mjs
 run adms              npx dotenv -e .env -- npx tsx scripts/audit-adms.mjs

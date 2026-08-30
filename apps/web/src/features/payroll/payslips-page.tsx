@@ -6,6 +6,7 @@ import type { PayslipRecord } from '@hrms/shared';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
+import { HelpLink } from '@/features/help/help-link';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/field';
 import { Pagination } from '@/components/ui/pagination';
@@ -48,6 +49,7 @@ export function PayslipsPage() {
       <PageHeader
         title="Payslips"
         description="Issued when a payroll run is finalized. Open one to print it or save it as a PDF."
+        actions={<HelpLink slug="payroll" />}
       />
 
       <Card className="overflow-hidden">

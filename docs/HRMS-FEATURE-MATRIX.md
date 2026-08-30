@@ -18,7 +18,14 @@ Employee (EMP). A role appears only if it holds the permission by default.
 | Password reset by email | IMPLEMENTED | all | mail provider | Falls back to logging the link when `MAIL_PROVIDER=console` |
 | Change own password | IMPLEMENTED | all | — | `PATCH /me/password` |
 | See and revoke own sessions | PARTIALLY IMPLEMENTED | all | — | Can list sessions and sign out everywhere; cannot revoke one named device |
-| **Create a login account** | **NOT IMPLEMENTED** | — | — | `user.read`/`user.manage` exist and are grantable, but no API or screen. See limitations |
+| Invitation acceptance | IMPLEMENTED | — | mail provider | Setting a password through the reset link activates an invited account |
+| **Create a login account** | IMPLEMENTED | SA, HR | employees, roles | Invite-based: no password is ever generated or seen by an administrator |
+| Link a login to an employee | IMPLEMENTED | SA, HR | employees | One account per employee, enforced by a unique index |
+| Assign and change roles | IMPLEMENTED | SA, HR | roles | At least one role is always required |
+| Suspend an account | IMPLEMENTED | SA, HR | — | Records why, and ends every session |
+| Restore an account | IMPLEMENTED | SA, HR | — | Returns it to the status it had before |
+| Revoke sessions | IMPLEMENTED | SA, HR | — | Without suspending: they can sign in again |
+| Send a password reset link | IMPLEMENTED | SA, HR | mail provider | The link goes to the account holder; no token is ever shown |
 | Roles and permissions editor | IMPLEMENTED | SA, HR (read) | — | `role.manage` needed to change grants; only Super Admin holds it by default |
 | Data scopes | IMPLEMENTED | — | — | NONE / OWN / REPORTS / REPORTS_AND_OWN / DEPARTMENT / ALL |
 
@@ -44,7 +51,7 @@ Employee (EMP). A role appears only if it holds the permission by default.
 | Restricted fields | IMPLEMENTED | SA, HR | — | National ID, passport, visa, bank account — stripped without `employee.sensitive.read` |
 | Work experience sub-records | IMPLEMENTED | SA, HR | — | Prior employment history |
 | Terminate employee | IMPLEMENTED | SA, HR | — | Suspends the login and revokes every session |
-| Reactivate employee | PARTIALLY IMPLEMENTED | SA, HR | — | Restores the employee but **not** the login. See limitations |
+| Reactivate employee | IMPLEMENTED | SA, HR | — | Restores the login too, but only when the termination is what suspended it |
 | Employee CSV export | IMPLEMENTED | SA, HR | — | `employee.export` |
 | Employee import | NOT IMPLEMENTED | — | — | `employee.import` is grantable but no endpoint exists |
 | **Employee documents** | **NOT IMPLEMENTED** | — | — | No storage, no table, no screen |

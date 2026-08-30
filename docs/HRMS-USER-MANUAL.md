@@ -107,8 +107,11 @@ Forgotten passwords are reset by emailed link, valid for **60 minutes**
 (`PASSWORD_RESET_TTL_MINUTES`). When `MAIL_PROVIDER=console` — the development
 default — the link is written to the server log instead of being sent.
 
-> **There is no way to create a login through the application.** See
-> [Known limitations](HRMS-ADMIN-MANUAL.md#12-known-limitations).
+Accounts are created by invitation from **Settings → Users**, and have three
+statuses of their own, separate from employment: **Invited** (created, cannot
+sign in until they set a password), **Active**, and **Suspended** (cannot sign
+in; every session stops working at once). See
+[User management](HRMS-ADMIN-MANUAL.md#13-user-management).
 
 ### How permission actually works
 
@@ -205,8 +208,8 @@ Grouped as the Roles screen groups them.
 | Leave | `leave.read`, `leave.request`, `leave.manage`, `holiday.read/manage` |
 | Governance | `audit.read`, `settings.manage` |
 
-Two of these are **grantable but do nothing**: `user.read` and `user.manage`
-have no endpoint behind them, and `employee.import` has no import endpoint.
+One of these is **grantable but does nothing**: `employee.import` has no import
+endpoint behind it.
 
 ---
 

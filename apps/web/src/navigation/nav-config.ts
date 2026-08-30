@@ -14,6 +14,7 @@ import {
   FileText,
   Fingerprint,
   LayoutDashboard,
+  LifeBuoy,
   Receipt,
   Settings,
   TrendingUp,
@@ -228,6 +229,15 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/settings',
         icon: Settings,
         permission: [PERMISSIONS.COMPANY_READ, PERMISSIONS.ROLE_READ, PERMISSIONS.AUDIT_READ],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // No permission: every signed-in user can open the help centre. What
+        // they find inside is narrowed per document by the server.
+        label: 'Help & Documentation',
+        to: '/help',
+        icon: LifeBuoy,
         status: 'ready',
         matchPrefix: true,
       },

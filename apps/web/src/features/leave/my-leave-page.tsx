@@ -19,6 +19,7 @@ import {
 import { ApiError, api, errorMessage } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
+import { HelpLink } from '@/features/help/help-link';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -96,12 +97,15 @@ export function MyLeavePage() {
         title="My leave"
         description="Your balances and every request you have raised."
         actions={
-          <Can permission={PERMISSIONS.LEAVE_REQUEST}>
-            <Button size="sm" onClick={() => setRequesting(true)}>
-              <CalendarPlus />
-              Request leave
-            </Button>
-          </Can>
+          <>
+            <HelpLink slug="employee-guide" />
+            <Can permission={PERMISSIONS.LEAVE_REQUEST}>
+              <Button size="sm" onClick={() => setRequesting(true)}>
+                <CalendarPlus />
+                Request leave
+              </Button>
+            </Can>
+          </>
         }
       />
 

@@ -20,6 +20,7 @@ import {
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
+import { HelpLink } from '@/features/help/help-link';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { NativeSelect } from '@/components/ui/field';
@@ -71,6 +72,7 @@ export function PayrollDashboardPage() {
         description="What this period costs, and whether anything is unresolved before it is paid."
         actions={
           <div className="flex flex-wrap gap-2">
+            <HelpLink slug="payroll" />
             <Can permission={PERMISSIONS.PAYROLL_READ}>
               <Button variant="outline" size="sm" asChild>
                 <Link to="/payroll/reports">Reports</Link>

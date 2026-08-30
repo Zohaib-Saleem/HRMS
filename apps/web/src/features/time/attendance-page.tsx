@@ -16,6 +16,7 @@ import { useLookups } from '@/lib/lookups';
 import { useDebounced } from '@/lib/use-debounced';
 import { formatDate } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
+import { HelpLink } from '@/features/help/help-link';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -76,10 +77,13 @@ export function AttendancePage() {
         title="Attendance"
         description="Check in and out, review your month, and request corrections through approval."
         actions={
-          <Button size="sm" variant="outline" onClick={() => setRequesting(true)}>
-            <Plus />
-            Request correction
-          </Button>
+          <>
+            <HelpLink slug="attendance" />
+            <Button size="sm" variant="outline" onClick={() => setRequesting(true)}>
+              <Plus />
+              Request correction
+            </Button>
+          </>
         }
       />
 
