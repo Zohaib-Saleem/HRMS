@@ -125,7 +125,7 @@ The calculation records what it could not resolve rather than guessing:
 | `NON_POSITIVE_NET` | blocking | net is zero or negative |
 | `MISSING_PROFILE` | warning | company defaults were used |
 | `MISSING_SHIFT` | warning | no shift assigned; eight hours assumed |
-| `INVALID_ATTENDANCE` | warning | checked in but never out |
+| `INVALID_ATTENDANCE` | warning | checked in but never out, or no attendance at all for the whole period |
 | `UNAPPROVED_OVERTIME` | warning | hours recorded but not paid |
 | `INCOMPLETE_EMPLOYEE` | warning | employee number or hire date missing |
 
@@ -165,6 +165,36 @@ Payroll inherits the company timezone rather than reasoning about it. A punch at
 20:00 UTC the previous day — and payroll counts the day the attendance engine
 recorded. Repeating the decision here is exactly how a late shift ends up
 counted twice or not at all.
+
+## The screens
+
+| Route | What it is | Permission |
+|---|---|---|
+| `/payroll` | Dashboard: period, status, gross/deductions/net, overtime cost, pending approvals, exceptions | `payroll.read` |
+| `/payroll/runs` | Pay runs, with the workflow actions | `payroll.read` |
+| `/payroll/runs/:id` | Review: exceptions above, one row per employee, click for the calculation | `payroll.read` |
+| `/payroll/profiles` | Salary history and assigned components, per employee | `payroll.read` |
+| `/payroll/components` | The allowance and deduction catalogue | `payroll.read` |
+| `/payroll/reports` | Eight reports with filters and CSV export | `payroll.read` |
+| `/payroll/settings` | Frequency, basis, overtime, deductions, rounding, tax | `payroll.manage` |
+| `/payslips` | Payslips, narrowed by data scope | `payslip.read` |
+| `/payslips/:id` | The payslip document, printable | `payslip.read` |
+
+Managers hold no payroll permission by default, so Payroll does not appear in
+their sidebar at all. Every member of staff holds `payslip.read` with an OWN
+scope, so Payslips does — and shows exactly one row.
+
+The action buttons on a run follow its status rather than being shown and
+disabled: a six-state workflow with every button always visible is harder to
+read than one offering the two things actually possible. The server enforces
+the same transitions regardless — hiding a button is a courtesy, not a control.
+
+### Printing
+
+The payslip uses the browser's own print. No PDF library: the browser produces
+a better PDF than a hand-rolled one, every platform has the button, and it is
+one `print:hidden` class rather than a second rendering path that can drift
+from the screen.
 
 ## Testing
 

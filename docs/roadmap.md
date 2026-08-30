@@ -271,8 +271,28 @@ Reuses `AuditLog` rather than a separate payroll audit table, and
 
 See `docs/payroll.md`.
 
-**Deliberately not built:** the payroll UI, and tax. The backend, database,
-calculation engine and API are complete; the screens are the next step.
+## Phase 9E-9G — Payroll UI, payslips and reports ✅
+
+- Payroll enabled in the sidebar, with its own tabbed section built from the
+  same layout the settings and organisation sections use ✅
+- Dashboard: current period, run status, employees processed against total,
+  gross, deductions, net, overtime cost, pending approvals and exceptions,
+  filterable by period, department and location ✅
+- Pay runs with the workflow actions, driven by the run's status; the server
+  enforces the same transitions, so a hidden button is a courtesy not a control ✅
+- Review screen: exceptions above the table rather than behind a tab, one row
+  per employee, and a drawer showing the whole calculation - the attendance the
+  engine recorded, the rate it was priced at, every line, and the rounding
+  visible at the end ✅
+- Payslip as a printable document, using the browser's own print rather than a
+  second rendering path that could drift from the screen ✅
+- Eight reports over one table component with CSV export, including the
+  attendance-versus-payroll reconciliation ✅
+- Salary components and payroll settings screens; payroll frequency and a tax
+  flag added, with no tax rate stored ✅
+
+**Deliberately not built:** tax computation. Components carry an `isTaxable`
+flag so a tax module has something to read; nothing computes tax.
 
 ---
 
