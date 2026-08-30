@@ -3,6 +3,7 @@ import { authRoutes } from '../auth/auth.routes.js';
 import { meRoutes } from './me/me.routes.js';
 import { companyRoutes } from './company/company.routes.js';
 import { rolesRoutes } from './roles/roles.routes.js';
+import { userRoutes } from './users/users.routes.js';
 import { auditRoutes } from './audit/audit.routes.js';
 import { departmentRoutes } from './organisation/departments.routes.js';
 import { teamRoutes } from './organisation/teams.routes.js';
@@ -58,6 +59,7 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/me', plugin: meRoutes },
   { prefix: '/company', plugin: companyRoutes },
   { prefix: '/roles', plugin: rolesRoutes },
+  { prefix: '/users', plugin: userRoutes },
   { prefix: '/audit-logs', plugin: auditRoutes },
 
   // --- phase 2: organisation and people ---------------------------------

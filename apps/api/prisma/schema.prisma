@@ -21,9 +21,24 @@ datasource db {
 // --------------------------------------------------------------------- enums
 
 enum UserStatus {
+  /// Created but has never set a password. Cannot sign in; the only thing an
+  /// invited account may do is complete a password reset, which activates it.
   INVITED
   ACTIVE
   SUSPENDED
+}
+
+/// Why an account is suspended.
+///
+/// The distinction is the whole point: an account switched off because the
+/// person left may be switched back on when they return, and an account
+/// switched off because of a security concern may not. Without recording
+/// which, reactivating an employee would silently undo a deliberate lock.
+enum UserSuspensionReason {
+  /// Suspended automatically because the employee was terminated.
+  EMPLOYMENT_TERMINATED
+  /// Suspended deliberately by an administrator, for any other reason.
+  ADMINISTRATIVE
 }
 
 enum EmployeeStatus {
@@ -458,6 +473,17 @@ model User {
   status             UserStatus @default(ACTIVE)
   mustChangePassword Boolean    @default(false)
 
+  /// Set while suspended, cleared on restore. Null on an account that has never
+  /// been suspended.
+  suspendedReason UserSuspensionReason?
+  suspendedAt     DateTime?
+  /// The user who suspended this account. Null when the system did it.
+  suspendedById   String?
+  /// What the status was before suspension, so restoring puts it back rather
+  /// than assuming everyone was ACTIVE. An invited account that never signed in
+  /// returns to INVITED, not to a working login it never had.
+  statusBeforeSuspension UserStatus?
+
   // Deterministic avatar tint so the UI needs no uploaded images yet
   avatarColor String @default("#3f6cd6")
 
@@ -473,6 +499,10 @@ model User {
   userRoles UserRole[]
   sessions  Session[]
   auditLogs AuditLog[] @relation("AuditActor")
+
+  /// Who suspended this account, when an administrator did.
+  suspendedBy   User?  @relation("UserSuspendedBy", fields: [suspendedById], references: [id], onDelete: SetNull)
+  suspendedUsers User[] @relation("UserSuspendedBy")
 
   // --- phase 3 ---
   notifications       Notification[]

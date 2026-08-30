@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Building2, Clock, KeyRound, Layers3, ScrollText } from 'lucide-react';
+import { Building2, Clock, KeyRound, Layers3, ScrollText, UsersRound } from 'lucide-react';
 import { PERMISSIONS, type Permission } from '@hrms/shared';
 import { PageHeader } from '@/components/layout/page-header';
 import { usePermissions } from '@/features/auth/session-context';
@@ -9,6 +9,7 @@ const TABS: Array<{ to: string; label: string; icon: typeof Building2; permissio
   { to: '/settings/company', label: 'Company', icon: Building2, permission: PERMISSIONS.COMPANY_READ },
   { to: '/settings/attendance', label: 'Attendance policy', icon: Clock, permission: PERMISSIONS.COMPANY_READ },
   { to: '/settings/attendance-policies', label: 'Policy overrides', icon: Layers3, permission: PERMISSIONS.COMPANY_READ },
+  { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },
   { to: '/settings/audit', label: 'Audit log', icon: ScrollText, permission: PERMISSIONS.AUDIT_READ },
 ];

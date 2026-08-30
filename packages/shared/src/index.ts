@@ -10,3 +10,4 @@ export * from './dto/approvals.js';
 export * from './dto/time.js';
 export * from './dto/leave.js';
 export * from './dto/payroll.js';
+export * from './dto/user.js';

@@ -16,6 +16,7 @@ import { buildMeta, buildOrderBy, toSkipTake } from '../../core/pagination.js';
 import { diff, recordAudit } from '../../core/audit.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
+import { restoreUser, suspendUser } from '../users/users.service.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import {
   DETAIL_INCLUDE,
@@ -389,12 +390,16 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         include: DETAIL_INCLUDE,
       });
 
-      // A departing employee must not keep a working login.
+      // A departing employee must not keep a working login. Suspending records
+      // *why*, so reactivating them later can tell the difference between an
+      // account switched off because they left and one switched off for a
+      // reason of its own.
+      let accountOutcome: { changed: boolean; revokedSessions: number } | null = null;
       if (before.userId) {
-        await prisma.user.update({ where: { id: before.userId }, data: { status: 'SUSPENDED' } });
-        await prisma.session.updateMany({
-          where: { userId: before.userId, revokedAt: null },
-          data: { revokedAt: new Date() },
+        accountOutcome = await suspendUser({
+          userId: before.userId,
+          reason: 'EMPLOYMENT_TERMINATED',
+          actorUserId: auth.userId,
         });
       }
 
@@ -404,9 +409,14 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         action: 'employee.terminate',
         entityType: 'Employee',
         entityId: id,
-        summary: `Terminated ${updated.firstName} ${updated.lastName}${input.reason ? ` - ${input.reason}` : ''}`.trim(),
+        summary: `Terminated ${updated.firstName} ${updated.lastName}${input.reason ? ` - ${input.reason}` : ''}${accountOutcome?.changed ? `; suspended their login and revoked ${accountOutcome.revokedSessions} session(s)` : ''}`.trim(),
         before: { status: before.status, terminationDate: before.terminationDate },
-        after: { status: 'TERMINATED', terminationDate: input.terminationDate },
+        after: {
+          status: 'TERMINATED',
+          terminationDate: input.terminationDate,
+          accountSuspended: accountOutcome?.changed ?? false,
+          sessionsRevoked: accountOutcome?.revokedSessions ?? 0,
+        },
         request,
       });
 
@@ -435,15 +445,40 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         include: DETAIL_INCLUDE,
       });
 
+      /**
+       * Restore the login too - but only if the termination is what switched it
+       * off. An account an administrator suspended for a separate reason stays
+       * suspended: reactivating an employee is not a decision about a security
+       * concern somebody raised deliberately, and silently undoing one would be
+       * the worst kind of helpful.
+       */
+      let accountRestored = false;
+      let accountRefusal: string | null = null;
+      if (before.userId) {
+        const outcome = await restoreUser({
+          userId: before.userId,
+          onlyIfTerminationSuspended: true,
+        });
+        accountRestored = outcome.restored;
+        if (!outcome.restored && outcome.refusal === 'SUSPENDED_ADMINISTRATIVELY') {
+          accountRefusal = 'suspended separately by an administrator, so it was left suspended';
+        }
+      }
+
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
         action: 'employee.reactivate',
         entityType: 'Employee',
         entityId: id,
-        summary: `Reactivated ${updated.firstName} ${updated.lastName}`.trim(),
+        summary: `Reactivated ${updated.firstName} ${updated.lastName}`.trim() +
+          (accountRestored
+            ? '; restored their login'
+            : accountRefusal
+              ? `; login ${accountRefusal}`
+              : ''),
         before: { status: 'TERMINATED' },
-        after: { status: 'ACTIVE' },
+        after: { status: 'ACTIVE', accountRestored, accountNote: accountRefusal },
         request,
       });
 

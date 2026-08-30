@@ -95,6 +95,7 @@ const PayrollSettingsPage = lazyPage(
 );
 const PayslipsPage = lazyPage(() => import('@/features/payroll/payslips-page'), 'PayslipsPage');
 const PayslipPage = lazyPage(() => import('@/features/payroll/payslip-page'), 'PayslipPage');
+const UsersPage = lazyPage(() => import('@/features/settings/users-page'), 'UsersPage');
 const ApprovalsListPage = lazyPage(
   () => import('@/features/approvals/approvals-list-page'),
   'ApprovalsListPage',
@@ -343,6 +344,9 @@ export function AppRoutes() {
               <Route path="company" element={<CompanySettingsPage />} />
               <Route path="attendance" element={<AttendancePolicyPage />} />
               <Route path="attendance-policies" element={<AttendancePoliciesPage />} />
+            </Route>
+            <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
+              <Route path="users" element={<UsersPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.ROLE_READ} />}>
               <Route path="roles" element={<RolesPage />} />

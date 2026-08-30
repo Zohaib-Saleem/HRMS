@@ -39,7 +39,10 @@ export async function requestPasswordReset(
     select: { id: true, email: true, firstName: true, status: true, companyId: true },
   });
 
-  if (!user || user.status !== 'ACTIVE') {
+  // An INVITED account has no usable password and no other way to obtain one:
+  // this link is the whole invitation. A SUSPENDED account gets nothing, so a
+  // reset cannot be used to walk around a suspension.
+  if (!user || (user.status !== 'ACTIVE' && user.status !== 'INVITED')) {
     request.log.info(
       { email },
       'password reset requested for unknown or inactive account - no email sent',
@@ -122,14 +125,24 @@ export async function completePasswordReset(
   });
 
   if (!record || record.usedAt || record.expiresAt <= new Date()) throw invalid;
-  if (record.user.status !== 'ACTIVE') throw invalid;
+  if (record.user.status !== 'ACTIVE' && record.user.status !== 'INVITED') throw invalid;
 
   const passwordHash = await hashPassword(newPassword);
+  // Setting a password is what turns an invitation into an account. Any other
+  // status is left exactly as it was - completing a reset never lifts a
+  // suspension, because a suspended account never receives a link to begin with.
+  const activating = record.user.status === 'INVITED';
 
   await prisma.$transaction([
     prisma.user.update({
       where: { id: record.userId },
-      data: { passwordHash, mustChangePassword: false, failedLoginCount: 0, lockedUntil: null },
+      data: {
+        passwordHash,
+        mustChangePassword: false,
+        failedLoginCount: 0,
+        lockedUntil: null,
+        ...(activating ? { status: 'ACTIVE' as const } : {}),
+      },
     }),
     prisma.passwordResetToken.update({
       where: { id: record.id },
@@ -143,10 +156,12 @@ export async function completePasswordReset(
   await recordAudit({
     companyId: record.user.companyId,
     actorId: record.userId,
-    action: 'auth.password_reset.completed',
+    action: activating ? 'auth.invitation.accepted' : 'auth.password_reset.completed',
     entityType: 'User',
     entityId: record.userId,
-    summary: `Password reset completed; revoked ${revoked} session${revoked === 1 ? '' : 's'}`,
+    summary: activating
+      ? 'Invitation accepted; account activated'
+      : `Password reset completed; revoked ${revoked} session${revoked === 1 ? '' : 's'}`,
     request,
   });
 }
