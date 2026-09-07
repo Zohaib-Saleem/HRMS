@@ -11,17 +11,18 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "npm run shared:build && concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev": "npm run packages:build && concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "npm -w @hrms/api run dev",
     "dev:web": "npm -w @hrms/web run dev",
-    "shared:build": "npm -w @hrms/shared run build",
-    "build": "npm run shared:build && npm -w @hrms/api run build && npm -w @hrms/web run build",
-    "typecheck": "npm run shared:build && npm -w @hrms/api run typecheck && npm -w @hrms/web run typecheck",
+    "packages:build": "npm -w @hrms/shared run build && npm -w @hrms/zkteco run build",
+    "build": "npm run packages:build && npm -w @hrms/api run build && npm -w @hrms/web run build && npm -w @hrms/connector run build",
+    "typecheck": "npm run packages:build && npm -w @hrms/api run typecheck && npm -w @hrms/web run typecheck && npm -w @hrms/connector run typecheck",
     "db:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/setup-db.ps1",
     "db:migrate": "npm -w @hrms/api run db:migrate",
     "db:seed": "npm -w @hrms/api run db:seed",
     "db:reset": "npm -w @hrms/api run db:reset",
-    "db:studio": "npm -w @hrms/api run db:studio"
+    "db:studio": "npm -w @hrms/api run db:studio",
+    "connector:build": "npm run packages:build && npm -w @hrms/connector run build"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

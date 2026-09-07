@@ -3,17 +3,37 @@ import { paginationQuerySchema } from './common.js';
 
 /** Attendance terminals: configuration, sync history, raw punches, mapping. */
 
-export const DEVICE_PROTOCOLS = ['ZKTECO_TCP', 'ZKTECO_ADMS'] as const;
+export const DEVICE_PROTOCOLS = ['ZKTECO_TCP', 'ZKTECO_ADMS', 'ZKTECO_LAN_CONNECTOR'] as const;
 export type DeviceProtocol = (typeof DEVICE_PROTOCOLS)[number];
 
 export const DEVICE_PROTOCOL_LABELS: Record<DeviceProtocol, string> = {
-  ZKTECO_TCP: 'ZKTeco (pull over TCP)',
+  ZKTECO_TCP: 'ZKTeco (this server pulls over TCP)',
   ZKTECO_ADMS: 'ZKTeco ADMS (device pushes)',
+  ZKTECO_LAN_CONNECTOR: 'ZKTeco via local connector (connector pulls on the LAN)',
 };
 
-/** A pushing device is never polled, so half the settings do not apply to it. */
+export const DEVICE_PROTOCOL_HINTS: Record<DeviceProtocol, string> = {
+  ZKTECO_TCP: 'Only works when this server can open a socket to the device address.',
+  ZKTECO_ADMS: 'Only works on firmware that has a Cloud Server / ADMS setting.',
+  ZKTECO_LAN_CONNECTOR:
+    'For a terminal on an office LAN this server cannot reach, with no ADMS option. A small service on that LAN polls the terminal and posts what it read over HTTPS.',
+};
+
+/**
+ * Whether this server ever opens a connection to the device.
+ *
+ * False for both of the inbound protocols, and for the same reason in both
+ * cases: nothing here can reach the terminal, so a connection test, a manual
+ * sync and a polling interval are all meaningless settings. The records arrive
+ * on their own or not at all.
+ */
 export function isPushProtocol(protocol: DeviceProtocol): boolean {
-  return protocol === 'ZKTECO_ADMS';
+  return protocol === 'ZKTECO_ADMS' || protocol === 'ZKTECO_LAN_CONNECTOR';
+}
+
+/** True when records arrive from a connector rather than from the device itself. */
+export function isConnectorProtocol(protocol: DeviceProtocol): boolean {
+  return protocol === 'ZKTECO_LAN_CONNECTOR';
 }
 
 export const DEVICE_STATUSES = ['UNKNOWN', 'ONLINE', 'OFFLINE', 'ERROR'] as const;
@@ -140,6 +160,15 @@ export interface DeviceRecord {
    * an administrator could get it back from.
    */
   pushUrl: string | null;
+  /**
+   * The base URL a local connector should be configured with, for a device on
+   * the connector protocol. Never carries the token: unlike a terminal, the
+   * connector can hold a secret in a config file, so there is no reason to put
+   * one in a URL that gets pasted into chat windows.
+   */
+  connectorUrl: string | null;
+  /** Version the connector last reported, so a stale one is visible. */
+  connectorVersion: string | null;
   mappedUsers: number;
   createdAt: string;
 }
@@ -262,4 +291,113 @@ export interface ReprocessResult {
   daysRecalculated: number;
   daysSkipped: number;
   daysFailed: number;
+}
+
+// --------------------------------------------------------------- LAN connector
+
+/**
+ * What a local connector posts.
+ *
+ * The connector is a courier, not an interpreter. It sends the terminal's own
+ * wall-clock reading verbatim and nothing derived from it - no instant, no day,
+ * no timezone. The device zone is configuration held by the HRMS, so correcting
+ * a mis-set zone is an edit on the Devices page rather than a visit to whatever
+ * machine the connector runs on.
+ */
+export const connectorPunchSchema = z.object({
+  /** The PIN as enrolled on the terminal. */
+  deviceUserId: z.string().trim().min(1).max(64),
+  /** The device reading exactly as it came off the wire: `YYYY-MM-DD HH:mm:ss`. */
+  rawTimestamp: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/, 'Expected YYYY-MM-DD HH:mm:ss.'),
+  /** Direction as the device reported it, already named by the adapter. */
+  punchState: z.string().trim().max(64).nullish(),
+  verifyMode: z.string().trim().max(64).nullish(),
+  /** Only some firmware supplies one. */
+  deviceTransactionId: z.string().trim().max(64).nullish(),
+});
+
+export type ConnectorPunch = z.infer<typeof connectorPunchSchema>;
+
+/**
+ * One upload.
+ *
+ * Bounded at a thousand records because a connector catching up after a long
+ * outage must be made to send several batches rather than one enormous request:
+ * a batch that is too big to finish is a batch that is retried forever.
+ */
+export const connectorBatchSchema = z.object({
+  serialNumber: z.string().trim().min(1).max(64),
+  connectorVersion: z.string().trim().max(32).nullish(),
+  /** The connector's own idea of the terminal clock, for drift reporting. */
+  deviceTime: z.string().trim().max(64).nullish(),
+  punches: z.array(connectorPunchSchema).max(1000, 'Send at most 1000 punches per batch.'),
+});
+
+export type ConnectorBatch = z.infer<typeof connectorBatchSchema>;
+
+/** The enrolment roster, so PINs can be mapped to people without a site visit. */
+export const connectorRosterSchema = z.object({
+  serialNumber: z.string().trim().min(1).max(64),
+  connectorVersion: z.string().trim().max(32).nullish(),
+  users: z
+    .array(
+      z.object({
+        deviceUserId: z.string().trim().min(1).max(64),
+        name: z.string().trim().max(120).nullish(),
+        privilege: z.coerce.number().int().min(0).max(255).nullish(),
+        cardNumber: z.string().trim().max(64).nullish(),
+      }),
+    )
+    .max(20000, 'That is more users than any terminal holds.'),
+});
+
+export type ConnectorRoster = z.infer<typeof connectorRosterSchema>;
+
+/**
+ * What the connector learns at startup.
+ *
+ * Everything here is configuration the HRMS already owns. The connector holds
+ * only what it cannot be told - the terminal address and its own credential -
+ * so a change of polling interval or timezone does not mean editing a file on a
+ * machine in another building.
+ */
+export interface ConnectorHandshake {
+  deviceId: string;
+  deviceName: string;
+  serialNumber: string | null;
+  /** The zone the HRMS will use to read the timestamps sent. */
+  timeZone: string;
+  /** How often the connector should poll the terminal. */
+  pollIntervalMinutes: number;
+  /**
+   * The instant the HRMS has already accounted for, as a device wall-clock
+   * reading in the device zone, or null when it has none.
+   *
+   * A hint, never an instruction. The connector keeps its own watermark; this
+   * exists so a connector reinstalled on a fresh machine does not replay years
+   * of history to a server that would only deduplicate it.
+   */
+  cursorHint: string | null;
+  serverTime: string;
+}
+
+export interface ConnectorBatchResult {
+  received: number;
+  imported: number;
+  duplicates: number;
+  unmapped: number;
+  errors: number;
+  recalculatedDays: number;
+  syncId: string | null;
+  /** The watermark hint after this batch, in the same form as the handshake. */
+  cursorHint: string | null;
+}
+
+export interface ConnectorRosterResult {
+  received: number;
+  stored: number;
+  unmapped: number;
 }

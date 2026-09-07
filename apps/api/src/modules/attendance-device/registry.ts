@@ -1,5 +1,5 @@
 import type { AttendanceDeviceProtocol } from '@prisma/client';
-import type { AttendanceDeviceAdapter } from './adapter.js';
+import type { AttendanceDeviceAdapter } from '@hrms/zkteco';
 import { ZkTecoAdapter } from './zkteco.adapter.js';
 
 /**
@@ -18,13 +18,17 @@ const ADAPTERS: Partial<Record<AttendanceDeviceProtocol, AttendanceDeviceAdapter
 export function adapterFor(protocol: AttendanceDeviceProtocol): AttendanceDeviceAdapter {
   const adapter = ADAPTERS[protocol];
   if (!adapter) {
-    // ADMS is a push protocol: the device posts to us, so there is nothing to
-    // pull. Saying so plainly beats a null dereference three frames deeper.
-    throw new Error(
-      protocol === 'ZKTECO_ADMS'
-        ? 'ADMS devices push their own records; they are not polled. Configure the device to post to this server instead.'
-        : `No adapter is registered for ${protocol}.`,
-    );
+    // Both inbound protocols land here, and saying which one plainly beats a
+    // null dereference three frames deeper. Neither is a missing feature: this
+    // server has no route to either device, which is the entire reason those
+    // protocols exist.
+    const reason: Partial<Record<AttendanceDeviceProtocol, string>> = {
+      ZKTECO_ADMS:
+        'ADMS devices push their own records; they are not polled. Configure the device to post to this server instead.',
+      ZKTECO_LAN_CONNECTOR:
+        'This device is reached by a connector on its own LAN; this server never opens a connection to it. Run the connector there and let it post the records.',
+    };
+    throw new Error(reason[protocol] ?? `No adapter is registered for ${protocol}.`);
   }
   return adapter;
 }

@@ -10,14 +10,25 @@
  * moment an adapter can do it, a bug in the HRMS becomes a bug in the door.
  */
 
-export interface DeviceConnection {
+/**
+ * Everything needed to hold a conversation with a terminal.
+ *
+ * No timezone, deliberately. Moving bytes off a device has no zone in it, and
+ * the on-site connector - which does exactly that and nothing else - has no
+ * business holding a setting it would only get wrong.
+ */
+export interface TerminalAddress {
   host: string;
   port: number;
-  /** The zone the device clock is set to, used to place its readings in time. */
-  timeZone: string;
   /** Decrypted comm key, or null when the device is not protected by one. */
   commKey: string | null;
   timeoutMs: number;
+}
+
+/** A terminal, plus the zone the HRMS believes its clock is set to. */
+export interface DeviceConnection extends TerminalAddress {
+  /** The zone the device clock is set to, used to place its readings in time. */
+  timeZone: string;
 }
 
 export interface DeviceInfo {

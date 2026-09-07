@@ -182,6 +182,7 @@ model Company {
   attendanceDeviceMappings AttendanceDeviceUserMapping[]
   attendanceDeviceSyncs    AttendanceDeviceSync[]
   attendanceRawPunches     AttendanceRawPunch[]
+  attendanceDeviceUsers    AttendanceDeviceEnrolledUser[]
 
   // --- phase 4 ---
   leaveTypes    LeaveType[]
@@ -1263,6 +1264,20 @@ enum AttendanceDeviceProtocol {
   /// ZKTeco ADMS / iclock push. The device posts records to the HRMS on a
   /// schedule it manages itself; nothing is pulled.
   ZKTECO_ADMS
+  /// ZKTeco terminal reached by a connector running on the device's own LAN.
+  ///
+  /// The terminal still speaks the plain TCP protocol above; what changes is
+  /// who opens the socket. A device sitting on an office LAN that this server
+  /// has no route to cannot be polled from here at all, and a terminal whose
+  /// firmware has no ADMS option cannot push either. The connector closes that
+  /// gap: it polls over the LAN exactly as ZKTECO_TCP would, then posts what it
+  /// read over ordinary outbound HTTPS.
+  ///
+  /// Deliberately its own protocol rather than a flag on ZKTECO_TCP. The
+  /// scheduler polls by protocol, so a device recorded as TCP is dialled every
+  /// interval whether or not a route exists - which is precisely the failure
+  /// this value exists to stop.
+  ZKTECO_LAN_CONNECTOR
 }
 
 enum AttendanceDeviceStatus {
@@ -1344,12 +1359,21 @@ model AttendanceDevice {
 
   // --- ADMS push (phase 8) -------------------------------------------------
 
-  /// Last time the device posted anything, whether or not it carried records.
+  /// Last time the device - or its connector - posted anything, whether or not
+  /// it carried records.
   lastPushAt DateTime?
 
-  /// Secret path segment the device must include in its server URL, encrypted
-  /// at rest. ADMS itself authenticates with nothing but a serial number, so
-  /// this is what turns a guessable identifier into a credential.
+  /// Version string the LAN connector last reported, so an operator can tell a
+  /// stale connector from a stale device without going to the office.
+  connectorVersion String?
+
+  /// The device's shared secret, encrypted at rest.
+  ///
+  /// Used two ways, because both callers have the same problem: a serial number
+  /// printed on a case is an identifier, not a credential. An ADMS terminal
+  /// carries it as a path segment in its server URL, which is the only place
+  /// its firmware can put one; a LAN connector sends it as a bearer token.
+  /// Either way it is what turns a guessable identifier into a credential.
   pushTokenCipher String?
 
   /// Networks the device may push from. Empty means any source, which is the
@@ -1363,9 +1387,10 @@ model AttendanceDevice {
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   location Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
-  mappings AttendanceDeviceUserMapping[]
-  syncs    AttendanceDeviceSync[]
-  punches  AttendanceRawPunch[]
+  mappings      AttendanceDeviceUserMapping[]
+  syncs         AttendanceDeviceSync[]
+  punches       AttendanceRawPunch[]
+  enrolledUsers AttendanceDeviceEnrolledUser[]
 
   @@unique([companyId, name])
   @@unique([companyId, serialNumber])
@@ -1403,6 +1428,42 @@ model AttendanceDeviceUserMapping {
   @@unique([deviceId, deviceUserId])
   @@index([companyId, employeeId])
   @@map("attendance_device_user_mappings")
+}
+
+/// The enrolment roster a device holds, as last reported.
+///
+/// A cache, never a source of truth. It exists so the mapping screen can show
+/// "PIN 1007 - AHMED" instead of asking an administrator to guess which number
+/// belongs to whom, which is the difference between a mapping step that takes
+/// ten minutes and one that takes an afternoon at the terminal.
+///
+/// Nothing here attributes a punch. Attribution is AttendanceDeviceUserMapping
+/// and only that: a roster entry appearing or disappearing must never silently
+/// change whose attendance a punch became.
+model AttendanceDeviceEnrolledUser {
+  id        String @id @default(cuid())
+  companyId String
+  deviceId  String
+
+  /// The PIN as the device reports it, as a string. Terminals pad and reuse
+  /// these, so it is never treated as a number.
+  deviceUserId String
+  name         String?
+  privilege    Int?
+  cardNumber   String?
+
+  /// When the connector last saw this user on the device.
+  seenAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  device  AttendanceDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, deviceUserId])
+  @@index([companyId, deviceId])
+  @@map("attendance_device_enrolled_users")
 }
 
 /// One synchronisation run, kept whether it succeeded or not.

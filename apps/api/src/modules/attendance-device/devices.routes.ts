@@ -119,6 +119,21 @@ function pushUrlFor(row: DeviceRow, includeToken: boolean): string | null {
   return token ? `${base}/iclock/${encodeURIComponent(token)}` : null;
 }
 
+/**
+ * The base URL a local connector is pointed at.
+ *
+ * No token in it, and no `canManage` gate either, because the two go together:
+ * a connector holds its credential in a config file rather than in a URL, so
+ * this string is not a secret and there is nothing here to withhold. Setting
+ * the token is still `device.manage`; reading an address is not.
+ */
+function connectorUrlFor(row: DeviceRow): string | null {
+  if (row.protocol !== 'ZKTECO_LAN_CONNECTOR') return null;
+  const origin = env.DEVICE_PUSH_ORIGIN;
+  if (!origin) return null;
+  return `${origin.replace(/[/]+$/, '')}/connector`;
+}
+
 function toRecord(row: DeviceRow, canManage: boolean): DeviceRecord {
   return {
     id: row.id,
@@ -146,6 +161,8 @@ function toRecord(row: DeviceRow, canManage: boolean): DeviceRecord {
     allowedPushCidrs: row.allowedPushCidrs,
     lastPushAt: row.lastPushAt?.toISOString() ?? null,
     pushUrl: pushUrlFor(row, canManage),
+    connectorUrl: connectorUrlFor(row),
+    connectorVersion: row.connectorVersion,
     mappedUsers: row._count.mappings,
     createdAt: row.createdAt.toISOString(),
   };
@@ -488,6 +505,12 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
    * already stored when it cannot, so the screen still works while a device is
    * offline. Nothing here creates an employee: an unknown biometric user is
    * shown as unmapped and waits for a person to decide.
+   *
+   * A connector device is never dialled - this server has no route to it, which
+   * is the whole point of the protocol - so its roster comes from whatever the
+   * connector last reported. That cache is the only thing standing between an
+   * administrator and a trip to the terminal to read PINs off its screen, so an
+   * empty one says which side is missing rather than showing a bare list.
    */
   app.get('/:id/users', async (request, reply) => {
     const auth = requireAuthContext(request);
@@ -518,6 +541,17 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
       } catch (err) {
         reachable = false;
         error = err instanceof Error ? err.message : 'The device could not be reached.';
+      }
+    } else if (device.protocol === 'ZKTECO_LAN_CONNECTOR') {
+      const roster = await prisma.attendanceDeviceEnrolledUser.findMany({
+        where: { deviceId: id },
+        select: { deviceUserId: true, name: true, privilege: true, cardNumber: true },
+      });
+      deviceUsers = roster;
+      if (roster.length === 0) {
+        reachable = false;
+        error =
+          'The connector has not sent this device\u2019s user list yet. Only users already mapped are shown.';
       }
     }
 

@@ -135,8 +135,9 @@ export const DOC_ENTRIES: readonly DocEntry[] = [
   {
     slug: 'devices',
     file: 'HRMS-DEVICE-GUIDE.md',
-    title: 'Device guide (ZKTeco, ADMS)',
-    summary: 'Registering terminals, pull and push synchronisation, and raw punches.',
+    title: 'Device guide (ZKTeco, ADMS, connector)',
+    summary:
+      'Registering terminals, the three synchronisation routes and how to pick one, and raw punches.',
     category: 'time',
     permission: PERMISSIONS.DEVICE_READ,
     order: 2,

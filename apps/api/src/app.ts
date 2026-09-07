@@ -9,6 +9,7 @@ import { prisma } from './core/db.js';
 import { resolveAuthContext } from './auth/session.js';
 import { registerModules } from './modules/index.js';
 import { admsRoutes } from './modules/attendance-device/adms.routes.js';
+import { connectorRoutes } from './modules/attendance-device/connector.routes.js';
 
 /**
  * The secret path segment a pushing terminal is configured with.
@@ -103,6 +104,13 @@ export async function buildApp(): Promise<FastifyInstance> {
   // path is set on the device itself and most firmware cannot express a prefix.
   // These routes carry no session; they authenticate the device instead.
   await app.register(admsRoutes);
+
+  // The LAN connector posts here for the same reason: it is not a signed-in
+  // person and holds no session. It is registered separately from the ADMS
+  // routes so it keeps Fastify's JSON parsing - those routes replace the
+  // parser wholesale to cope with firmware that sends attendance as untyped
+  // text, and that must not leak into an endpoint with a real contract.
+  await app.register(connectorRoutes);
 
   await app.register(registerModules, { prefix: '/api/v1' });
 

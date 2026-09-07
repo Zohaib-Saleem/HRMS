@@ -17,23 +17,31 @@
 
 ---
 
-## 1. Two directions, and which one you need
+## 1. Three routes, and which one you need
 
-| | Pull (`ZKTECO_TCP`) | Push (`ZKTECO_ADMS`) |
-|---|---|---|
-| Who opens the connection | the server | the device |
-| Server needs a route to the device | **yes** | no |
-| Works behind NAT or on mobile data | no | **yes** |
-| Scheduled by | `syncIntervalMinutes` on the device | the device's own poll delay |
-| Cursor / watermark | yes | not used |
-| "Test" and "Sync" buttons | shown | hidden — nothing to connect to |
+| | Pull (`ZKTECO_TCP`) | Push (`ZKTECO_ADMS`) | Connector (`ZKTECO_LAN_CONNECTOR`) |
+|---|---|---|---|
+| Who opens the connection to the terminal | the server | nobody — it dials out | a connector on the terminal's LAN |
+| Server needs a route to the device | **yes** | no | no |
+| Works behind NAT or on mobile data | no | **yes** | **yes** |
+| Needs ADMS-capable firmware | no | **yes** | no |
+| Needs software installed on site | no | no | **yes** |
+| Scheduled by | `syncIntervalMinutes` on the device | the device's own poll delay | `syncIntervalMinutes`, sent to the connector |
+| Cursor / watermark | yes | not used | the connector keeps its own |
+| "Test" and "Sync" buttons | shown | hidden — nothing to connect to | hidden — same reason |
 
-Both land in the same place: raw punches in `attendance_raw_punches`, paired
-into attendance records by the same engine. A day scored from a pushed punch is
-indistinguishable from one scored from a polled punch.
+All three land in the same place: raw punches in `attendance_raw_punches`,
+paired into attendance records by the same engine. A day scored from a pushed
+punch is indistinguishable from one scored from a polled punch.
 
-**Choose pull** if the terminal has a static LAN address the server can reach.
-**Choose push** if it does not.
+Choose by elimination:
+
+1. **Pull** if the terminal has a static LAN address this server can reach.
+2. **Push** if it does not, but the firmware has a *Cloud Server* / *ADMS*
+   setting.
+3. **Connector** if neither — an office LAN the server cannot reach, on firmware
+   with no ADMS option. Something has to be installed on that network, which is
+   why it is the last resort rather than the default.
 
 ---
 
@@ -44,13 +52,13 @@ indistinguishable from one scored from a polled punch.
 | Field | Required | Notes |
 |---|---|---|
 | Name | yes | Unique per company |
-| IP address or hostname | yes | For push devices this is recorded but not dialled |
+| IP address or hostname | yes | For push and connector devices this is recorded but never dialled from here |
 | Port | yes | ZKTeco defaults to **4370** |
-| Protocol | yes | Pull over TCP, or ADMS push |
+| Protocol | yes | Pull over TCP, ADMS push, or local connector |
 | Device timezone | yes | The zone the **terminal's own clock** is set to |
-| Serial number | pull: filled in by *Test*; **push: required** | The only thing a pushing device sends to identify itself |
+| Serial number | pull: filled in by *Test*; **push and connector: required** | How an inbound caller identifies which device it is |
 | Location | no | |
-| Sync every (minutes) | pull only | |
+| Sync every (minutes) | pull and connector | Ignored for push; for a connector it is the schedule handed out at handshake |
 | In/out detection | yes | First-in-last-out, or the direction the device reports |
 | Comm key | no | Only if the terminal has one. Stored encrypted, never shown again |
 
@@ -164,25 +172,114 @@ not cost the other six days.
 
 ---
 
-## 5. Security
+## 5. Connector synchronisation
 
-These are the only unauthenticated routes in the system, so it is worth being
-explicit.
+For a terminal on an office LAN this server cannot reach, whose firmware has no
+ADMS option. A small service — the connector — runs on a machine on that LAN. It
+polls the terminal exactly the way pull synchronisation would, then posts what
+it read over ordinary outbound HTTPS. Nothing on the office network is exposed.
 
-| Control | Behaviour |
-|---|---|
-| **Serial number** | Required; must match a registered, enabled, ADMS device. A serial is printed on the case — treat it as an identifier, not a secret |
-| **Push token** | Optional but recommended. Stored encrypted (AES-256-GCM), write-only everywhere except the URL shown to an administrator holding `device.manage`. Once set, the untokened path stops working. **Redacted from request logs** |
-| **Allowed networks** | Optional IPv4 addresses or CIDR ranges. A push from anywhere else is refused with 403 and nothing is stored |
+The connector is a courier. It sends the terminal's raw wall-clock readings and
+nothing derived from them, so the timezone, the pairing rule and the working day
+are all still decided here. A mis-set device timezone is fixed on the Devices
+page, not on a machine in another building.
+
+### Server preparation
+
+`DEVICE_PUSH_ORIGIN` must be set, as for ADMS, and for a connector reaching the
+server across the internet it should be the public HTTPS address rather than a
+LAN one. Without it the endpoints still work; the Devices screen simply cannot
+show you the address to configure.
+
+### Device setup
+
+1. **Attendance → Devices → Add device**, protocol **ZKTeco via local
+   connector**.
+2. Fill in the terminal's LAN address and port, its **serial number**, and the
+   timezone its own clock is set to.
+3. Set a **connector token**. This one is not optional — see below.
+4. Optionally set **allowed networks**. This restricts the address the
+   *connector* posts from, which is the office's public address, not the
+   terminal's LAN address. Getting these two confused blocks a correctly
+   configured connector.
+5. Save, reopen the device, and copy the **server address for the connector**.
+6. Install the connector on a machine on that LAN and configure it with three
+   things: that address, the token, and the terminal's LAN address. Everything
+   else it asks the server for. It is a single file with no dependencies —
+   `apps/connector/README.md` covers the settings, the service install for
+   Linux and Windows, and what every log line means.
+
+### What the connector is told, and what it keeps
+
+At handshake the server hands over the device timezone, the poll interval from
+**Sync every (minutes)**, and a hint at the latest reading already accounted
+for. Changing the interval on the Devices page therefore changes the
+connector's schedule at its next check-in — no visit required.
+
+The hint is a hint. The connector keeps its own watermark; the server's exists
+so that a connector reinstalled on a fresh machine does not replay years of
+history the server would only deduplicate anyway.
+
+A connector batch deliberately does **not** move the device's own pull cursor.
+That watermark belongs to server-side polling, and advancing it here would let a
+later direct poll skip records the connector never happened to send.
+
+### Device users without a site visit
+
+The connector reports the terminal's enrolment roster, so **Device users** shows
+`1007 — AHMED` rather than a bare number. That list is a cache and nothing more:
+it never creates a mapping, never creates an employee, and a name appearing or
+disappearing on a terminal never changes whose attendance a punch became. Until
+the connector has sent one, the screen says so rather than showing an empty list
+you might mistake for "nobody is enrolled".
+
+### Clock drift
+
+A connector may report the terminal's clock alongside a batch. A gap of five
+minutes or more against the server clock is logged as `CONNECTOR_CLOCK_DRIFT`.
+Nothing is corrected automatically: a punch is evidence of when somebody was at
+a door, and quietly shifting it would hide the very fact that explains why shift
+boundaries are being missed. Set the terminal's clock.
+
+### Why the token is mandatory here
+
+A serial number is printed on the device case, so it identifies a device without
+proving anything about the caller. For ADMS a token is optional because some
+firmware genuinely cannot carry one. A connector is software that can hold a
+secret in a config file, so there is no such excuse — and a connector device
+with no token stored would be an unauthenticated ingest endpoint. It therefore
+refuses every request with `409` and a message saying exactly that, until a
+token is set.
+
+---
+
+## 6. Security
+
+The ADMS and connector routes carry no session — the caller is a terminal or a
+service, not a signed-in person — so they are the only routes in the system
+whose entire security boundary is what they check themselves. Worth being
+explicit about.
+
+| Control | ADMS push | Local connector |
+|---|---|---|
+| **Serial number** | Required; must match a registered, enabled device on that protocol. Printed on the case — an identifier, not a secret | Same, and checked *alongside* the token: it is what catches a connector pointed at the wrong terminal in an office with two of them |
+| **Token** | Optional but recommended. Carried as a path segment, because that is the only place the firmware can put one. Once set, the untokened path stops working | **Mandatory.** Carried as `Authorization: Bearer`. A device with none refuses everything with `409` rather than accepting anonymous records |
+| **Allowed networks** | Optional IPv4 addresses or CIDR ranges; anything else is refused with 403 and nothing is stored | Same, but matched against the office's **public** address, not the terminal's LAN address |
+
+Both tokens are stored encrypted (AES-256-GCM) and are write-only: no endpoint
+returns one except the device URL shown to an administrator holding
+`device.manage`, who is the person who has to configure the hardware with it.
+Both are redacted from request logs — the ADMS one out of the URL path, the
+connector one out of the `Authorization` header.
 
 An unknown serial and a wrong token produce an **identical** `401 Unauthorized`
 with no detail, so probing tells an attacker nothing about which half was wrong.
 
 **What these endpoints deliberately cannot do:** read attendance back out, list
 devices or employees, create employees, or accept a command for a device to
-run. `getrequest` always answers "nothing to do" — remote unlock, enrolment and
-log-clearing are exactly the operations that would turn an HRMS bug into a door
-that opens.
+run. `getrequest` always answers "nothing to do", and the connector is given no
+command channel at all — remote unlock, enrolment and log-clearing are exactly
+the operations that would turn an HRMS bug into a door that opens.
 
 Device-management APIs are `device.manage` only. Employees can never add a
 device, change an IP, trigger a command, download another employee's raw data,
@@ -190,7 +287,7 @@ or change a mapping.
 
 ---
 
-## 6. Device user mapping
+## 7. Device user mapping
 
 A terminal knows people by a numeric ID it calls a PIN. The HRMS knows them by
 employee record. **Device users → Map** connects the two.
@@ -208,7 +305,7 @@ the mapping is added, **Reprocess** turns the stored punches into attendance.
 
 ---
 
-## 7. Sync history and diagnostics
+## 8. Sync history and diagnostics
 
 **Attendance → Devices → Sync history** shows one row per run:
 
@@ -241,12 +338,17 @@ loop for the others.
 
 ---
 
-## 8. What is implemented
+## 9. What is implemented
 
 - Device registry with encrypted comm keys and push tokens
 - Pull over the ZKTeco standalone SDK protocol (TCP 4370): framing, session
   handshake, comm-key auth, chunked bulk transfer, packed time format
 - ADMS push: handshake, ATTLOG ingest, command poll, command result
+- LAN connector ingest: handshake, punch batches, enrolment roster cache, and
+  clock-drift reporting, authenticated by bearer token plus serial number
+- The on-site connector itself (`apps/connector`): a single-file agent that
+  polls a terminal over the LAN and posts what it read, with a watermark that
+  advances only on acknowledgement
 - Device user listing and mapping; reprocessing after a mapping is added
 - Cursor watermark with overlap, bounded retry, per-device locking
 - Idempotent import with fingerprint deduplication
@@ -274,7 +376,7 @@ None of these can be settled without the hardware.
 
 ---
 
-## 9. Raw device punches
+## 10. Raw device punches
 
 **Attendance → Device punches.** Read-only, `device.read`.
 

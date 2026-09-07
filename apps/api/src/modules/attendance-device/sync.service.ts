@@ -7,7 +7,7 @@ import { dayKeyInZone } from '../../core/zoned-time.js';
 import { resolveAttendancePolicy } from '../time/attendance-policy.js';
 import { adapterFor, POLLABLE_PROTOCOLS } from './registry.js';
 import { recalculateDays } from './attendance-import.service.js';
-import { DeviceAuthError, type DeviceConnection, type DevicePunch } from './adapter.js';
+import { DeviceAuthError, type DeviceConnection, type DevicePunch } from '@hrms/zkteco';
 
 /**
  * Pulling transactions off a terminal and turning them into punches.

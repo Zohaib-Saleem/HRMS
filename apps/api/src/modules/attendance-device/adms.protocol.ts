@@ -1,5 +1,5 @@
 import { instantInZone } from '../../core/zoned-time.js';
-import type { DevicePunch } from './adapter.js';
+import type { DevicePunch } from '@hrms/zkteco';
 
 /**
  * The ADMS (iclock) push format.

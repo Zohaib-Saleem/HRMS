@@ -17,6 +17,8 @@ import {
 import {
   DEVICE_PROTOCOLS,
   DEVICE_PROTOCOL_LABELS,
+  DEVICE_PROTOCOL_HINTS,
+  isConnectorProtocol,
   isPushProtocol,
   DEVICE_STATUS_LABELS,
   PERMISSIONS,
@@ -269,6 +271,11 @@ export function DevicesPage() {
                       <TD className="text-[12.5px] text-muted-foreground">
                         {DEVICE_PROTOCOL_LABELS[row.protocol]}
                         <span className="block text-[11.5px]">{row.timeZone}</span>
+                        {row.connectorVersion ? (
+                          <span className="tabular block text-[11.5px]">
+                            connector {row.connectorVersion}
+                          </span>
+                        ) : null}
                       </TD>
                       <TD className="text-[13px] text-muted-foreground">
                         {row.locationName ?? '--'}
@@ -461,8 +468,13 @@ function DeviceDrawer({
         },
   });
 
-  // A pushing device is never polled, so the settings it needs are different.
-  const isPush = isPushProtocol(watch('protocol'));
+  // Neither inbound protocol is polled from here, so the settings both need are
+  // different - but they differ from each other too: a terminal is handed a URL
+  // and a connector is handed a token, and the sync interval is meaningless to
+  // one and the connector's whole schedule to the other.
+  const protocol = watch('protocol');
+  const isPush = isPushProtocol(protocol);
+  const isConnector = isConnectorProtocol(protocol);
 
   const mutation = useMutation({
     mutationFn: (values: DeviceInput) => {
@@ -516,7 +528,13 @@ function DeviceDrawer({
             <FormField label="Port" htmlFor="dev-port" error={formState.errors.port?.message} required hint="ZKTeco terminals default to 4370.">
               <Input type="number" {...register('port')} className="tabular" />
             </FormField>
-            <FormField label="Protocol" htmlFor="dev-proto" error={formState.errors.protocol?.message} required>
+            <FormField
+              label="Protocol"
+              htmlFor="dev-proto"
+              error={formState.errors.protocol?.message}
+              hint={DEVICE_PROTOCOL_HINTS[protocol]}
+              required
+            >
               <NativeSelect {...register('protocol')}>
                 {DEVICE_PROTOCOLS.map((p) => (
                   <option key={p} value={p}>{DEVICE_PROTOCOL_LABELS[p]}</option>
@@ -541,7 +559,17 @@ function DeviceDrawer({
                 ))}
               </NativeSelect>
             </FormField>
-            <FormField label="Sync every (minutes)" htmlFor="dev-interval" error={formState.errors.syncIntervalMinutes?.message} required>
+            <FormField
+              label={isConnector ? 'Connector polls every (minutes)' : 'Sync every (minutes)'}
+              htmlFor="dev-interval"
+              error={formState.errors.syncIntervalMinutes?.message}
+              hint={
+                isConnector
+                  ? 'Sent to the connector when it checks in, so changing it here changes its schedule.'
+                  : undefined
+              }
+              required
+            >
               <Input type="number" min={1} {...register('syncIntervalMinutes')} className="tabular" />
             </FormField>
             <FormField
@@ -573,33 +601,45 @@ function DeviceDrawer({
             {isPush ? (
               <div className="grid gap-4 rounded-md border border-border bg-muted/30 p-3 sm:col-span-2">
                 <p className="text-[12.5px] text-muted-foreground">
-                  This device posts its records to the server rather than being polled, so the sync
-                  interval above does not apply to it. Point the terminal at the address below.
+                  {isConnector
+                    ? 'This server never opens a connection to this device. A connector on the same network as the terminal polls it and posts what it read, so the address and port above describe where the connector finds the terminal, not where this server does.'
+                    : 'This device posts its records to the server rather than being polled, so the sync interval above does not apply to it. Point the terminal at the address below.'}
                 </p>
 
                 {isEdit ? (
-                  <FormField label="Server address for the device" htmlFor="dev-pushurl" hint={
-                    device.pushUrl
-                      ? 'Type this into the terminal ADMS or Cloud Server settings.'
-                      : 'Set DEVICE_PUSH_ORIGIN on the server to the address terminals can reach it on, then reopen this.'
-                  }>
+                  <FormField
+                    label={isConnector ? 'Server address for the connector' : 'Server address for the device'}
+                    htmlFor="dev-pushurl"
+                    hint={
+                      (isConnector ? device.connectorUrl : device.pushUrl)
+                        ? isConnector
+                          ? 'Put this in the connector configuration, together with the token below.'
+                          : 'Type this into the terminal ADMS or Cloud Server settings.'
+                        : 'Set DEVICE_PUSH_ORIGIN on the server to the address this can be reached on, then reopen this.'
+                    }
+                  >
                     <Input
                       id="dev-pushurl"
                       readOnly
-                      value={device.pushUrl ?? 'Not configured on this server'}
+                      value={
+                        (isConnector ? device.connectorUrl : device.pushUrl) ??
+                        'Not configured on this server'
+                      }
                       className="tabular"
                     />
                   </FormField>
                 ) : null}
 
                 <FormField
-                  label="Push token"
+                  label={isConnector ? 'Connector token' : 'Push token'}
                   htmlFor="dev-pushtoken"
                   error={formState.errors.pushToken?.message}
                   hint={
                     device?.hasPushToken
                       ? 'A token is stored. Leave blank to keep it; type a new one to replace it.'
-                      : 'Optional. A serial number is printed on the device case, so it is not a secret; a token in the server path is.'
+                      : isConnector
+                        ? 'Required. The connector sends nothing until one is set, because a device with no token would be an open ingest endpoint.'
+                        : 'Optional. A serial number is printed on the device case, so it is not a secret; a token in the server path is.'
                   }
                 >
                   <Input
@@ -613,7 +653,11 @@ function DeviceDrawer({
                   label="Allowed networks"
                   htmlFor="dev-cidrs"
                   error={formState.errors.allowedPushCidrs?.message}
-                  hint="Comma separated, e.g. 192.168.1.0/24. Leave empty to accept the device from anywhere."
+                  hint={
+                    isConnector
+                      ? 'Comma separated, e.g. 203.0.113.0/24 - the office public address, not the terminal LAN. Leave empty to accept the connector from anywhere.'
+                      : 'Comma separated, e.g. 192.168.1.0/24. Leave empty to accept the device from anywhere.'
+                  }
                 >
                   <Input
                     id="dev-cidrs"
@@ -630,7 +674,11 @@ function DeviceDrawer({
 
                 {isEdit && device.lastPushAt ? (
                   <p className="text-[12.5px] text-muted-foreground">
-                    Last contact from this device: {when(device.lastPushAt)}
+                    Last contact from {isConnector ? 'the connector' : 'this device'}:{' '}
+                    {when(device.lastPushAt)}
+                    {isConnector && device.connectorVersion
+                      ? ` (version ${device.connectorVersion})`
+                      : ''}
                   </p>
                 ) : null}
               </div>
@@ -813,6 +861,9 @@ function DeviceUsersDrawer({
           <DialogDescription>
             {device?.name} — who is enrolled on the terminal, and which employee each one is.
             Nothing here creates an employee; an unknown enrolment waits to be mapped.
+            {device && isConnectorProtocol(device.protocol)
+              ? ' This terminal is not read from here, so the list is whatever the connector last reported.'
+              : ''}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="p-0">
@@ -838,7 +889,11 @@ function DeviceUsersDrawer({
                         <EmptyState
                           icon={Users}
                           title="No users read from the device"
-                          description="The terminal may be unreachable, or no one is enrolled on it yet."
+                          description={
+                            device && isConnectorProtocol(device.protocol)
+                              ? 'The connector has not sent this terminal\u2019s user list yet. It sends one when it starts up.'
+                              : 'The terminal may be unreachable, or no one is enrolled on it yet.'
+                          }
                         />
                       </TD>
                     </TR>
