@@ -34,6 +34,18 @@ export interface AttendancePolicy {
   defaultGeofenceRadiusM: number;
   ipRestrictionEnabled: boolean;
   allowedCheckInCidrs: string[];
+
+  // --- attendance rules ---------------------------------------------------
+  /** Fallback window for an employee with no shift assignment. */
+  defaultShiftStart: string;
+  defaultShiftEnd: string;
+  overtimeFromShiftEnd: boolean;
+  overtimeCountsEarlyArrival: boolean;
+  overtimeReducedByLateArrival: boolean;
+  lateTrackingEnabled: boolean;
+  earlyDepartureTrackingEnabled: boolean;
+  irregularCheckInEnabled: boolean;
+  irregularCheckInCutoff: string;
 }
 
 const POLICY_SELECT = {
@@ -50,6 +62,15 @@ const POLICY_SELECT = {
   defaultGeofenceRadiusM: true,
   ipRestrictionEnabled: true,
   allowedCheckInCidrs: true,
+  defaultShiftStart: true,
+  defaultShiftEnd: true,
+  overtimeFromShiftEnd: true,
+  overtimeCountsEarlyArrival: true,
+  overtimeReducedByLateArrival: true,
+  lateTrackingEnabled: true,
+  earlyDepartureTrackingEnabled: true,
+  irregularCheckInEnabled: true,
+  irregularCheckInCutoff: true,
 } as const;
 
 /**
@@ -297,6 +318,99 @@ export function overtimeMinutesFor(
   return Math.min(over, policy.overtimeDailyCapMinutes);
 }
 
+/**
+ * The shift a day is measured against.
+ *
+ * Priority, most specific first:
+ *   1. the employee's shift assignment for that date, passed in by the caller
+ *   2. the company's default window
+ *
+ * Nothing below ever reads a clock time that is not one of these two, which is
+ * what keeps 09:00 and 18:00 out of the arithmetic.
+ */
+export function effectiveShift(
+  assigned: ShiftWindow | null,
+  policy: Pick<AttendancePolicy, 'defaultShiftStart' | 'defaultShiftEnd'>,
+): ShiftWindow {
+  return assigned ?? { startTime: policy.defaultShiftStart, endTime: policy.defaultShiftEnd };
+}
+
+/**
+ * Whether the day started too late to be the shift it would be scored against.
+ *
+ * A 14:00 check-in measured against a shift ending at 18:00 is not three hours
+ * of overtime, it is a day that does not fit the shift. Flagging it keeps the
+ * record visible without inventing a figure for it, and the overtime below
+ * returns null rather than zero so "not applicable" stays distinguishable from
+ * "none earned".
+ */
+export function isIrregularArrival(
+  checkInAt: Date | null,
+  policy: Pick<AttendancePolicy, 'irregularCheckInEnabled' | 'irregularCheckInCutoff' | 'timeZone'>,
+  dayKey: DayKey,
+): boolean {
+  if (!policy.irregularCheckInEnabled || !checkInAt) return false;
+  const cutoff = boundaryOn(dayKey, policy.irregularCheckInCutoff, policy.timeZone);
+  return cutoff !== null && checkInAt > cutoff;
+}
+
+/**
+ * Overtime earned after the applicable shift end.
+ *
+ * The break is deliberately not subtracted anywhere: it sits inside the shift
+ * window, so the window already accounts for it. Subtracting it as well would
+ * charge it twice - once as unpaid time and once as overtime the employee never
+ * worked, which is how every ordinary day came to book an hour.
+ *
+ * Returns null when no figure can honestly be produced: an open day, or one
+ * that does not fit its shift.
+ */
+export function overtimeAfterShiftEnd(input: {
+  checkInAt: Date | null;
+  checkOutAt: Date | null;
+  shift: ShiftWindow;
+  policy: Pick<
+    AttendancePolicy,
+    | 'overtimeEnabled'
+    | 'overtimeDailyCapMinutes'
+    | 'overtimeCountsEarlyArrival'
+    | 'overtimeReducedByLateArrival'
+    | 'graceMinutes'
+    | 'timeZone'
+  >;
+  dayKey: DayKey;
+  irregular: boolean;
+}): number | null {
+  const { checkInAt, checkOutAt, shift, policy, dayKey, irregular } = input;
+
+  if (!policy.overtimeEnabled) return 0;
+  // No departure, no measurable overtime - the day is still open.
+  if (!checkOutAt) return null;
+  if (irregular) return null;
+
+  const end = boundaryOn(dayKey, shift.endTime, policy.timeZone);
+  if (!end) return null;
+
+  let minutes = Math.round((checkOutAt.getTime() - end.getTime()) / 60_000);
+  if (minutes < 0) minutes = 0;
+
+  if (policy.overtimeCountsEarlyArrival && checkInAt) {
+    const start = boundaryOn(dayKey, shift.startTime, policy.timeZone);
+    if (start) {
+      const early = Math.round((start.getTime() - checkInAt.getTime()) / 60_000);
+      if (early > 0) minutes += early;
+    }
+  }
+
+  if (policy.overtimeReducedByLateArrival && checkInAt) {
+    const late = lateMinutesFor(checkInAt, shift, policy, dayKey);
+    if (late !== null) minutes -= late;
+  }
+
+  if (minutes <= 0) return 0;
+  return Math.min(minutes, policy.overtimeDailyCapMinutes);
+}
+
 export interface AttendanceComputation {
   workedMinutes: number | null;
   lateMinutes: number | null;
@@ -304,6 +418,12 @@ export interface AttendanceComputation {
   overtimeMinutes: number | null;
   /** What the policy says the day is worth, before calendar overrides. */
   status: 'PRESENT' | 'HALF_DAY' | 'ABSENT';
+  /**
+   * The day started too late to belong to the shift it would be measured
+   * against, so no overtime was derived from it. Reported rather than stored:
+   * it is a property of the punches and the rules, both of which can change.
+   */
+  irregular: boolean;
 }
 
 /**
@@ -333,20 +453,38 @@ export function computeAttendance(input: {
   shift: ShiftWindow | null;
   policy: AttendancePolicy;
 }): AttendanceComputation {
-  const { checkInAt, checkOutAt, shift, policy } = input;
+  const { checkInAt, checkOutAt, policy } = input;
   const dayKey = typeof input.day === 'string' ? input.day : dateColumnToDayKey(input.day);
+
+  // An assigned shift always wins; the company window is only the fallback.
+  const shift = effectiveShift(input.shift, policy);
+  const irregular = isIrregularArrival(checkInAt, policy, dayKey);
 
   const workedMinutes =
     checkInAt && checkOutAt
       ? Math.max(0, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / 60_000))
       : null;
 
-  const lateMinutes = checkInAt ? lateMinutesFor(checkInAt, shift, policy, dayKey) : null;
-  const earlyLeaveMinutes = checkOutAt
-    ? earlyLeaveMinutesFor(checkOutAt, shift, policy, dayKey)
-    : null;
-  const overtimeMinutes = overtimeMinutesFor(workedMinutes, policy);
+  const lateMinutes =
+    checkInAt && policy.lateTrackingEnabled
+      ? lateMinutesFor(checkInAt, shift, policy, dayKey)
+      : null;
 
+  const earlyLeaveMinutes =
+    checkOutAt && policy.earlyDepartureTrackingEnabled
+      ? earlyLeaveMinutesFor(checkOutAt, shift, policy, dayKey)
+      : null;
+
+  // Two models, chosen by configuration. The duration model is kept because it
+  // is what every existing record was scored with; switching back has to remain
+  // possible without a code change.
+  const overtimeMinutes = policy.overtimeFromShiftEnd
+    ? overtimeAfterShiftEnd({ checkInAt, checkOutAt, shift, policy, dayKey, irregular })
+    : overtimeMinutesFor(workedMinutes, policy);
+
+  // Unchanged, deliberately. Half day and full day stay elapsed-based on the
+  // existing thresholds, so leaving before the shift ends is an early
+  // departure and not automatically half a day.
   let status: AttendanceComputation['status'];
   if (!checkInAt) status = 'ABSENT';
   else if (workedMinutes === null) status = 'PRESENT';
@@ -354,7 +492,7 @@ export function computeAttendance(input: {
   else if (workedMinutes >= policy.halfDayMinutes) status = 'HALF_DAY';
   else status = 'ABSENT';
 
-  return { workedMinutes, lateMinutes, earlyLeaveMinutes, overtimeMinutes, status };
+  return { workedMinutes, lateMinutes, earlyLeaveMinutes, overtimeMinutes, status, irregular };
 }
 
 // -------------------------------------------------------- network matching

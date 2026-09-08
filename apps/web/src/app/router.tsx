@@ -134,6 +134,10 @@ const AttendancePolicyPage = lazyPage(
   () => import('@/features/settings/attendance-policy-page'),
   'AttendancePolicyPage',
 );
+const AttendanceRulesPage = lazyPage(
+  () => import('@/features/settings/attendance-rules-page'),
+  'AttendanceRulesPage',
+);
 const AttendancePoliciesPage = lazyPage(
   () => import('@/features/settings/attendance-policies-page'),
   'AttendancePoliciesPage',
@@ -349,6 +353,9 @@ export function AppRoutes() {
             <Route element={<RequirePermission permission={PERMISSIONS.COMPANY_READ} />}>
               <Route path="company" element={<CompanySettingsPage />} />
               <Route path="attendance" element={<AttendancePolicyPage />} />
+              {/* Readable with company.read; the form is read-only without
+                  settings.manage, and the endpoint enforces it regardless. */}
+              <Route path="attendance-rules" element={<AttendanceRulesPage />} />
               <Route path="attendance-policies" element={<AttendancePoliciesPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>

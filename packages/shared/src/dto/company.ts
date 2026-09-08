@@ -125,6 +125,103 @@ export const attendancePolicySchema = z
 
 export type AttendancePolicyInput = z.infer<typeof attendancePolicySchema>;
 
+// ------------------------------------------------------- attendance rules
+
+/** 24-hour wall clock, the same shape shifts already store. */
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const clockTime = (label: string) =>
+  z.string().trim().regex(CLOCK, `${label} must be a 24-hour time, e.g. 09:00.`);
+
+/**
+ * The rules that decide what a day is worth, as configuration.
+ *
+ * Separate from `attendancePolicySchema` because these are Super Admin's to
+ * change and that one is not - not because they live anywhere else. Both write
+ * to the same Company row; there is one settings store, with two permission
+ * tiers over it.
+ */
+export const attendanceRulesSchema = z
+  .object({
+    defaultShiftStart: clockTime('Default start'),
+    defaultShiftEnd: clockTime('Default end'),
+
+    overtimeEnabled: z.boolean(),
+    overtimeFromShiftEnd: z.boolean(),
+    overtimeCountsEarlyArrival: z.boolean(),
+    overtimeReducedByLateArrival: z.boolean(),
+    overtimeDailyCapMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The overtime cap cannot be negative.')
+      .max(1440, 'A daily cap longer than a day is not a cap.'),
+
+    lateTrackingEnabled: z.boolean(),
+    graceMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The grace period cannot be negative.')
+      .max(480, 'A grace period longer than eight hours is not a grace period.'),
+
+    earlyDepartureTrackingEnabled: z.boolean(),
+    earlyLeaveGraceMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The grace period cannot be negative.')
+      .max(480),
+
+    irregularCheckInEnabled: z.boolean(),
+    irregularCheckInCutoff: clockTime('The irregular check-in cutoff'),
+  })
+  .superRefine((value, ctx) => {
+    if (value.defaultShiftStart === value.defaultShiftEnd) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['defaultShiftEnd'],
+        message: 'The end time cannot be the same as the start time.',
+      });
+    }
+
+    // A cutoff at or before the shift start would mark an on-time arrival
+    // irregular, which would silently stop overtime for the whole company.
+    if (
+      value.irregularCheckInEnabled &&
+      value.irregularCheckInCutoff <= value.defaultShiftStart
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['irregularCheckInCutoff'],
+        message:
+          'The cutoff must be after the shift start, or an on-time arrival would be treated as irregular.',
+      });
+    }
+
+    // Not contradictory enough to reject, but the combination is always a
+    // mistake: an overtime rule that can never produce a figure.
+    if (value.overtimeEnabled && value.overtimeDailyCapMinutes === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['overtimeDailyCapMinutes'],
+        message: 'Overtime is on but capped at zero. Raise the cap, or turn overtime off.',
+      });
+    }
+  });
+
+export type AttendanceRulesInput = z.infer<typeof attendanceRulesSchema>;
+
+/** What the rules screen reads back, including the values it cannot change. */
+export interface AttendanceRulesView extends AttendanceRulesInput {
+  timezone: string;
+  weekendDays: WeekDay[];
+  /** Read-only here: half-day thresholds stay on the attendance policy screen. */
+  halfDayMinutes: number;
+  fullDayMinutes: number;
+  /** Only meaningful while overtimeFromShiftEnd is off. */
+  overtimeAfterMinutes: number;
+  /** True when the caller may change these rules, i.e. holds settings.manage. */
+  canManage: boolean;
+}
+
 // ------------------------------------------- scoped attendance policies (P6)
 
 export const ATTENDANCE_POLICY_SCOPES = ['COMPANY', 'DEPARTMENT', 'TEAM', 'EMPLOYEE'] as const;

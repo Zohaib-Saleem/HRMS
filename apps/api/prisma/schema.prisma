@@ -140,6 +140,40 @@ model Company {
   /// silently book 14 hours of overtime.
   overtimeDailyCapMinutes    Int     @default(240)
 
+  // --- attendance rules -----------------------------------------------------
+  // The shift window an employee is measured against, and how the day either
+  // side of it is scored. Defaults reproduce the confirmed office policy:
+  // 09:00-18:00 with the break inside the window, overtime only after the
+  // shift ends, and early arrival never earning any.
+
+  /// Fallback shift window for an employee with no assignment. An assigned
+  /// shift always wins; this is only the floor beneath it.
+  defaultShiftStart String @default("09:00")
+  defaultShiftEnd   String @default("18:00")
+
+  /// Overtime measured from the applicable shift end rather than from a
+  /// duration threshold. False restores the legacy behaviour, where anything
+  /// past overtimeAfterMinutes of elapsed presence counted - which charges the
+  /// unpaid break to the company on every ordinary day.
+  overtimeFromShiftEnd Boolean @default(true)
+  /// Whether arriving before shift start earns overtime. Off: turning up early
+  /// is not overtime.
+  overtimeCountsEarlyArrival Boolean @default(false)
+  /// Whether arriving late is deducted from the overtime earned after shift
+  /// end. Off: lateness and overtime are independent facts about the day.
+  overtimeReducedByLateArrival Boolean @default(false)
+
+  /// Whether lateness against shift start is measured at all.
+  lateTrackingEnabled Boolean @default(true)
+  /// Whether leaving before shift end is measured at all.
+  earlyDepartureTrackingEnabled Boolean @default(true)
+
+  /// A check-in later than the cutoff makes the day irregular: it does not fit
+  /// the shift it would otherwise be scored against, so no overtime is derived
+  /// from it rather than crediting the whole evening.
+  irregularCheckInEnabled Boolean @default(true)
+  irregularCheckInCutoff  String  @default("11:00")
+
   // --- check-in location restriction (phase 5) ----------------------------
   /// Off by default: existing companies keep unrestricted check-in.
   locationRestrictionEnabled Boolean @default(false)
