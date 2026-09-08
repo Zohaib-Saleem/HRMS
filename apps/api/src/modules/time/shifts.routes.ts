@@ -22,6 +22,7 @@ import {
   resolveDefaultApprovers,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
+import { isInvertedRange, overlappingAssignmentWhere } from './shift-assignment.js';
 
 const SORTABLE = ['name', 'startTime', 'createdAt'] as const;
 
@@ -221,6 +222,40 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
         select: { id: true, name: true },
       });
       if (!shift) throw new ValidationError({ shiftId: ['That shift does not exist.'] });
+
+      const range = {
+        effectiveFrom: toDateOnly(input.effectiveFrom),
+        effectiveTo: input.effectiveTo ? toDateOnly(input.effectiveTo) : null,
+      };
+
+      if (isInvertedRange(range)) {
+        throw new ValidationError({
+          effectiveTo: ['The end date cannot be before the start date.'],
+        });
+      }
+
+      /**
+       * Two assignments covering the same day do not error at read time -
+       * `shiftOnDate` just takes one of them - so a duplicate would quietly
+       * score attendance against whichever shift happened to sort first. There
+       * is no database constraint for this; refuse it here.
+       */
+      const clash = await prisma.employeeShiftAssignment.findFirst({
+        where: {
+          companyId: auth.companyId,
+          ...overlappingAssignmentWhere(input.employeeId, range),
+        },
+        include: { shift: { select: { name: true } } },
+      });
+
+      if (clash) {
+        const until = clash.effectiveTo
+          ? clash.effectiveTo.toISOString().slice(0, 10)
+          : 'no end date';
+        throw new ConflictError(
+          `That employee is already on ${clash.shift.name} from ${clash.effectiveFrom.toISOString().slice(0, 10)} (${until}). End that assignment before starting another.`,
+        );
+      }
 
       const created = await prisma.employeeShiftAssignment.create({
         data: {
