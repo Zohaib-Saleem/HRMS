@@ -230,28 +230,159 @@ describe('an assigned shift beats the company default', () => {
   });
 });
 
-describe('half-day classification is unchanged', () => {
-  it('leaving before shift end stays PRESENT, not HALF_DAY', () => {
-    // 09:00 -> 17:00 is 480 elapsed: a full day by the existing threshold,
-    // with an early departure recorded against it.
-    const day = score('09:00', '17:00');
+describe('full day is measured against the scheduled shift, not elapsed time', () => {
+  /**
+   * The correction. Elapsed time asks "how long were they here?"; a day's
+   * worth asks "did they work the day they were rostered for?" - and for a
+   * late arrival those disagree. 09:15 -> 18:00 is 525 elapsed against a
+   * 540-minute window, and used to score half a day for arriving late.
+   */
+  const rules = { fullDayMinutes: 540, halfDayMinutes: 270 };
+
+  it('09:00 -> 18:00 is a full day, on time, no overtime', () => {
+    const day = score('09:00', '18:00', rules);
     expect(day.status).toBe('PRESENT');
-    expect(day.earlyLeaveMinutes).toBe(60);
+    expect(day.lateMinutes).toBe(0);
+    expect(day.overtimeMinutes).toBe(0);
+    expect(day.scheduledMinutes).toBe(540);
+  });
+
+  it('09:15 -> 18:00 is a FULL DAY with 15 minutes late', () => {
+    const day = score('09:15', '18:00', rules);
+    expect(day.status).toBe('PRESENT');
+    expect(day.lateMinutes).toBe(15);
     expect(day.overtimeMinutes).toBe(0);
   });
 
-  it('still uses the existing elapsed thresholds', () => {
-    expect(score('09:00', '14:00').status).toBe('HALF_DAY');
-    expect(score('09:00', '11:00').status).toBe('ABSENT');
+  it('09:24 -> 18:00 is a full day with 24 minutes late', () => {
+    const day = score('09:24', '18:00', rules);
+    expect(day.status).toBe('PRESENT');
+    expect(day.lateMinutes).toBe(24);
+    expect(day.overtimeMinutes).toBe(0);
   });
 
-  it('an open day is still PRESENT and earns no overtime figure', () => {
-    const day = score('09:00', null);
+  it('09:30 -> 18:00 is a full day with 30 minutes late', () => {
+    const day = score('09:30', '18:00', rules);
     expect(day.status).toBe('PRESENT');
+    expect(day.lateMinutes).toBe(30);
+    expect(day.overtimeMinutes).toBe(0);
+  });
+
+  it('08:43 -> 18:00 is a full day, and arriving early earns nothing', () => {
+    const day = score('08:43', '18:00', rules);
+    expect(day.status).toBe('PRESENT');
+    expect(day.overtimeMinutes).toBe(0);
+    // Early arrival does not inflate the day either: capped at the shift start.
+    expect(day.scheduledMinutes).toBe(540);
+  });
+
+  it('09:00 -> 18:30 is a full day with 30 minutes overtime', () => {
+    const day = score('09:00', '18:30', rules);
+    expect(day.status).toBe('PRESENT');
+    expect(day.overtimeMinutes).toBe(30);
+    // Staying late does not inflate the day: the extra is overtime, counted once.
+    expect(day.scheduledMinutes).toBe(540);
+  });
+
+  it('09:15 -> 18:30 is a full day, 15 late and 30 overtime', () => {
+    const day = score('09:15', '18:30', rules);
+    expect(day.status).toBe('PRESENT');
+    expect(day.lateMinutes).toBe(15);
+    expect(day.overtimeMinutes).toBe(30);
+  });
+
+  it('08:43 -> 18:30 is a full day with 30 minutes overtime', () => {
+    const day = score('08:43', '18:30', rules);
+    expect(day.status).toBe('PRESENT');
+    expect(day.overtimeMinutes).toBe(30);
+  });
+
+  it('lateness never shortens the day it is reported against', () => {
+    // Same departure, four arrivals: one full day each, four different
+    // lateness figures. Charging lateness twice is the bug being fixed.
+    for (const [arrival, late] of [['09:00', 0], ['09:15', 15], ['09:24', 24], ['09:30', 30]] as const) {
+      const day = score(arrival, '18:00', rules);
+      expect(day.status).toBe('PRESENT');
+      expect(day.lateMinutes).toBe(late);
+      expect(day.scheduledMinutes).toBe(540);
+    }
+  });
+});
+
+describe('an assigned shift decides the day, not the company window', () => {
+  const late = { startTime: '10:00', endTime: '19:00' };
+  const rules = { fullDayMinutes: 540, halfDayMinutes: 270 };
+
+  it('10:15 -> 19:00 is a full day with 15 minutes late', () => {
+    const day = score('10:15', '19:00', rules, late);
+    expect(day.status).toBe('PRESENT');
+    expect(day.lateMinutes).toBe(15);
+    expect(day.overtimeMinutes).toBe(0);
+  });
+
+  it('10:00 -> 19:30 is a full day with 30 minutes overtime', () => {
+    const day = score('10:00', '19:30', rules, late);
+    expect(day.status).toBe('PRESENT');
+    expect(day.overtimeMinutes).toBe(30);
+  });
+
+  it('the same punches score differently against the company window', () => {
+    // 10:15 -> 19:00 measured against 09:00-18:00 is a late start and an hour
+    // of overtime; against the employee's own shift it is an ordinary day.
+    const onDefault = score('10:15', '19:00', rules);
+    expect(onDefault.overtimeMinutes).toBe(60);
+    expect(score('10:15', '19:00', rules, late).overtimeMinutes).toBe(0);
+  });
+});
+
+describe('short days and irregular days are still not full days', () => {
+  const rules = { fullDayMinutes: 540, halfDayMinutes: 270 };
+
+  it('leaving early reduces the day, and is reported as an early departure', () => {
+    const day = score('09:00', '17:30', rules);
+    expect(day.scheduledMinutes).toBe(510);
+    expect(day.earlyLeaveMinutes).toBe(30);
+    expect(day.overtimeMinutes).toBe(0);
+    // 510 sits between the half-day and full-day thresholds, so the existing
+    // thresholds classify it. See the note in the report.
+    expect(day.status).toBe('HALF_DAY');
+  });
+
+  it('genuinely short attendance still earns a half day', () => {
+    expect(score('09:00', '14:00', rules).status).toBe('HALF_DAY');
+  });
+
+  it('very short attendance is still absent', () => {
+    expect(score('09:00', '11:00', rules).status).toBe('ABSENT');
+  });
+
+  it('an irregular day is scored on elapsed time, not credited a full shift', () => {
+    // The fabrication this guards against: crediting a 14:00 start with a
+    // whole 09:00 day because it happens to run past 18:00.
+    const day = score('14:00', '21:00', rules);
+    expect(day.irregular).toBe(true);
+    expect(day.scheduledMinutes).toBeNull();
+    expect(day.workedMinutes).toBe(420);
+    expect(day.status).toBe('HALF_DAY');
     expect(day.overtimeMinutes).toBeNull();
   });
 
-  it('no check-in is still ABSENT', () => {
-    expect(score(null, null).status).toBe('ABSENT');
+  it('an open day stays present and is scored on nothing yet', () => {
+    const day = score('09:00', null, rules);
+    expect(day.status).toBe('PRESENT');
+    expect(day.scheduledMinutes).toBeNull();
+    expect(day.overtimeMinutes).toBeNull();
+  });
+
+  it('no check-in is still absent', () => {
+    expect(score(null, null, rules).status).toBe('ABSENT');
+  });
+
+  it('an overnight shift falls back to elapsed rather than guessing', () => {
+    const night = { startTime: '22:00', endTime: '06:00' };
+    const day = score('09:00', '18:00', rules, night);
+    expect(day.scheduledMinutes).toBeNull();
+    expect(day.workedMinutes).toBe(540);
+    expect(day.status).toBe('PRESENT');
   });
 });

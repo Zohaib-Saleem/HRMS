@@ -355,6 +355,49 @@ export function isIrregularArrival(
 }
 
 /**
+ * How much of the scheduled day the employee actually covered.
+ *
+ * This is what full and half day are measured against, and it is deliberately
+ * NOT the elapsed time between the punches. Elapsed time answers "how long were
+ * they here?"; a day's worth answers "did they work the day they were rostered
+ * for?", and for anyone who arrives late those two disagree.
+ *
+ * Counted from the shift start rather than from the arrival, so lateness does
+ * not also shorten the day: someone who starts at 09:15 and leaves at 18:00 has
+ * worked the day, and is fifteen minutes late. Both facts are recorded, and
+ * neither is charged twice.
+ *
+ * Capped at the shift end, so staying late does not inflate the day either -
+ * time past the end is overtime, counted once, over there.
+ *
+ * Returns null when the window cannot be established (an unparseable or
+ * overnight shift), leaving the caller to fall back to elapsed time rather than
+ * guess.
+ */
+export function scheduledMinutesCovered(input: {
+  checkOutAt: Date | null;
+  shift: ShiftWindow;
+  timeZone: string;
+  dayKey: DayKey;
+}): number | null {
+  const { checkOutAt, shift, timeZone, dayKey } = input;
+  if (!checkOutAt) return null;
+
+  const startOfDay = minutesOfDay(shift.startTime);
+  const endOfDay = minutesOfDay(shift.endTime);
+  // An overnight shift ends on the following calendar day; measuring it against
+  // this one would be confidently wrong. Fall back instead.
+  if (startOfDay === null || endOfDay === null || endOfDay <= startOfDay) return null;
+
+  const start = boundaryOn(dayKey, shift.startTime, timeZone);
+  const end = boundaryOn(dayKey, shift.endTime, timeZone);
+  if (!start || !end) return null;
+
+  const leftAt = checkOutAt < end ? checkOutAt : end;
+  return Math.max(0, Math.round((leftAt.getTime() - start.getTime()) / 60_000));
+}
+
+/**
  * Overtime earned after the applicable shift end.
  *
  * The break is deliberately not subtracted anywhere: it sits inside the shift
@@ -424,6 +467,12 @@ export interface AttendanceComputation {
    * it is a property of the punches and the rules, both of which can change.
    */
   irregular: boolean;
+  /**
+   * Minutes of the scheduled shift the day actually covered, which is what
+   * decided the status. Null when it could not be established and elapsed time
+   * was used instead - an irregular day, an overnight shift, or an open day.
+   */
+  scheduledMinutes: number | null;
 }
 
 /**
@@ -482,17 +531,39 @@ export function computeAttendance(input: {
     ? overtimeAfterShiftEnd({ checkInAt, checkOutAt, shift, policy, dayKey, irregular })
     : overtimeMinutesFor(workedMinutes, policy);
 
-  // Unchanged, deliberately. Half day and full day stay elapsed-based on the
-  // existing thresholds, so leaving before the shift ends is an early
-  // departure and not automatically half a day.
+  /**
+   * What the day is worth, measured against the shift rather than the clock.
+   *
+   * An irregular day is scored on elapsed time instead: it does not fit the
+   * shift it would otherwise be credited against, and crediting a 14:00 start
+   * with a full 09:00 day is exactly the fabrication the irregular rule exists
+   * to prevent.
+   *
+   * The thresholds themselves are unchanged - the same fullDayMinutes and
+   * halfDayMinutes as before. Only what is compared against them has changed.
+   */
+  const scheduledMinutes = irregular
+    ? null
+    : scheduledMinutesCovered({ checkOutAt, shift, timeZone: policy.timeZone, dayKey });
+
+  const dayWorth = scheduledMinutes ?? workedMinutes;
+
   let status: AttendanceComputation['status'];
   if (!checkInAt) status = 'ABSENT';
-  else if (workedMinutes === null) status = 'PRESENT';
-  else if (workedMinutes >= policy.fullDayMinutes) status = 'PRESENT';
-  else if (workedMinutes >= policy.halfDayMinutes) status = 'HALF_DAY';
+  else if (dayWorth === null) status = 'PRESENT';
+  else if (dayWorth >= policy.fullDayMinutes) status = 'PRESENT';
+  else if (dayWorth >= policy.halfDayMinutes) status = 'HALF_DAY';
   else status = 'ABSENT';
 
-  return { workedMinutes, lateMinutes, earlyLeaveMinutes, overtimeMinutes, status, irregular };
+  return {
+    workedMinutes,
+    lateMinutes,
+    earlyLeaveMinutes,
+    overtimeMinutes,
+    status,
+    irregular,
+    scheduledMinutes,
+  };
 }
 
 // -------------------------------------------------------- network matching
