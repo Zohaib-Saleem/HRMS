@@ -25,6 +25,7 @@ import {
 import { api, errorMessage } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmployeeCompensation } from './employee-compensation';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -42,7 +43,7 @@ const STATUS_TONE: Record<EmployeeStatus, 'success' | 'warning' | 'destructive' 
   TERMINATED: 'neutral',
 };
 
-const TABS = ['Overview', 'Personal', 'Experience', 'Reports'] as const;
+const TABS = ['Overview', 'Personal', 'Compensation', 'Experience', 'Reports'] as const;
 type Tab = (typeof TABS)[number];
 
 export function EmployeeDetailPage() {
@@ -188,7 +189,9 @@ export function EmployeeDetailPage() {
 
       <div className="mb-5 overflow-x-auto border-b border-border">
         <nav className="flex min-w-max gap-1" aria-label="Employee sections">
-          {TABS.map((item) => (
+          {TABS.filter(
+            (item) => item !== 'Compensation' || has(PERMISSIONS.PAYROLL_READ),
+          ).map((item) => (
             <button
               key={item}
               type="button"
@@ -213,6 +216,9 @@ export function EmployeeDetailPage() {
 
       {tab === 'Overview' ? <OverviewTab employee={employee} /> : null}
       {tab === 'Personal' ? <PersonalTab employee={employee} canSeeRestricted={has(PERMISSIONS.EMPLOYEE_SENSITIVE_READ)} /> : null}
+      {tab === 'Compensation' ? (
+        <EmployeeCompensation employeeId={employee.id} />
+      ) : null}
       {tab === 'Experience' ? <ExperienceTab employee={employee} /> : null}
       {tab === 'Reports' ? <ReportsTab employee={employee} onOpen={(rid) => navigate(`/people/${rid}`)} /> : null}
 
