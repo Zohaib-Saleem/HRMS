@@ -125,20 +125,20 @@ model Company {
   // calculation may hard-code a number that appears here.
 
   /// Lateness forgiven entirely at or below this many minutes past shift start.
-  graceMinutes               Int     @default(10)
+  graceMinutes            Int     @default(10)
   /// Worked minutes at or above this - but below fullDayMinutes - earn a half day.
-  halfDayMinutes             Int     @default(240)
+  halfDayMinutes          Int     @default(240)
   /// Worked minutes at or above this earn a full present day.
-  fullDayMinutes             Int     @default(480)
+  fullDayMinutes          Int     @default(480)
   /// Leaving early is forgiven at or below this many minutes before shift end.
-  earlyLeaveGraceMinutes     Int     @default(10)
-  overtimeEnabled            Boolean @default(true)
+  earlyLeaveGraceMinutes  Int     @default(10)
+  overtimeEnabled         Boolean @default(true)
   /// Worked minutes beyond this count as overtime. Not additional time - a
   /// labelled portion of workedMinutes, so the two are never double-counted.
-  overtimeAfterMinutes       Int     @default(480)
+  overtimeAfterMinutes    Int     @default(480)
   /// Ceiling on overtime credited in one day, so a forgotten check-out cannot
   /// silently book 14 hours of overtime.
-  overtimeDailyCapMinutes    Int     @default(240)
+  overtimeDailyCapMinutes Int     @default(240)
 
   // --- attendance rules -----------------------------------------------------
   // The shift window an employee is measured against, and how the day either
@@ -155,16 +155,16 @@ model Company {
   /// duration threshold. False restores the legacy behaviour, where anything
   /// past overtimeAfterMinutes of elapsed presence counted - which charges the
   /// unpaid break to the company on every ordinary day.
-  overtimeFromShiftEnd Boolean @default(true)
+  overtimeFromShiftEnd         Boolean @default(true)
   /// Whether arriving before shift start earns overtime. Off: turning up early
   /// is not overtime.
-  overtimeCountsEarlyArrival Boolean @default(false)
+  overtimeCountsEarlyArrival   Boolean @default(false)
   /// Whether arriving late is deducted from the overtime earned after shift
   /// end. Off: lateness and overtime are independent facts about the day.
   overtimeReducedByLateArrival Boolean @default(false)
 
   /// Whether lateness against shift start is measured at all.
-  lateTrackingEnabled Boolean @default(true)
+  lateTrackingEnabled           Boolean @default(true)
   /// Whether leaving before shift end is measured at all.
   earlyDepartureTrackingEnabled Boolean @default(true)
   /// How far short of a full day someone may fall and still be credited one.
@@ -174,21 +174,48 @@ model Company {
   /// half an hour early is worth reporting and not worth downgrading a day
   /// over, and the two thresholds are set independently because they answer
   /// different questions.
-  fullDayToleranceMinutes Int @default(30)
+  fullDayToleranceMinutes       Int     @default(30)
 
   /// A check-in later than the cutoff makes the day irregular: it does not fit
   /// the shift it would otherwise be scored against, so no overtime is derived
   /// from it rather than crediting the whole evening.
-  irregularCheckInEnabled Boolean @default(true)
-  irregularCheckInCutoff  String  @default("11:00")
+  irregularCheckInEnabled         Boolean             @default(true)
+  irregularCheckInCutoff          String              @default("11:00")
+  irregularCheckInMode            IrregularCutoffMode @default(ABSOLUTE_TIME)
+  /// Used when the mode is AFTER_SHIFT_START. 120 is the same distance the
+  /// default 09:00 shift and 11:00 cutoff already express.
+  irregularAfterShiftStartMinutes Int                 @default(120)
+
+  /// Whether the break sits inside the shift window. True: the window already
+  /// accounts for it and nothing is subtracted. False: the shift's break is
+  /// deducted from the day before it is scored.
+  breakIncludedInWindow Boolean @default(true)
+
+  /// Overtime shorter than this is not credited at all, so a two-minute
+  /// overrun does not become a payable figure. Zero credits every minute.
+  overtimeMinimumMinutes    Int  @default(0)
+  /// Credited overtime is rounded down to a multiple of this. Zero is no
+  /// rounding.
+  overtimeRoundingMinutes   Int  @default(0)
+  /// Ceilings across a week and a month, applied after the daily cap. Null is
+  /// no ceiling at that level.
+  overtimeWeeklyCapMinutes  Int?
+  overtimeMonthlyCapMinutes Int?
+
+  /// What a day with a check-in and no check-out is worth, and what a day with
+  /// neither is worth. Held as configuration because "still present" and
+  /// "absent until corrected" are both defensible answers and the choice
+  /// belongs to the company, not to this code.
+  missingCheckOutStatus AttendanceMissingPunchRule @default(PRESENT)
+  missingCheckInStatus  AttendanceMissingPunchRule @default(ABSENT)
 
   // --- check-in location restriction (phase 5) ----------------------------
   /// Off by default: existing companies keep unrestricted check-in.
-  locationRestrictionEnabled Boolean @default(false)
+  locationRestrictionEnabled Boolean  @default(false)
   /// Fallback radius for locations that do not set their own.
-  defaultGeofenceRadiusM     Int     @default(200)
+  defaultGeofenceRadiusM     Int      @default(200)
   /// Off by default: existing companies keep unrestricted check-in.
-  ipRestrictionEnabled       Boolean @default(false)
+  ipRestrictionEnabled       Boolean  @default(false)
   /// Networks permitted to check in, as CIDR blocks or bare addresses. Empty
   /// while the restriction is on means nothing is permitted - fail closed.
   allowedCheckInCidrs        String[] @default([])
@@ -216,8 +243,8 @@ model Company {
   timesheets          Timesheet[]
 
   // --- phase 6 ---
-  attendancePolicies           AttendancePolicy[]
-  attendancePolicyAssignments  AttendancePolicyAssignment[]
+  attendancePolicies          AttendancePolicy[]
+  attendancePolicyAssignments AttendancePolicyAssignment[]
 
   // --- phase 7 ---
   attendanceDevices        AttendanceDevice[]
@@ -329,7 +356,7 @@ model Location {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company   Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employees Employee[]
   holidays  Holiday[]
   devices   AttendanceDevice[]
@@ -475,18 +502,18 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company          Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  department       Department?  @relation("EmployeeDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
-  team             Team?        @relation("EmployeeTeam", fields: [teamId], references: [id], onDelete: SetNull)
-  designation      Designation? @relation(fields: [designationId], references: [id], onDelete: SetNull)
-  location         Location?    @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  company          Company                       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department       Department?                   @relation("EmployeeDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  team             Team?                         @relation("EmployeeTeam", fields: [teamId], references: [id], onDelete: SetNull)
+  designation      Designation?                  @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  location         Location?                     @relation(fields: [locationId], references: [id], onDelete: SetNull)
   deviceMappings   AttendanceDeviceUserMapping[]
   rawPunches       AttendanceRawPunch[]
-  manager          Employee?    @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
-  reports          Employee[]   @relation("EmployeeManager")
-  secondaryManager Employee?    @relation("EmployeeSecondaryManager", fields: [secondaryManagerId], references: [id], onDelete: SetNull)
-  secondaryReports Employee[]   @relation("EmployeeSecondaryManager")
-  user             User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  manager          Employee?                     @relation("EmployeeManager", fields: [managerId], references: [id], onDelete: SetNull)
+  reports          Employee[]                    @relation("EmployeeManager")
+  secondaryManager Employee?                     @relation("EmployeeSecondaryManager", fields: [secondaryManagerId], references: [id], onDelete: SetNull)
+  secondaryReports Employee[]                    @relation("EmployeeSecondaryManager")
+  user             User?                         @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   workExperience EmployeeWorkExperience[]
 
@@ -560,10 +587,10 @@ model User {
 
   /// Set while suspended, cleared on restore. Null on an account that has never
   /// been suspended.
-  suspendedReason UserSuspensionReason?
-  suspendedAt     DateTime?
+  suspendedReason        UserSuspensionReason?
+  suspendedAt            DateTime?
   /// The user who suspended this account. Null when the system did it.
-  suspendedById   String?
+  suspendedById          String?
   /// What the status was before suspension, so restoring puts it back rather
   /// than assuming everyone was ACTIVE. An invited account that never signed in
   /// returns to INVITED, not to a working login it never had.
@@ -586,7 +613,7 @@ model User {
   auditLogs AuditLog[] @relation("AuditActor")
 
   /// Who suspended this account, when an administrator did.
-  suspendedBy   User?  @relation("UserSuspendedBy", fields: [suspendedById], references: [id], onDelete: SetNull)
+  suspendedBy    User?  @relation("UserSuspendedBy", fields: [suspendedById], references: [id], onDelete: SetNull)
   suspendedUsers User[] @relation("UserSuspendedBy")
 
   // --- phase 3 ---
@@ -766,6 +793,25 @@ enum AttendanceSource {
 }
 
 /// Where the person worked from. Recorded at check-in.
+/// What a day with a punch missing on one end is worth.
+/// How the irregular-arrival cutoff is expressed.
+enum IrregularCutoffMode {
+  /// A wall-clock time, e.g. 11:00. Right for one shared office schedule.
+  ABSOLUTE_TIME
+  /// Minutes past the employee's own shift start. The only form that works
+  /// when different people start at different times.
+  AFTER_SHIFT_START
+}
+
+enum AttendanceMissingPunchRule {
+  /// Counted present. The day is still running, or somebody forgot.
+  PRESENT
+  /// Counted absent until a correction is approved.
+  ABSENT
+  /// Scored on the elapsed thresholds like any other day.
+  THRESHOLD
+}
+
 enum AttendanceMode {
   OFFICE
   REMOTE
@@ -1285,6 +1331,27 @@ model AttendancePolicy {
   overtimeAfterMinutes    Int     @default(480)
   overtimeDailyCapMinutes Int     @default(240)
 
+  /// Nullable throughout: null means "inherit the company value". An override
+  /// that had to restate every rule would drift from the baseline the moment
+  /// the baseline changed.
+  defaultShiftStart               String?
+  defaultShiftEnd                 String?
+  overtimeFromShiftEnd            Boolean?
+  overtimeCountsEarlyArrival      Boolean?
+  overtimeReducedByLateArrival    Boolean?
+  fullDayToleranceMinutes         Int?
+  overtimeMinimumMinutes          Int?
+  overtimeRoundingMinutes         Int?
+  overtimeWeeklyCapMinutes        Int?
+  overtimeMonthlyCapMinutes       Int?
+  breakIncludedInWindow           Boolean?
+  irregularCheckInEnabled         Boolean?
+  irregularCheckInMode            IrregularCutoffMode?
+  irregularAfterShiftStartMinutes Int?
+  irregularCheckInCutoff          String?
+  lateTrackingEnabled             Boolean?
+  earlyDepartureTrackingEnabled   Boolean?
+
   isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
@@ -1494,7 +1561,7 @@ model AttendanceDeviceUserMapping {
 
   /// The identifier the device sends, as a string. Terminals pad and reuse
   /// these, so it is never treated as a number here.
-  deviceUserId String
+  deviceUserId   String
   /// The name held on the device, for recognising a mapping at a glance.
   deviceUserName String?
 
@@ -1575,7 +1642,7 @@ model AttendanceDeviceSync {
   /// How many connection attempts this run took, including the successful one.
   attempts Int @default(1)
 
-  error String?
+  error        String?
   /// Per-record failures: what was wrong, and with which transaction. Bounded
   /// so one broken batch cannot write an unbounded blob, and never carries a
   /// credential.
@@ -1604,19 +1671,19 @@ model AttendanceRawPunch {
   deviceUserId String
   /// Resolved at import. Null means unmapped - the punch is kept and surfaced
   /// rather than dropped, and can be attributed later.
-  employeeId String?
+  employeeId   String?
 
   /// The device transaction identifier, where it provides one.
   deviceTransactionId String?
   /// The raw reading, untouched, for when a normalisation is ever questioned.
-  rawTimestamp String
+  rawTimestamp        String
   /// The zone used to normalise it, captured at import in case the device is
   /// later reconfigured.
-  deviceTimeZone String
+  deviceTimeZone      String
   /// The normalised instant. This is what calculations use.
-  punchedAt DateTime
+  punchedAt           DateTime
   /// The local day the punch belongs to, in the company zone.
-  localDayKey String
+  localDayKey         String
 
   /// Whatever the device said about direction, preserved verbatim.
   punchState String?
@@ -1628,7 +1695,7 @@ model AttendanceRawPunch {
   /// no-op at the database level rather than a matter of application care.
   fingerprint String
 
-  importedAt DateTime @default(now())
+  importedAt  DateTime  @default(now())
   /// Set once the punch has been folded into an AttendanceRecord.
   processedAt DateTime?
 
@@ -1789,21 +1856,31 @@ model PayrollSettings {
   /// How often payroll is run. Suggests period dates; nothing calculates from it.
   frequency PayrollFrequency @default(MONTHLY)
 
+  /// Multipliers for overtime worked on a non-working day. Null uses the
+  /// ordinary overtimeMultiplier, which is the behaviour before these existed.
+  overtimeWeekendMultiplier Decimal? @db.Decimal(6, 3)
+  overtimeHolidayMultiplier Decimal? @db.Decimal(6, 3)
+
+  /// Scheduled minutes assumed for a day with no shift assignment behind it.
+  /// Configuration rather than a constant: a company with a different working
+  /// day should not need a deployment to say so.
+  fallbackScheduledMinutes Int @default(480)
+
   // --- what a day is worth --------------------------------------------------
-  basis          PayrollBasis @default(FIXED_DAYS)
+  basis               PayrollBasis @default(FIXED_DAYS)
   /// Only consulted when basis is FIXED_DAYS.
-  fixedBasisDays Int          @default(30)
+  fixedBasisDays      Int          @default(30)
   /// Used to turn a daily rate into an hourly one for monthly and daily staff.
-  standardHoursPerDay Decimal @default(8) @db.Decimal(6, 2)
+  standardHoursPerDay Decimal      @default(8) @db.Decimal(6, 2)
 
   // --- overtime -------------------------------------------------------------
-  overtimeMode       PayrollOvertimeMode @default(MULTIPLIER)
-  overtimeMultiplier Decimal             @default(1.5) @db.Decimal(6, 3)
+  overtimeMode            PayrollOvertimeMode @default(MULTIPLIER)
+  overtimeMultiplier      Decimal             @default(1.5) @db.Decimal(6, 3)
   /// Only consulted when overtimeMode is FIXED_RATE.
-  overtimeFixedRate  Decimal             @default(0) @db.Decimal(14, 4)
+  overtimeFixedRate       Decimal             @default(0) @db.Decimal(14, 4)
   /// When true - the default - only overtime on an APPROVED timesheet is paid.
   /// Unapproved hours are still counted and reported as an exception.
-  requireApprovedOvertime Boolean @default(true)
+  requireApprovedOvertime Boolean             @default(true)
 
   // --- what an absence costs ------------------------------------------------
   /// Whether a day recorded as ABSENT reduces pay.
@@ -1811,12 +1888,12 @@ model PayrollSettings {
   /// Whether leave on an unpaid leave type reduces pay.
   deductUnpaidLeave   Boolean @default(true)
 
-  lateDeductionMode     PayrollTimeDeductionMode @default(NONE)
+  lateDeductionMode PayrollTimeDeductionMode @default(NONE)
   /// Per minute or per occurrence depending on the mode above.
-  lateDeductionRate     Decimal                  @default(0) @db.Decimal(14, 4)
+  lateDeductionRate Decimal                  @default(0) @db.Decimal(14, 4)
   /// Lateness at or below this many minutes never costs anything, on top of
   /// whatever the attendance policy already forgave.
-  lateGraceMinutes      Int                      @default(0)
+  lateGraceMinutes  Int                      @default(0)
 
   earlyLeaveDeductionMode PayrollTimeDeductionMode @default(NONE)
   earlyLeaveDeductionRate Decimal                  @default(0) @db.Decimal(14, 4)
@@ -1855,9 +1932,9 @@ model PayrollProfile {
   /// Excluded from every run while false, without deleting anything.
   isActive Boolean @default(true)
 
-  basis          PayrollBasis?
-  fixedBasisDays Int?
-  standardHoursPerDay Decimal? @db.Decimal(6, 2)
+  basis               PayrollBasis?
+  fixedBasisDays      Int?
+  standardHoursPerDay Decimal?      @db.Decimal(6, 2)
 
   overtimeMode       PayrollOvertimeMode?
   overtimeMultiplier Decimal?             @db.Decimal(6, 3)
@@ -1929,7 +2006,7 @@ model EmployeeSalary {
 /// lets a company rename "Conveyance" to "Transport" without touching anyone's
 /// pay.
 model SalaryComponent {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   companyId   String
   name        String
   code        String?
@@ -1998,8 +2075,8 @@ model PayrollPeriod {
   companyId String
   name      String
 
-  startDate DateTime @db.Date
-  endDate   DateTime @db.Date
+  startDate DateTime  @db.Date
+  endDate   DateTime  @db.Date
   /// When people are actually paid. Reporting only; no calculation reads it.
   payDate   DateTime? @db.Date
 
@@ -2033,12 +2110,12 @@ model PayrollRun {
   currency String @db.Char(3)
 
   // --- totals, written by the calculation ------------------------------------
-  employeeCount   Int     @default(0)
-  grossTotal      Decimal @default(0) @db.Decimal(16, 2)
-  deductionTotal  Decimal @default(0) @db.Decimal(16, 2)
-  netTotal        Decimal @default(0) @db.Decimal(16, 2)
-  exceptionCount  Int     @default(0)
-  blockingCount   Int     @default(0)
+  employeeCount  Int     @default(0)
+  grossTotal     Decimal @default(0) @db.Decimal(16, 2)
+  deductionTotal Decimal @default(0) @db.Decimal(16, 2)
+  netTotal       Decimal @default(0) @db.Decimal(16, 2)
+  exceptionCount Int     @default(0)
+  blockingCount  Int     @default(0)
 
   calculatedAt DateTime?
   calculatedBy String?
@@ -2059,8 +2136,8 @@ model PayrollRun {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company    Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  period     PayrollPeriod       @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  period     PayrollPeriod      @relation(fields: [periodId], references: [id], onDelete: Cascade)
   lines      PayrollLine[]
   exceptions PayrollException[]
 
@@ -2094,26 +2171,26 @@ model PayrollLine {
   salarySegments Int               @default(1)
 
   // --- attendance, consumed from the existing engine -------------------------
-  scheduledDays     Decimal @db.Decimal(8, 2)
-  scheduledMinutes  Int     @default(0)
-  presentDays       Decimal @db.Decimal(8, 2)
-  halfDays          Decimal @db.Decimal(8, 2)
-  absentDays        Decimal @db.Decimal(8, 2)
-  paidLeaveDays     Decimal @db.Decimal(8, 2)
-  unpaidLeaveDays   Decimal @db.Decimal(8, 2)
-  holidayDays       Decimal @db.Decimal(8, 2)
-  weekendDays       Decimal @db.Decimal(8, 2)
-  payableDays       Decimal @db.Decimal(8, 2)
-  unpaidDays        Decimal @db.Decimal(8, 2)
-  workedMinutes     Int     @default(0)
-  lateOccurrences   Int     @default(0)
-  lateMinutes       Int     @default(0)
-  earlyLeaveOccurrences Int @default(0)
-  earlyLeaveMinutes Int     @default(0)
-  overtimeMinutes   Int     @default(0)
+  scheduledDays           Decimal @db.Decimal(8, 2)
+  scheduledMinutes        Int     @default(0)
+  presentDays             Decimal @db.Decimal(8, 2)
+  halfDays                Decimal @db.Decimal(8, 2)
+  absentDays              Decimal @db.Decimal(8, 2)
+  paidLeaveDays           Decimal @db.Decimal(8, 2)
+  unpaidLeaveDays         Decimal @db.Decimal(8, 2)
+  holidayDays             Decimal @db.Decimal(8, 2)
+  weekendDays             Decimal @db.Decimal(8, 2)
+  payableDays             Decimal @db.Decimal(8, 2)
+  unpaidDays              Decimal @db.Decimal(8, 2)
+  workedMinutes           Int     @default(0)
+  lateOccurrences         Int     @default(0)
+  lateMinutes             Int     @default(0)
+  earlyLeaveOccurrences   Int     @default(0)
+  earlyLeaveMinutes       Int     @default(0)
+  overtimeMinutes         Int     @default(0)
   /// The subset of overtimeMinutes that sat on an approved timesheet. Only this
   /// is paid when the company requires approval.
-  approvedOvertimeMinutes Int @default(0)
+  approvedOvertimeMinutes Int     @default(0)
 
   // --- money ----------------------------------------------------------------
   basicAmount     Decimal @db.Decimal(14, 2)
@@ -2182,7 +2259,7 @@ model PayrollDeduction {
   /// ABSENCE, UNPAID_LEAVE, LATE, EARLY_LEAVE, COMPONENT, ADJUSTMENT - what
   /// produced this row, so a reviewer can tell a policy deduction from a
   /// deliberate one.
-  kind        String @default("COMPONENT")
+  kind        String  @default("COMPONENT")
 
   calc   PayrollComponentCalc @default(FIXED)
   rate   Decimal?             @db.Decimal(14, 4)
@@ -2238,13 +2315,13 @@ model PayrollAdjustment {
 /// - a number people quote, an issue date, and a moment it became visible -
 /// none of which belong to the calculation.
 model Payslip {
-  id        String @id @default(cuid())
-  companyId String
-  lineId    String @unique
+  id         String @id @default(cuid())
+  companyId  String
+  lineId     String @unique
   employeeId String
 
-  number     String
-  issuedAt   DateTime  @default(now())
+  number      String
+  issuedAt    DateTime  @default(now())
   /// Withheld until an administrator releases it, so a finalized run can be
   /// checked before anyone sees their own figure.
   publishedAt DateTime?
@@ -2267,10 +2344,10 @@ model Payslip {
 /// exception cannot be finalized, which is the mechanism behind "do not
 /// silently produce questionable payroll".
 model PayrollException {
-  id        String @id @default(cuid())
-  companyId String
-  runId     String
-  lineId    String?
+  id         String  @id @default(cuid())
+  companyId  String
+  runId      String
+  lineId     String?
   employeeId String?
 
   code     PayrollExceptionCode

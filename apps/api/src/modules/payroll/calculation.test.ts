@@ -49,6 +49,9 @@ const CONFIG: EffectiveConfig = {
   earlyLeaveGraceMinutes: 0,
   hourlyRateOverride: null,
   roundingDecimals: 2,
+  overtimeWeekendMultiplier: null,
+  overtimeHolidayMultiplier: null,
+  fallbackScheduledMinutes: 480,
 };
 
 const SALARY = 120000;

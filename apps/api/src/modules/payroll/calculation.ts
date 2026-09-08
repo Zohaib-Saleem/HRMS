@@ -71,6 +71,15 @@ export interface EffectiveConfig {
 
   hourlyRateOverride: number | null;
   roundingDecimals: number;
+
+  /**
+   * Multipliers for overtime worked on a non-working day. Null uses the
+   * ordinary multiplier, which is what happened before these existed.
+   */
+  overtimeWeekendMultiplier: number | null;
+  overtimeHolidayMultiplier: number | null;
+  /** Scheduled minutes for a day with no shift assignment behind it. */
+  fallbackScheduledMinutes: number;
 }
 
 /** A salary in force over part of the period. */
@@ -116,6 +125,9 @@ export interface AttendanceTally {
   earlyLeaveMinutes: number;
   overtimeMinutes: number;
   approvedOvertimeMinutes: number;
+  /** Overtime worked on a non-working day, priced at its own multiplier. */
+  weekendOvertimeMinutes: number;
+  holidayOvertimeMinutes: number;
   /** Days with a check-in but no check-out: worked time is unknown. */
   incompleteDays: number;
   /** Working days with no shift assignment behind them. */
@@ -199,18 +211,25 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
     earlyLeaveMinutes: 0,
     overtimeMinutes: 0,
     approvedOvertimeMinutes: 0,
+    weekendOvertimeMinutes: 0,
+    holidayOvertimeMinutes: 0,
     incompleteDays: 0,
     daysWithoutShift: 0,
     daysWithoutRecord: 0,
   };
 
   for (const day of days) {
+    // A non-working day is not a scheduled day and nobody is short for it -
+    // but time worked on one is still time worked, and is priced at its own
+    // multiplier below. Counted here before the day is skipped.
     if (day.status === 'WEEKEND') {
       tally.weekendDays += 1;
+      tally.weekendOvertimeMinutes += day.overtimeMinutes ?? 0;
       continue;
     }
     if (day.status === 'HOLIDAY') {
       tally.holidayDays += 1;
+      tally.holidayOvertimeMinutes += day.overtimeMinutes ?? 0;
       continue;
     }
 
@@ -394,11 +413,20 @@ export function calculate(input: {
     : tally.overtimeMinutes;
   const overtimeHours = overtimeMinutes / 60;
 
+  // Weekend and holiday overtime is priced at its own multiplier when one is
+  // configured, and at the ordinary one when it is not - which is exactly the
+  // behaviour before these settings existed.
+  const weekendHours = tally.weekendOvertimeMinutes / 60;
+  const holidayHours = tally.holidayOvertimeMinutes / 60;
+
   let overtimeAmount = 0;
   if (config.overtimeMode === 'MULTIPLIER') {
-    overtimeAmount = hourlyRate * config.overtimeMultiplier * overtimeHours;
+    overtimeAmount =
+      hourlyRate * config.overtimeMultiplier * overtimeHours +
+      hourlyRate * (config.overtimeWeekendMultiplier ?? config.overtimeMultiplier) * weekendHours +
+      hourlyRate * (config.overtimeHolidayMultiplier ?? config.overtimeMultiplier) * holidayHours;
   } else if (config.overtimeMode === 'FIXED_RATE') {
-    overtimeAmount = config.overtimeFixedRate * overtimeHours;
+    overtimeAmount = config.overtimeFixedRate * (overtimeHours + weekendHours + holidayHours);
   }
   overtimeAmount = round(overtimeAmount);
 
@@ -417,7 +445,9 @@ export function calculate(input: {
     },
   ];
 
-  if (overtimeAmount !== 0 || overtimeMinutes > 0) {
+  const totalOvertimeHours = overtimeHours + weekendHours + holidayHours;
+
+  if (overtimeAmount !== 0 || totalOvertimeHours > 0) {
     earnings.push({
       componentId: null,
       code: 'OVERTIME',
@@ -428,7 +458,7 @@ export function calculate(input: {
         config.overtimeMode === 'FIXED_RATE'
           ? config.overtimeFixedRate
           : round(hourlyRate * config.overtimeMultiplier),
-      units: roundTo(overtimeHours, 2),
+      units: roundTo(totalOvertimeHours, 2),
       amount: overtimeAmount,
       isTaxable: true,
     });

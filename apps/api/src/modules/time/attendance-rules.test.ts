@@ -48,6 +48,15 @@ const DEFAULTS: AttendancePolicy = {
   fullDayToleranceMinutes: 30,
   irregularCheckInEnabled: true,
   irregularCheckInCutoff: '11:00',
+  breakIncludedInWindow: true,
+  overtimeMinimumMinutes: 0,
+  overtimeRoundingMinutes: 0,
+  overtimeWeeklyCapMinutes: null,
+  overtimeMonthlyCapMinutes: null,
+  missingCheckOutStatus: 'PRESENT',
+  missingCheckInStatus: 'ABSENT',
+  irregularCheckInMode: 'ABSOLUTE_TIME',
+  irregularAfterShiftStartMinutes: 120,
 };
 
 /** Scores one day. `shift` null means "no assignment, use the company window". */

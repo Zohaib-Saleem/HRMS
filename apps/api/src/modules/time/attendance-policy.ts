@@ -47,7 +47,22 @@ export interface AttendancePolicy {
   fullDayToleranceMinutes: number;
   irregularCheckInEnabled: boolean;
   irregularCheckInCutoff: string;
+  breakIncludedInWindow: boolean;
+  overtimeMinimumMinutes: number;
+  overtimeRoundingMinutes: number;
+  overtimeWeeklyCapMinutes: number | null;
+  overtimeMonthlyCapMinutes: number | null;
+  missingCheckOutStatus: MissingPunchRule;
+  missingCheckInStatus: MissingPunchRule;
+  irregularCheckInMode: IrregularCutoffMode;
+  irregularAfterShiftStartMinutes: number;
 }
+
+/** How the irregular-arrival cutoff is expressed. */
+export type IrregularCutoffMode = 'ABSOLUTE_TIME' | 'AFTER_SHIFT_START';
+
+/** What a day with a punch missing on one end is worth. */
+export type MissingPunchRule = 'PRESENT' | 'ABSENT' | 'THRESHOLD';
 
 const POLICY_SELECT = {
   timezone: true,
@@ -73,6 +88,15 @@ const POLICY_SELECT = {
   fullDayToleranceMinutes: true,
   irregularCheckInEnabled: true,
   irregularCheckInCutoff: true,
+  breakIncludedInWindow: true,
+  overtimeMinimumMinutes: true,
+  overtimeRoundingMinutes: true,
+  overtimeWeeklyCapMinutes: true,
+  overtimeMonthlyCapMinutes: true,
+  missingCheckOutStatus: true,
+  missingCheckInStatus: true,
+  irregularCheckInMode: true,
+  irregularAfterShiftStartMinutes: true,
 } as const;
 
 /**
@@ -99,6 +123,23 @@ const OVERRIDABLE = [
   'overtimeEnabled',
   'overtimeAfterMinutes',
   'overtimeDailyCapMinutes',
+  'defaultShiftStart',
+  'defaultShiftEnd',
+  'overtimeFromShiftEnd',
+  'overtimeCountsEarlyArrival',
+  'overtimeReducedByLateArrival',
+  'fullDayToleranceMinutes',
+  'overtimeMinimumMinutes',
+  'overtimeRoundingMinutes',
+  'overtimeWeeklyCapMinutes',
+  'overtimeMonthlyCapMinutes',
+  'breakIncludedInWindow',
+  'irregularCheckInEnabled',
+  'irregularCheckInCutoff',
+  'irregularCheckInMode',
+  'irregularAfterShiftStartMinutes',
+  'lateTrackingEnabled',
+  'earlyDepartureTrackingEnabled',
 ] as const;
 
 /** Most specific wins. Two assignments at the same level are broken by date. */
@@ -176,9 +217,12 @@ export async function resolvePolicyFor(
     return current.effectiveFrom > best.effectiveFrom ? current : best;
   });
 
+  // Null means "inherit". An override that had to restate every rule would
+  // drift from the baseline the moment the baseline changed, so only the
+  // fields it actually sets are merged over.
   const overrides = Object.fromEntries(
-    OVERRIDABLE.map((key) => [key, winner.policy[key]]),
-  ) as Pick<AttendancePolicy, (typeof OVERRIDABLE)[number]>;
+    OVERRIDABLE.map((key) => [key, winner.policy[key]]).filter(([, value]) => value !== null),
+  ) as Partial<Pick<AttendancePolicy, (typeof OVERRIDABLE)[number]>>;
 
   return {
     ...baseline,
@@ -223,6 +267,8 @@ export async function weekendDaysFor(companyId: string): Promise<WeekDay[]> {
 export interface ShiftWindow {
   startTime: string;
   endTime: string;
+  /** Only read when the company says the break sits outside the window. */
+  breakMinutes?: number;
 }
 
 /** Minutes since midnight for an "HH:mm" string, or null if unparseable. */
@@ -348,10 +394,29 @@ export function effectiveShift(
  */
 export function isIrregularArrival(
   checkInAt: Date | null,
-  policy: Pick<AttendancePolicy, 'irregularCheckInEnabled' | 'irregularCheckInCutoff' | 'timeZone'>,
+  policy: Pick<
+    AttendancePolicy,
+    | 'irregularCheckInEnabled'
+    | 'irregularCheckInCutoff'
+    | 'irregularCheckInMode'
+    | 'irregularAfterShiftStartMinutes'
+    | 'timeZone'
+  >,
   dayKey: DayKey,
+  shift: ShiftWindow | null = null,
 ): boolean {
   if (!policy.irregularCheckInEnabled || !checkInAt) return false;
+
+  // Measured from the employee's own shift start when configured that way.
+  // An absolute cutoff only makes sense while everyone shares one schedule: it
+  // would mark every night-shift worker irregular, every day.
+  if (policy.irregularCheckInMode === 'AFTER_SHIFT_START' && shift) {
+    const start = boundaryOn(dayKey, shift.startTime, policy.timeZone);
+    if (!start) return false;
+    const after = Math.round((checkInAt.getTime() - start.getTime()) / 60_000);
+    return after > policy.irregularAfterShiftStartMinutes;
+  }
+
   const cutoff = boundaryOn(dayKey, policy.irregularCheckInCutoff, policy.timeZone);
   return cutoff !== null && checkInAt > cutoff;
 }
@@ -420,6 +485,8 @@ export function overtimeAfterShiftEnd(input: {
     | 'overtimeDailyCapMinutes'
     | 'overtimeCountsEarlyArrival'
     | 'overtimeReducedByLateArrival'
+    | 'overtimeMinimumMinutes'
+    | 'overtimeRoundingMinutes'
     | 'graceMinutes'
     | 'timeZone'
   >;
@@ -453,6 +520,17 @@ export function overtimeAfterShiftEnd(input: {
   }
 
   if (minutes <= 0) return 0;
+
+  // Below the configured minimum, nothing is credited: a two-minute overrun
+  // should not become a payable figure. Zero credits every minute.
+  if (minutes < policy.overtimeMinimumMinutes) return 0;
+
+  // Rounded DOWN to the configured step, so rounding can never manufacture
+  // time nobody worked. Zero is no rounding.
+  if (policy.overtimeRoundingMinutes > 0) {
+    minutes = Math.floor(minutes / policy.overtimeRoundingMinutes) * policy.overtimeRoundingMinutes;
+  }
+
   return Math.min(minutes, policy.overtimeDailyCapMinutes);
 }
 
@@ -509,12 +587,25 @@ export function computeAttendance(input: {
 
   // An assigned shift always wins; the company window is only the fallback.
   const shift = effectiveShift(input.shift, policy);
-  const irregular = isIrregularArrival(checkInAt, policy, dayKey);
+  const irregular = isIrregularArrival(checkInAt, policy, dayKey, shift);
 
-  const workedMinutes =
+  /**
+   * Worked minutes, with the break handled the way the company says it is.
+   *
+   * `breakIncludedInWindow` true - the default and this company's rule - means
+   * the shift window already accounts for the break, so nothing is subtracted:
+   * deducting it as well would charge it twice. False means the break sits
+   * outside the window and the shift's own break length comes off the day.
+   */
+  const rawMinutes =
     checkInAt && checkOutAt
       ? Math.max(0, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / 60_000))
       : null;
+
+  const breakMinutes =
+    policy.breakIncludedInWindow || !input.shift ? 0 : Math.max(0, input.shift.breakMinutes ?? 0);
+
+  const workedMinutes = rawMinutes === null ? null : Math.max(0, rawMinutes - breakMinutes);
 
   const lateMinutes =
     checkInAt && policy.lateTrackingEnabled
@@ -563,12 +654,29 @@ export function computeAttendance(input: {
   const tolerance = scheduledMinutes === null ? 0 : Math.max(0, policy.fullDayToleranceMinutes);
   const fullDayFrom = Math.max(policy.halfDayMinutes, policy.fullDayMinutes - tolerance);
 
+  /**
+   * A day scored on its thresholds. Used directly, and as the THRESHOLD answer
+   * for a day with a punch missing on one end.
+   */
+  const byThreshold = (worth: number | null): AttendanceComputation['status'] => {
+    if (worth === null) return 'ABSENT';
+    if (worth >= fullDayFrom) return 'PRESENT';
+    if (worth >= policy.halfDayMinutes) return 'HALF_DAY';
+    return 'ABSENT';
+  };
+
+  /** What a missing punch is worth, per configuration rather than per opinion. */
+  const missing = (
+    rule: MissingPunchRule,
+    worth: number | null,
+  ): AttendanceComputation['status'] =>
+    rule === 'THRESHOLD' ? byThreshold(worth) : rule;
+
   let status: AttendanceComputation['status'];
-  if (!checkInAt) status = 'ABSENT';
-  else if (dayWorth === null) status = 'PRESENT';
-  else if (dayWorth >= fullDayFrom) status = 'PRESENT';
-  else if (dayWorth >= policy.halfDayMinutes) status = 'HALF_DAY';
-  else status = 'ABSENT';
+  if (!checkInAt && !checkOutAt) status = missing(policy.missingCheckInStatus, null);
+  else if (!checkInAt) status = missing(policy.missingCheckInStatus, dayWorth);
+  else if (!checkOutAt) status = missing(policy.missingCheckOutStatus, dayWorth);
+  else status = byThreshold(dayWorth);
 
   return {
     workedMinutes,

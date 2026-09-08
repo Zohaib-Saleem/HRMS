@@ -127,6 +127,23 @@ export type AttendancePolicyInput = z.infer<typeof attendancePolicySchema>;
 
 // ------------------------------------------------------- attendance rules
 
+export const MISSING_PUNCH_RULES = ['PRESENT', 'ABSENT', 'THRESHOLD'] as const;
+export type MissingPunchRule = (typeof MISSING_PUNCH_RULES)[number];
+
+export const MISSING_PUNCH_RULE_LABELS: Record<MissingPunchRule, string> = {
+  PRESENT: 'Counted present',
+  ABSENT: 'Counted absent until corrected',
+  THRESHOLD: 'Scored on the usual thresholds',
+};
+
+export const IRREGULAR_CUTOFF_MODES = ['ABSOLUTE_TIME', 'AFTER_SHIFT_START'] as const;
+export type IrregularCutoffMode = (typeof IRREGULAR_CUTOFF_MODES)[number];
+
+export const IRREGULAR_CUTOFF_MODE_LABELS: Record<IrregularCutoffMode, string> = {
+  ABSOLUTE_TIME: 'A fixed time of day',
+  AFTER_SHIFT_START: 'Minutes after the shift starts',
+};
+
 /** 24-hour wall clock, the same shape shifts already store. */
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -177,6 +194,29 @@ export const attendanceRulesSchema = z
 
     irregularCheckInEnabled: z.boolean(),
     irregularCheckInCutoff: clockTime('The irregular check-in cutoff'),
+    irregularCheckInMode: z.enum(IRREGULAR_CUTOFF_MODES),
+    irregularAfterShiftStartMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The cutoff cannot be negative.')
+      .max(1440),
+
+    breakIncludedInWindow: z.boolean(),
+    overtimeMinimumMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The minimum cannot be negative.')
+      .max(480),
+    overtimeRoundingMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'Rounding cannot be negative.')
+      .max(120),
+    overtimeWeeklyCapMinutes: z.coerce.number().int().min(0).max(10_080).nullable(),
+    overtimeMonthlyCapMinutes: z.coerce.number().int().min(0).max(44_640).nullable(),
+
+    missingCheckOutStatus: z.enum(MISSING_PUNCH_RULES),
+    missingCheckInStatus: z.enum(MISSING_PUNCH_RULES),
   })
   .superRefine((value, ctx) => {
     if (value.defaultShiftStart === value.defaultShiftEnd) {
@@ -198,6 +238,29 @@ export const attendanceRulesSchema = z
         path: ['irregularCheckInCutoff'],
         message:
           'The cutoff must be after the shift start, or an on-time arrival would be treated as irregular.',
+      });
+    }
+
+    if (
+      value.overtimeWeeklyCapMinutes !== null &&
+      value.overtimeWeeklyCapMinutes < value.overtimeDailyCapMinutes
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['overtimeWeeklyCapMinutes'],
+        message: 'A weekly cap below the daily cap makes the daily cap unreachable.',
+      });
+    }
+
+    if (
+      value.overtimeMonthlyCapMinutes !== null &&
+      value.overtimeWeeklyCapMinutes !== null &&
+      value.overtimeMonthlyCapMinutes < value.overtimeWeeklyCapMinutes
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['overtimeMonthlyCapMinutes'],
+        message: 'A monthly cap below the weekly cap makes the weekly cap unreachable.',
       });
     }
 

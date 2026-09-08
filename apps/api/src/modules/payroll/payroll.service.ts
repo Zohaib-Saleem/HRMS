@@ -42,8 +42,16 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Fallback when an employee has no shift assignment and no company default. */
-const ASSUMED_SHIFT_MINUTES = 480;
+/**
+ * Last-resort scheduled minutes.
+ *
+ * Not a business rule: the real fallback is `fallbackScheduledMinutes` on
+ * payroll settings, which every caller passes. This is the value used only when
+ * a shift string is so malformed it cannot be parsed at all, and it exists so
+ * the arithmetic has a number rather than a NaN. It is never the answer to
+ * "how long is a working day here?" - configuration answers that.
+ */
+const UNPARSEABLE_SHIFT_MINUTES = 0;
 
 /** A calculation that started this long ago is treated as dead, not running. */
 const CALCULATION_STALE_MS = 10 * 60 * 1000;
@@ -116,6 +124,16 @@ export function effectiveConfig(
         ? null
         : toNumber(profile.hourlyRateOverride),
     roundingDecimals: settings.roundingDecimals,
+
+    overtimeWeekendMultiplier:
+      settings.overtimeWeekendMultiplier === null
+        ? null
+        : toNumber(settings.overtimeWeekendMultiplier),
+    overtimeHolidayMultiplier:
+      settings.overtimeHolidayMultiplier === null
+        ? null
+        : toNumber(settings.overtimeHolidayMultiplier),
+    fallbackScheduledMinutes: settings.fallbackScheduledMinutes,
   };
 }
 
@@ -232,8 +250,14 @@ export async function gatherFacts(input: {
   employees: ReadonlyArray<{ id: string; locationId: string | null }>;
   from: Date;
   to: Date;
+  /**
+   * Scheduled minutes for a day with no shift assignment. Passed in from
+   * payroll settings rather than assumed here: how long a working day is, is a
+   * company's answer to give.
+   */
+  fallbackScheduledMinutes: number;
 }): Promise<Map<string, EmployeeFacts>> {
-  const { companyId, employees, from, to } = input;
+  const { companyId, employees, from, to, fallbackScheduledMinutes } = input;
   const employeeIds = employees.map((e) => e.id);
 
   const [derived, timesheets, assignments] = await Promise.all([
@@ -294,7 +318,7 @@ export async function gatherFacts(input: {
             assignment.shift.endTime,
             assignment.shift.breakMinutes,
           )
-        : ASSUMED_SHIFT_MINUTES;
+        : fallbackScheduledMinutes;
 
       const overtimeApproved = sheets.some(
         (s) => dateKey(s.periodStart) <= day.date && dateKey(s.periodEnd) >= day.date,
@@ -346,7 +370,7 @@ export function shiftLengthMinutes(
 
   const start = parse(startTime);
   const end = parse(endTime);
-  if (start === null || end === null) return ASSUMED_SHIFT_MINUTES;
+  if (start === null || end === null) return UNPARSEABLE_SHIFT_MINUTES;
 
   const span = end > start ? end - start : 24 * 60 - start + end;
   return Math.max(0, span - Math.max(0, breakMinutes));
@@ -505,6 +529,7 @@ async function runCalculation(input: {
       employees: employees.map((e) => ({ id: e.id, locationId: e.locationId })),
       from,
       to,
+      fallbackScheduledMinutes: settings.fallbackScheduledMinutes,
     }),
   ]);
 
@@ -665,7 +690,7 @@ async function runCalculation(input: {
       pending.push({
         code: 'MISSING_SHIFT',
         severity: 'WARNING',
-        message: `${employee.firstName} ${employee.lastName} has ${result.tally.daysWithoutShift} working day(s) with no shift assigned; ${ASSUMED_SHIFT_MINUTES / 60} hours was assumed.`,
+        message: `${employee.firstName} ${employee.lastName} has ${result.tally.daysWithoutShift} working day(s) with no shift assigned; the configured fallback of ${config.fallbackScheduledMinutes / 60} hours was used.`,
         employeeId: employee.id,
       });
     }

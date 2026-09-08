@@ -4,6 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { AlertTriangle, Info, RotateCcw, Save } from 'lucide-react';
 import {
+  IRREGULAR_CUTOFF_MODES,
+  IRREGULAR_CUTOFF_MODE_LABELS,
+  MISSING_PUNCH_RULES,
+  MISSING_PUNCH_RULE_LABELS,
   PERMISSIONS,
   WEEK_DAY_LABELS,
   attendanceRulesSchema,
@@ -21,7 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { FormField, Input } from '@/components/ui/field';
+import { FormField, Input, NativeSelect } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
@@ -262,6 +266,15 @@ const FIELD_LABELS: Record<keyof AttendanceRulesInput, string> = {
   fullDayToleranceMinutes: 'Full-day tolerance',
   irregularCheckInEnabled: 'Flag irregular check-ins',
   irregularCheckInCutoff: 'Check-in cutoff',
+  irregularCheckInMode: 'Cutoff measured as',
+  irregularAfterShiftStartMinutes: 'Minutes after shift start',
+  breakIncludedInWindow: 'Break included in the window',
+  overtimeMinimumMinutes: 'Minimum overtime',
+  overtimeRoundingMinutes: 'Overtime rounding',
+  overtimeWeeklyCapMinutes: 'Weekly overtime cap',
+  overtimeMonthlyCapMinutes: 'Monthly overtime cap',
+  missingCheckOutStatus: 'Missing check-out',
+  missingCheckInStatus: 'Missing check-in',
 };
 
 const shown = (v: unknown): string =>
@@ -313,6 +326,15 @@ export function AttendanceRulesPage() {
           fullDayToleranceMinutes: query.data.fullDayToleranceMinutes,
           irregularCheckInEnabled: query.data.irregularCheckInEnabled,
           irregularCheckInCutoff: query.data.irregularCheckInCutoff,
+          irregularCheckInMode: query.data.irregularCheckInMode,
+          irregularAfterShiftStartMinutes: query.data.irregularAfterShiftStartMinutes,
+          breakIncludedInWindow: query.data.breakIncludedInWindow,
+          overtimeMinimumMinutes: query.data.overtimeMinimumMinutes,
+          overtimeRoundingMinutes: query.data.overtimeRoundingMinutes,
+          overtimeWeeklyCapMinutes: query.data.overtimeWeeklyCapMinutes,
+          overtimeMonthlyCapMinutes: query.data.overtimeMonthlyCapMinutes,
+          missingCheckOutStatus: query.data.missingCheckOutStatus,
+          missingCheckInStatus: query.data.missingCheckInStatus,
         }
       : undefined,
   });
@@ -371,6 +393,15 @@ export function AttendanceRulesPage() {
     fullDayToleranceMinutes: rules.fullDayToleranceMinutes,
     irregularCheckInEnabled: rules.irregularCheckInEnabled,
     irregularCheckInCutoff: rules.irregularCheckInCutoff,
+    irregularCheckInMode: rules.irregularCheckInMode,
+    irregularAfterShiftStartMinutes: rules.irregularAfterShiftStartMinutes,
+    breakIncludedInWindow: rules.breakIncludedInWindow,
+    overtimeMinimumMinutes: rules.overtimeMinimumMinutes,
+    overtimeRoundingMinutes: rules.overtimeRoundingMinutes,
+    overtimeWeeklyCapMinutes: rules.overtimeWeeklyCapMinutes,
+    overtimeMonthlyCapMinutes: rules.overtimeMonthlyCapMinutes,
+    missingCheckOutStatus: rules.missingCheckOutStatus,
+    missingCheckInStatus: rules.missingCheckInStatus,
   };
   const window =
     (toMinutes(live?.defaultShiftEnd ?? rules.defaultShiftEnd) ?? 0) -
@@ -500,6 +531,21 @@ export function AttendanceRulesPage() {
                 {...form.register('defaultShiftEnd')}
               />
             </FormField>
+            <div className="sm:col-span-2">
+              <Controller
+                control={form.control}
+                name="breakIncludedInWindow"
+                render={({ field }) => (
+                  <Toggle
+                    label="Break is included inside the shift window"
+                    hint="On: the window already accounts for it and nothing is subtracted. Off: the shift's break is deducted from the day."
+                    checked={field.value}
+                    disabled={!canManage}
+                    onChange={field.onChange}
+                  />
+                )}
+              />
+            </div>
             <div className="space-y-3 rounded-lg border border-border bg-surface-muted/40 p-3 text-xs text-muted-foreground sm:col-span-2">
               <p>
                 Scheduled presence window: <strong className="text-foreground">{fmt(windowMinutes)}</strong>{' '}
@@ -597,20 +643,53 @@ export function AttendanceRulesPage() {
                 )}
               />
             </div>
-            <FormField
-              label="Daily overtime maximum (minutes)"
-              htmlFor="overtimeDailyCapMinutes"
-              hint="Stops a forgotten check-out booking a whole evening."
-              error={form.formState.errors.overtimeDailyCapMinutes?.message}
-            >
-              <Input
-                id="overtimeDailyCapMinutes"
-                type="number"
-                min={0}
-                disabled={!canManage}
-                {...form.register('overtimeDailyCapMinutes')}
-              />
-            </FormField>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                label="Daily overtime maximum (minutes)"
+                htmlFor="overtimeDailyCapMinutes"
+                hint="Stops a forgotten check-out booking a whole evening."
+                error={form.formState.errors.overtimeDailyCapMinutes?.message}
+              >
+                <Input id="overtimeDailyCapMinutes" type="number" min={0} disabled={!canManage}
+                  {...form.register('overtimeDailyCapMinutes')} />
+              </FormField>
+              <FormField
+                label="Minimum overtime (minutes)"
+                htmlFor="overtimeMinimumMinutes"
+                hint="Shorter overruns are not credited. Zero credits every minute."
+                error={form.formState.errors.overtimeMinimumMinutes?.message}
+              >
+                <Input id="overtimeMinimumMinutes" type="number" min={0} disabled={!canManage}
+                  {...form.register('overtimeMinimumMinutes')} />
+              </FormField>
+              <FormField
+                label="Round overtime down to (minutes)"
+                htmlFor="overtimeRoundingMinutes"
+                hint="Always downwards, so rounding cannot create time nobody worked. Zero is no rounding."
+                error={form.formState.errors.overtimeRoundingMinutes?.message}
+              >
+                <Input id="overtimeRoundingMinutes" type="number" min={0} disabled={!canManage}
+                  {...form.register('overtimeRoundingMinutes')} />
+              </FormField>
+              <FormField
+                label="Weekly overtime cap (minutes)"
+                htmlFor="overtimeWeeklyCapMinutes"
+                hint="Leave empty for no weekly ceiling."
+                error={form.formState.errors.overtimeWeeklyCapMinutes?.message}
+              >
+                <Input id="overtimeWeeklyCapMinutes" type="number" min={0} disabled={!canManage}
+                  {...form.register('overtimeWeeklyCapMinutes', { setValueAs: (v) => (v === '' ? null : Number(v)) })} />
+              </FormField>
+              <FormField
+                label="Monthly overtime cap (minutes)"
+                htmlFor="overtimeMonthlyCapMinutes"
+                hint="Leave empty for no monthly ceiling."
+                error={form.formState.errors.overtimeMonthlyCapMinutes?.message}
+              >
+                <Input id="overtimeMonthlyCapMinutes" type="number" min={0} disabled={!canManage}
+                  {...form.register('overtimeMonthlyCapMinutes', { setValueAs: (v) => (v === '' ? null : Number(v)) })} />
+              </FormField>
+            </div>
           </CardContent>
         </Card>
 
@@ -714,16 +793,34 @@ export function AttendanceRulesPage() {
               )}
             />
             <FormField
-              label="Check-in cutoff"
+              label="Cutoff measured as"
+              htmlFor="irregularCheckInMode"
+              hint="A fixed time only describes one shared schedule. Measuring from the shift start works for any shift, including nights."
+              error={form.formState.errors.irregularCheckInMode?.message}
+            >
+              <NativeSelect id="irregularCheckInMode" disabled={!canManage}
+                {...form.register('irregularCheckInMode')}>
+                {IRREGULAR_CUTOFF_MODES.map((mode) => (
+                  <option key={mode} value={mode}>{IRREGULAR_CUTOFF_MODE_LABELS[mode]}</option>
+                ))}
+              </NativeSelect>
+            </FormField>
+            <FormField
+              label="Check-in cutoff (fixed time)"
               htmlFor="irregularCheckInCutoff"
               error={form.formState.errors.irregularCheckInCutoff?.message}
             >
-              <Input
-                id="irregularCheckInCutoff"
-                type="time"
-                disabled={!canManage}
-                {...form.register('irregularCheckInCutoff')}
-              />
+              <Input id="irregularCheckInCutoff" type="time" disabled={!canManage}
+                {...form.register('irregularCheckInCutoff')} />
+            </FormField>
+            <FormField
+              label="Minutes after shift start"
+              htmlFor="irregularAfterShiftStartMinutes"
+              hint="Used when the cutoff is measured from the shift start."
+              error={form.formState.errors.irregularAfterShiftStartMinutes?.message}
+            >
+              <Input id="irregularAfterShiftStartMinutes" type="number" min={0} disabled={!canManage}
+                {...form.register('irregularAfterShiftStartMinutes')} />
             </FormField>
           </CardContent>
         </Card>
@@ -742,11 +839,32 @@ export function AttendanceRulesPage() {
               not by itself make the day a half day. These thresholds are edited on the attendance
               policy screen.
             </p>
-            <p className="text-muted-foreground">
-              A day with no check-in is recorded absent. A day with a check-in and no check-out stays
-              present with no worked minutes until it is corrected. That behaviour is currently fixed
-              in code and is not configurable here.
-            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                label="Day with a check-in and no check-out"
+                htmlFor="missingCheckOutStatus"
+                error={form.formState.errors.missingCheckOutStatus?.message}
+              >
+                <NativeSelect id="missingCheckOutStatus" disabled={!canManage}
+                  {...form.register('missingCheckOutStatus')}>
+                  {MISSING_PUNCH_RULES.map((rule) => (
+                    <option key={rule} value={rule}>{MISSING_PUNCH_RULE_LABELS[rule]}</option>
+                  ))}
+                </NativeSelect>
+              </FormField>
+              <FormField
+                label="Day with no check-in at all"
+                htmlFor="missingCheckInStatus"
+                error={form.formState.errors.missingCheckInStatus?.message}
+              >
+                <NativeSelect id="missingCheckInStatus" disabled={!canManage}
+                  {...form.register('missingCheckInStatus')}>
+                  {MISSING_PUNCH_RULES.map((rule) => (
+                    <option key={rule} value={rule}>{MISSING_PUNCH_RULE_LABELS[rule]}</option>
+                  ))}
+                </NativeSelect>
+              </FormField>
+            </div>
           </CardContent>
         </Card>
       </div>
