@@ -86,11 +86,50 @@ const schema = z.object({
 });
 
 /**
- * Choosing the SMTP provider without giving it a host is a configuration
- * mistake that would otherwise only surface the first time someone requests a
- * password reset. Fail at boot instead.
+ * Mail configuration rules, all enforced at boot.
+ *
+ * Three separate mistakes, each of which would otherwise only surface the first
+ * time somebody requested a password reset - by which point the link has
+ * already gone somewhere it should not have, or nowhere at all:
+ *
+ *   - `smtp` without a host or port. Half a transport is not a transport.
+ *   - `console` in production. The console provider writes the whole message
+ *     body to the log and delivers nothing, so a production system running on
+ *     it silently drops every password reset and approval while printing live
+ *     reset links to disk. It is a development tool and the only safe thing to
+ *     do with it in production is refuse to start.
+ *   - a username with no password, or a password with no username. Nodemailer
+ *     would authenticate with an empty string and the relay would reject every
+ *     message, which reads in the logs like a network fault rather than a
+ *     typo in the environment.
  */
 const schemaWithMailRules = schema.superRefine((value, ctx) => {
+  if (value.NODE_ENV === 'production' && value.MAIL_PROVIDER === 'console') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['MAIL_PROVIDER'],
+      message:
+        'MAIL_PROVIDER=console cannot be used when NODE_ENV=production: it delivers no mail and writes password reset links to the log. Set MAIL_PROVIDER=smtp and supply SMTP_HOST and SMTP_PORT.',
+    });
+  }
+
+  // A username and a password only mean anything together. Checked for every
+  // provider, so the mistake is caught even before SMTP is switched on.
+  if (value.SMTP_USER && !value.SMTP_PASSWORD) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SMTP_PASSWORD'],
+      message: 'SMTP_PASSWORD is required when SMTP_USER is set.',
+    });
+  }
+  if (value.SMTP_PASSWORD && !value.SMTP_USER) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SMTP_USER'],
+      message: 'SMTP_USER is required when SMTP_PASSWORD is set.',
+    });
+  }
+
   if (value.MAIL_PROVIDER !== 'smtp') return;
   if (!value.SMTP_HOST) {
     ctx.addIssue({
@@ -108,7 +147,17 @@ const schemaWithMailRules = schema.superRefine((value, ctx) => {
   }
 });
 
-const parsed = schemaWithMailRules.safeParse(process.env);
+/**
+ * Validates a candidate environment without touching `process.env` or exiting.
+ *
+ * Exported so the rules above can be tested directly. The module-level boot
+ * path below is the only caller that turns a failure into `process.exit`.
+ */
+export function validateEnv(raw: NodeJS.ProcessEnv | Record<string, string | undefined>) {
+  return schemaWithMailRules.safeParse(raw);
+}
+
+const parsed = validateEnv(process.env);
 
 if (!parsed.success) {
   const issues = parsed.error.issues
