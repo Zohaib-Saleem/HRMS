@@ -11,21 +11,70 @@ import {
 import { PERMISSIONS, type Permission } from '@hrms/shared';
 import { PageHeader } from '@/components/layout/page-header';
 import { usePermissions } from '@/features/auth/session-context';
+import type { CapabilityState } from '@/lib/capability';
 import { cn } from '@/lib/utils';
+import { useAttendanceRules } from './use-attendance-rules';
 
-const TABS: Array<{ to: string; label: string; icon: typeof Building2; permission: Permission }> = [
+export interface SettingsTab {
+  to: string;
+  label: string;
+  icon: typeof Building2;
+  permission: Permission;
+  /**
+   * Set when the tab also depends on an endpoint that may not be deployed yet.
+   * Permission alone is not enough to know a screen will work.
+   */
+  capability?: 'attendanceRules';
+}
+
+export const TABS: SettingsTab[] = [
   { to: '/settings/company', label: 'Company', icon: Building2, permission: PERMISSIONS.COMPANY_READ },
   { to: '/settings/attendance', label: 'Attendance policy', icon: Clock, permission: PERMISSIONS.COMPANY_READ },
-  { to: '/settings/attendance-rules', label: 'Attendance rules', icon: SlidersHorizontal, permission: PERMISSIONS.COMPANY_READ },
+  {
+    to: '/settings/attendance-rules',
+    label: 'Attendance rules',
+    icon: SlidersHorizontal,
+    permission: PERMISSIONS.COMPANY_READ,
+    // Ships ahead of its endpoint; hidden until the API answers.
+    capability: 'attendanceRules',
+  },
   { to: '/settings/attendance-policies', label: 'Policy overrides', icon: Layers3, permission: PERMISSIONS.COMPANY_READ },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },
   { to: '/settings/audit', label: 'Audit log', icon: ScrollText, permission: PERMISSIONS.AUDIT_READ },
 ];
 
+/**
+ * Which tabs to show.
+ *
+ * Two independent gates. Permission decides what this user may reach at all;
+ * capability decides whether the screen behind it currently works. A tab needs
+ * both, and while a capability is still being checked the tab stays hidden -
+ * appearing and then vanishing reads as a glitch.
+ *
+ * Pure, so the rules can be asserted without rendering anything.
+ */
+export function visibleTabs(
+  tabs: readonly SettingsTab[],
+  input: {
+    has: (permission: Permission) => boolean;
+    capabilities: Record<'attendanceRules', CapabilityState>;
+  },
+): SettingsTab[] {
+  return tabs.filter((tab) => {
+    if (!input.has(tab.permission)) return false;
+    if (!tab.capability) return true;
+    return input.capabilities[tab.capability] === 'available';
+  });
+}
+
 export function SettingsLayout() {
   const { has } = usePermissions();
-  const tabs = TABS.filter((tab) => has(tab.permission));
+  const attendanceRules = useAttendanceRules();
+  const tabs = visibleTabs(TABS, {
+    has,
+    capabilities: { attendanceRules: attendanceRules.state },
+  });
 
   return (
     <>

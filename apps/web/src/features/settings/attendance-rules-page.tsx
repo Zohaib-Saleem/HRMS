@@ -1,6 +1,7 @@
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Navigate } from 'react-router-dom';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { AlertTriangle, Info, RotateCcw, Save } from 'lucide-react';
 import {
@@ -27,9 +28,9 @@ import {
 } from '@/components/ui/card';
 import { FormField, Input, NativeSelect } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { usePermissions } from '@/features/auth/session-context';
+import { ATTENDANCE_RULES_KEY, useAttendanceRules } from './use-attendance-rules';
 import { cn } from '@/lib/utils';
 
 /**
@@ -299,14 +300,14 @@ export function AttendanceRulesPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
 
-  const query = useQuery({
-    queryKey: ['company', 'attendance-rules'],
-    queryFn: () => api.get<AttendanceRulesView>('/company/attendance-rules'),
-  });
+  // The same query the Settings tab strip probes with, so reaching this screen
+  // costs no extra request and the two can never disagree about availability.
+  const query = useAttendanceRules();
 
   // The server decides; the UI only reflects it. Both are checked, because a
   // hidden control is a courtesy and the endpoint is the actual gate.
   const canManage = has(PERMISSIONS.SETTINGS_MANAGE) && (query.data?.canManage ?? false);
+  const rulesUnavailable = query.state === 'unavailable';
 
   const form = useForm<AttendanceRulesInput>({
     resolver: zodResolver(attendanceRulesSchema),
@@ -345,7 +346,7 @@ export function AttendanceRulesPage() {
     mutationFn: (input: AttendanceRulesInput) =>
       api.patch<AttendanceRulesView>('/company/attendance-rules', input),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['company'] });
+      await queryClient.invalidateQueries({ queryKey: ATTENDANCE_RULES_KEY });
       toast.success('Attendance rules saved', {
         description:
           'Attendance rule changes apply to future attendance processing. Existing attendance records are not recalculated automatically.',
@@ -363,7 +364,7 @@ export function AttendanceRulesPage() {
     },
   });
 
-  if (query.isLoading) {
+  if (query.state === 'checking') {
     return (
       <div className="space-y-4">
         <Skeleton className="h-28" />
@@ -372,8 +373,15 @@ export function AttendanceRulesPage() {
     );
   }
 
-  if (query.isError || !query.data) {
-    return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
+  /**
+   * Reached directly while the endpoint is not deployed.
+   *
+   * The tab is already hidden, so this is a typed URL or a stale bookmark.
+   * Sending them back to Settings is a better answer than an error card about
+   * a screen they were never offered.
+   */
+  if (rulesUnavailable || !query.data) {
+    return <Navigate to="/settings" replace />;
   }
 
   const rules = query.data;
