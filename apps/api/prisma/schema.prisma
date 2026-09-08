@@ -335,6 +335,10 @@ model Employee {
   phone         String?
   personalPhone String?
   photoUrl      String?
+  /// Father's name, as carried by the payroll roster this record was imported
+  /// from. Kept distinct from middleName: it is a separate person, not part of
+  /// this employee's own name.
+  fatherName    String?
 
   // --- job ------------------------------------------------------------------
   /// Retained alongside designationId as a free-text fallback for imported
@@ -364,9 +368,18 @@ model Employee {
   maritalStatus MaritalStatus?
   nationality   String?
   bloodGroup    String?
+  placeOfBirth  String?
+  religion      String?
 
   presentAddress   String?
   permanentAddress String?
+  /// Structured address parts, imported alongside the free-text address above
+  /// rather than parsed out of it, because the roster supplies them separately.
+  addressCity      String?
+  addressProvince  String?
+  addressState     String?
+  addressCountry   String?
+  addressZipCode   String?
 
   emergencyContactName         String?
   emergencyContactPhone        String?
@@ -377,11 +390,40 @@ model Employee {
   // read-auditing land in phase 8; until then the API strips these from
   // responses for callers without that permission.
   nationalId        String?
+  /// Issue and expiry of the national identity document above (CNIC / Emirates
+  /// ID). Separate from the passport dates: they are different documents.
+  nationalIdIssued  DateTime? @db.Date
+  nationalIdExpiry  DateTime? @db.Date
   passportNumber    String?
   passportExpiry    DateTime? @db.Date
   visaNumber        String?
   visaExpiry        DateTime? @db.Date
   bankAccountNumber String?
+  bankAccountTitle  String?
+  bankName          String?
+
+  // --- roster attributes (imported) ----------------------------------------
+  // Values carried by the payroll roster that have no behavioural meaning here
+  // yet. Held as supplied so the import is lossless and nothing has to be
+  // re-keyed when a feature does start reading them.
+
+  /// Site grouping as the roster labels it. Parallel to locationId, which is
+  /// the HRMS's own record - this is the source system's wording, kept verbatim.
+  area                     String?
+  employeeGroup            String?
+  /// Outsourcing arrangement, where the roster records one.
+  vendor                   String?
+  familyCode               String?
+  /// "Probation" / "Permanent" as supplied. Deliberately not an enum and not
+  /// folded into `status`: EmployeeStatus answers whether someone is employed,
+  /// this answers whether their employment is confirmed. Two different questions.
+  confirmationStatus       String?
+  expectedConfirmationDays Int?
+  /// Access template named by the roster. Not a Role: nothing reads it, and
+  /// mapping it onto one would grant permissions the import never intended.
+  roleTemplate             String?
+  allowManualAttendance    Boolean?
+  allowEmployeeLogin       Boolean?
 
   notes String?
 

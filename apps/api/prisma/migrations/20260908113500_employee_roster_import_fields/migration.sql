@@ -1,0 +1,23 @@
+-- AlterTable
+ALTER TABLE "employees" ADD COLUMN     "addressCity" TEXT,
+ADD COLUMN     "addressCountry" TEXT,
+ADD COLUMN     "addressProvince" TEXT,
+ADD COLUMN     "addressState" TEXT,
+ADD COLUMN     "addressZipCode" TEXT,
+ADD COLUMN     "allowEmployeeLogin" BOOLEAN,
+ADD COLUMN     "allowManualAttendance" BOOLEAN,
+ADD COLUMN     "area" TEXT,
+ADD COLUMN     "bankAccountTitle" TEXT,
+ADD COLUMN     "bankName" TEXT,
+ADD COLUMN     "confirmationStatus" TEXT,
+ADD COLUMN     "employeeGroup" TEXT,
+ADD COLUMN     "expectedConfirmationDays" INTEGER,
+ADD COLUMN     "familyCode" TEXT,
+ADD COLUMN     "fatherName" TEXT,
+ADD COLUMN     "nationalIdExpiry" DATE,
+ADD COLUMN     "nationalIdIssued" DATE,
+ADD COLUMN     "placeOfBirth" TEXT,
+ADD COLUMN     "religion" TEXT,
+ADD COLUMN     "roleTemplate" TEXT,
+ADD COLUMN     "vendor" TEXT;
+
