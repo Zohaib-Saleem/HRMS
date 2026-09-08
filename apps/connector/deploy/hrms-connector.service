@@ -1,0 +1,48 @@
+# systemd unit for the HRMS LAN connector.
+#
+#   sudo cp hrms-connector.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hrms-connector
+#   journalctl -u hrms-connector -f
+#
+# Assumes the connector is installed at /opt/hrms-connector, with
+# connector.config.json beside it. Adjust the paths if it lives elsewhere.
+
+[Unit]
+Description=HRMS attendance connector
+Documentation=https://github.com/your-org/hrms/blob/master/apps/connector/README.md
+# Only the LAN and outbound internet are needed; neither is worth blocking on,
+# so this waits for the network rather than requiring it.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/hrms-connector/hrms-connector.mjs
+WorkingDirectory=/opt/hrms-connector
+
+# The connector reads a terminal and posts to one address. It has no reason to
+# be root, to write anywhere but its own directory, or to gain privileges.
+User=hrms-connector
+Group=hrms-connector
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hrms-connector
+
+# Restart forever. The point of this program is that nobody has to visit the
+# machine it runs on, and that is only true if a crash heals itself.
+Restart=always
+RestartSec=30
+
+# Exit 78 is "this is not configured", which restarting cannot fix. Stopping
+# makes the failure visible in `systemctl status` instead of hiding it in a
+# restart loop.
+RestartPreventExitStatus=78
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

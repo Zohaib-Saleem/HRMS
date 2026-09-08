@@ -401,3 +401,101 @@ export interface ConnectorRosterResult {
   stored: number;
   unmapped: number;
 }
+
+// ---------------------------------------------------------------------------
+// The agent envelope - POST /connector
+// ---------------------------------------------------------------------------
+
+/**
+ * What a field agent posts to the bare `/connector` path.
+ *
+ * A second shape for the same conversation, and deliberately so. The Devices
+ * page advertises `<origin>/connector` as the connector's address, and an agent
+ * written against that string reads it as the endpoint rather than as a prefix.
+ * Both readings are reasonable; only one of them had a route. Rather than ask a
+ * machine in another building to be reconfigured, the server learns the second
+ * dialect and translates it into the first.
+ *
+ * Everything downstream is the existing path - `toDevicePunches`, then
+ * `ingestConnectorBatch`. This schema's whole job is to get an unfamiliar
+ * envelope as far as `ConnectorPunch` without inventing anything.
+ */
+
+/**
+ * One reading, accepted loosely on purpose.
+ *
+ * An agent this project did not write chooses its own field names, so the
+ * record is taken as an open object and the names are resolved afterwards in
+ * `normaliseAgentRecords`, where a miss can be counted and reported instead of
+ * failing a batch of real attendance at the schema boundary. Unknown keys are
+ * kept rather than stripped: they are what tells an operator which dialect
+ * arrived.
+ */
+export const connectorAgentRecordSchema = z.record(z.unknown());
+
+export type ConnectorAgentRecord = z.infer<typeof connectorAgentRecordSchema>;
+
+/**
+ * Bounded well above one terminal's backlog.
+ *
+ * The batching policy belongs to the agent, and this server cannot change the
+ * agent's mind about it. The cap exists so an unbounded array cannot be used to
+ * exhaust memory, not to express a preference about batch size.
+ */
+export const CONNECTOR_AGENT_MAX_RECORDS = 50_000;
+
+export const connectorAgentBatchSchema = z.object({
+  /** Free-form label the agent gives itself. Recorded, never trusted. */
+  source: z.string().trim().max(64).nullish(),
+  /**
+   * The terminal serial. `serialNumber` is accepted as an alias so the two
+   * dialects cannot disagree about the one field that is also a credential.
+   */
+  deviceSerial: z.string().trim().min(1).max(64).nullish(),
+  serialNumber: z.string().trim().min(1).max(64).nullish(),
+  /**
+   * Whatever identifier the agent holds for the device.
+   *
+   * Never used to select the device: the serial does that, and it is the half
+   * of the credential the agent read off the terminal itself. Kept only so a
+   * mismatch can be logged.
+   */
+  deviceId: z.string().trim().max(64).nullish(),
+  /** The agent's identifier for this upload, used to make a retry legible. */
+  batchId: z.string().trim().max(128).nullish(),
+  sentAt: z.string().trim().max(64).nullish(),
+  connectorVersion: z.string().trim().max(32).nullish(),
+  /** The agent's idea of the terminal clock, where it sends one. */
+  deviceTime: z.string().trim().max(64).nullish(),
+  records: z
+    .array(connectorAgentRecordSchema)
+    .max(CONNECTOR_AGENT_MAX_RECORDS, 'That is more records than any terminal holds.'),
+});
+
+export type ConnectorAgentBatch = z.infer<typeof connectorAgentBatchSchema>;
+
+/**
+ * The answer to an agent whose records this server is not yet accepting.
+ *
+ * Sent with 503, which is the only honest status: the endpoint exists, the
+ * caller is who it says it is, and the records are good - the server is simply
+ * not taking them yet. A 200 would be the dangerous reply, because an agent
+ * that reads success advances its cursor and discards what it holds.
+ */
+export interface ConnectorAgentHeldResult {
+  accepted: false;
+  held: true;
+  batchId: string | null;
+  /** How many records were read and understood, none of which were stored. */
+  received: number;
+  readable: number;
+  unreadable: number;
+  retryAfterSeconds: number;
+  message: string;
+}
+
+export interface ConnectorAgentBatchResult extends ConnectorBatchResult {
+  accepted: true;
+  held: false;
+  batchId: string | null;
+}

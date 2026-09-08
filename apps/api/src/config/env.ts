@@ -51,6 +51,18 @@ const schema = z.object({
    */
   DEVICE_PUSH_ORIGIN: z.string().url().optional(),
 
+  /**
+   * Terminal serials whose records the bare `/connector` endpoint may store.
+   *
+   * A comma-separated allow-list, empty by default. A serial that is not listed
+   * is authenticated and validated as normal and then answered 503 with nothing
+   * written, so an agent holding a long backlog keeps it rather than delivering
+   * it the moment a route appears. Releasing one terminal is a deliberate edit
+   * here plus an API restart - there is no code path that opens ingest on its
+   * own, and forgetting this setting holds records rather than releasing them.
+   */
+  CONNECTOR_INGEST_LIVE_SERIALS: z.string().optional(),
+
   // --- Mail -----------------------------------------------------------------
   // `console` writes the message to the log instead of sending it, which is the
   // right behaviour for development. Switching to `smtp` requires the SMTP_*

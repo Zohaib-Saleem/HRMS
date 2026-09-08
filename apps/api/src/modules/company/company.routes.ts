@@ -3,8 +3,47 @@ import { PERMISSIONS, attendancePolicySchema, updateCompanySchema } from '@hrms/
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { diff, recordAudit } from '../../core/audit.js';
-import { ValidationError } from '../../core/errors.js';
+import { ForbiddenError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
+import { hasFullScope } from '../../auth/scope.js';
+import type { AuthContext } from '../../auth/session.js';
+
+/**
+ * Company fields that describe how attendance is POLICED rather than how the
+ * company presents itself.
+ *
+ * Every signed-in user holds `company.read` - they need the name, timezone,
+ * currency and date format to render anything at all. These particular fields
+ * are different: together they tell an employee which networks bypass the
+ * check-in restriction, how far from a location a punch is still accepted, and
+ * exactly how much lateness goes unrecorded. That is a description of the
+ * control, which is useful only to someone trying to work around it. They are
+ * returned only to a caller who could change them anyway.
+ */
+const RESTRICTED_COMPANY_FIELDS = [
+  'allowedCheckInCidrs',
+  'ipRestrictionEnabled',
+  'locationRestrictionEnabled',
+  'defaultGeofenceRadiusM',
+  'graceMinutes',
+  'earlyLeaveGraceMinutes',
+  'halfDayMinutes',
+  'fullDayMinutes',
+  'overtimeEnabled',
+  'overtimeAfterMinutes',
+  'overtimeDailyCapMinutes',
+] as const;
+
+function mayReadRestrictedConfig(auth: AuthContext): boolean {
+  return auth.permissions.has(PERMISSIONS.COMPANY_MANAGE);
+}
+
+function redactCompany<T extends Record<string, unknown>>(company: T, auth: AuthContext): T {
+  if (mayReadRestrictedConfig(auth)) return company;
+  const safe = { ...company };
+  for (const field of RESTRICTED_COMPANY_FIELDS) delete safe[field];
+  return safe;
+}
 
 export const companyRoutes: FastifyPluginAsync = async (app) => {
   app.get(
@@ -13,7 +52,8 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const auth = requireAuthContext(request);
       const company = await prisma.company.findUniqueOrThrow({ where: { id: auth.companyId } });
-      return reply.send({ data: company });
+      // Non-administrators get the profile without the enforcement settings.
+      return reply.send({ data: redactCompany(company as unknown as Record<string, unknown>, auth) });
     },
   );
 
@@ -113,12 +153,27 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  /** KPI counters for the dashboard. Cheap aggregate queries, one round trip. */
+  /**
+   * KPI counters for the administrative dashboard.
+   *
+   * Company-wide aggregates, so this needs company-wide SIGHT and not merely
+   * the `company.read` permission every signed-in user holds. Permission
+   * answers "may you read company things?"; scope answers "how much of the
+   * company?" - and this endpoint previously asked only the first question,
+   * handing headcount, active-account count, absence levels and the hiring rate
+   * to an employee whose scope is OWN. In a small company "on leave: 1" plus a
+   * visibly absent colleague identifies that colleague.
+   *
+   * Personal dashboard figures come from /me/dashboard instead.
+   */
   app.get(
     '/stats',
-    { preHandler: requirePermission(PERMISSIONS.COMPANY_READ) },
+    { preHandler: requirePermission(PERMISSIONS.EMPLOYEE_READ) },
     async (request, reply) => {
       const auth = requireAuthContext(request);
+      if (!hasFullScope(auth)) {
+        throw new ForbiddenError('You do not have permission to view company-wide statistics.');
+      }
       const companyId = auth.companyId;
 
       const [employees, activeEmployees, onLeave, departments, teams, activeUsers, newThisMonth] =

@@ -53,6 +53,82 @@
   --input: oklch(0.916 0.006 255);
   --ring: oklch(0.52 0.16 265);
 
+  /*
+    Chart palette.
+
+    Attendance states, and only attendance states - these are never used as
+    generic "series 1..5" colours. The five hexes are validated as a set
+    (lightness band, chroma floor, colour-vision separation on the ring order
+    Present -> Half day -> Late -> On leave -> Absent, and contrast against the
+    chart surface), so re-picking one by eye breaks the set. Green and amber sit
+    under 3:1 on the light surface, which is why every chart that uses them also
+    prints the figure beside the mark rather than relying on colour alone.
+  */
+  --chart-present: #1baf7a;
+  --chart-half-day: #2a78d6;
+  --chart-late: #eda100;
+  --chart-leave: #4a3aa7;
+  --chart-absent: #e34948;
+  --chart-other: oklch(0.72 0.012 257);
+  --chart-grid: oklch(0.9 0.006 255);
+
+  /*
+    Attendance status surfaces.
+
+    The chart palette above says what a status looks like as a 4px mark; this
+    says what it looks like as a filled calendar cell. Same hues, re-stepped for
+    a solid block of colour behind text - the near-white pastels this replaced
+    read as "disabled" once they were tiled across a full desktop month grid, so
+    the background carries real chroma and the text is the same hue pushed to a
+    readable lightness rather than a generic foreground.
+
+    Present green, absent red, half day amber, leave purple, holiday blue: the
+    five hues are the chart palette's, so a status is the same colour whether it
+    is a cell, a bar or a badge.
+  */
+  --att-present: oklch(0.9 0.085 158);
+  --att-present-foreground: oklch(0.4 0.1 158);
+  --att-present-border: oklch(0.73 0.13 158);
+
+  --att-absent: oklch(0.895 0.075 22);
+  --att-absent-foreground: oklch(0.44 0.17 25);
+  --att-absent-border: oklch(0.72 0.16 25);
+
+  --att-half-day: oklch(0.915 0.1 88);
+  --att-half-day-foreground: oklch(0.45 0.1 72);
+  --att-half-day-border: oklch(0.79 0.14 82);
+
+  --att-leave: oklch(0.9 0.07 303);
+  --att-leave-foreground: oklch(0.43 0.18 300);
+  --att-leave-border: oklch(0.73 0.13 303);
+
+  --att-holiday: oklch(0.9 0.065 250);
+  --att-holiday-foreground: oklch(0.45 0.16 255);
+  --att-holiday-border: oklch(0.72 0.13 252);
+
+  /* Not a judgement, so no hue - but still a legible grey, not a whisper. */
+  --att-weekend: oklch(0.925 0.005 255);
+  --att-weekend-foreground: oklch(0.44 0.012 257);
+  --att-weekend-border: oklch(0.855 0.006 255);
+
+  /* A day that has not happened yet: outlined, uncoloured, never red. */
+  --att-upcoming: var(--card);
+  --att-upcoming-foreground: oklch(0.55 0.015 257);
+  --att-upcoming-border: oklch(0.86 0.006 255);
+
+  /*
+    Hover leans each cell one step towards its own border colour. Derived from
+    the pair above rather than restated, so it follows the theme for free - the
+    dark block below only has to re-pick the two source colours.
+  */
+  --att-present-hover: color-mix(in oklab, var(--att-present) 84%, var(--att-present-border));
+  --att-absent-hover: color-mix(in oklab, var(--att-absent) 84%, var(--att-absent-border));
+  --att-half-day-hover: color-mix(in oklab, var(--att-half-day) 84%, var(--att-half-day-border));
+  --att-leave-hover: color-mix(in oklab, var(--att-leave) 84%, var(--att-leave-border));
+  --att-holiday-hover: color-mix(in oklab, var(--att-holiday) 84%, var(--att-holiday-border));
+  --att-weekend-hover: color-mix(in oklab, var(--att-weekend) 84%, var(--att-weekend-border));
+  --att-upcoming-hover: color-mix(in oklab, var(--att-upcoming) 84%, var(--att-upcoming-border));
+
   --sidebar: oklch(0.245 0.022 262);
   --sidebar-foreground: oklch(0.86 0.012 258);
   --sidebar-muted: oklch(0.66 0.018 258);
@@ -103,6 +179,44 @@
   --input: oklch(0.32 0.018 260);
   --ring: oklch(0.66 0.15 265);
 
+  /* Re-stepped for the dark surface, not an automatic flip - see :root. */
+  --chart-present: #199e70;
+  --chart-half-day: #3987e5;
+  --chart-late: #c98500;
+  --chart-leave: #9085e9;
+  --chart-absent: #dc4343;
+  --chart-other: oklch(0.55 0.014 258);
+  --chart-grid: oklch(0.33 0.016 260);
+
+  /* Attendance surfaces on the dark card: same hues, inverted lightness. */
+  --att-present: oklch(0.34 0.075 158);
+  --att-present-foreground: oklch(0.86 0.13 158);
+  --att-present-border: oklch(0.5 0.1 158);
+
+  --att-absent: oklch(0.34 0.085 22);
+  --att-absent-foreground: oklch(0.83 0.11 25);
+  --att-absent-border: oklch(0.51 0.14 25);
+
+  --att-half-day: oklch(0.35 0.07 82);
+  --att-half-day-foreground: oklch(0.88 0.13 88);
+  --att-half-day-border: oklch(0.53 0.1 82);
+
+  --att-leave: oklch(0.34 0.08 303);
+  --att-leave-foreground: oklch(0.85 0.11 303);
+  --att-leave-border: oklch(0.51 0.13 303);
+
+  --att-holiday: oklch(0.33 0.08 253);
+  --att-holiday-foreground: oklch(0.85 0.1 253);
+  --att-holiday-border: oklch(0.51 0.13 253);
+
+  --att-weekend: oklch(0.285 0.014 260);
+  --att-weekend-foreground: oklch(0.79 0.012 257);
+  --att-weekend-border: oklch(0.375 0.016 260);
+
+  --att-upcoming: var(--card);
+  --att-upcoming-foreground: oklch(0.68 0.015 257);
+  --att-upcoming-border: oklch(0.34 0.018 260);
+
   --sidebar: oklch(0.196 0.016 261);
   --sidebar-foreground: oklch(0.88 0.01 258);
   --sidebar-muted: oklch(0.63 0.016 258);
@@ -141,6 +255,43 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+
+  --color-chart-present: var(--chart-present);
+  --color-chart-half-day: var(--chart-half-day);
+  --color-chart-late: var(--chart-late);
+  --color-chart-leave: var(--chart-leave);
+  --color-chart-absent: var(--chart-absent);
+  --color-chart-other: var(--chart-other);
+  --color-chart-grid: var(--chart-grid);
+
+  --color-att-present: var(--att-present);
+  --color-att-present-foreground: var(--att-present-foreground);
+  --color-att-present-border: var(--att-present-border);
+  --color-att-present-hover: var(--att-present-hover);
+  --color-att-absent: var(--att-absent);
+  --color-att-absent-foreground: var(--att-absent-foreground);
+  --color-att-absent-border: var(--att-absent-border);
+  --color-att-absent-hover: var(--att-absent-hover);
+  --color-att-half-day: var(--att-half-day);
+  --color-att-half-day-foreground: var(--att-half-day-foreground);
+  --color-att-half-day-border: var(--att-half-day-border);
+  --color-att-half-day-hover: var(--att-half-day-hover);
+  --color-att-leave: var(--att-leave);
+  --color-att-leave-foreground: var(--att-leave-foreground);
+  --color-att-leave-border: var(--att-leave-border);
+  --color-att-leave-hover: var(--att-leave-hover);
+  --color-att-holiday: var(--att-holiday);
+  --color-att-holiday-foreground: var(--att-holiday-foreground);
+  --color-att-holiday-border: var(--att-holiday-border);
+  --color-att-holiday-hover: var(--att-holiday-hover);
+  --color-att-weekend: var(--att-weekend);
+  --color-att-weekend-foreground: var(--att-weekend-foreground);
+  --color-att-weekend-border: var(--att-weekend-border);
+  --color-att-weekend-hover: var(--att-weekend-hover);
+  --color-att-upcoming: var(--att-upcoming);
+  --color-att-upcoming-foreground: var(--att-upcoming-foreground);
+  --color-att-upcoming-border: var(--att-upcoming-border);
+  --color-att-upcoming-hover: var(--att-upcoming-hover);
 
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);

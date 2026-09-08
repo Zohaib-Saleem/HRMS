@@ -41,6 +41,9 @@ run users             npx dotenv -e .env -- npx tsx scripts/audit-users.mjs
 run zkt               npx dotenv -e .env -- npx tsx scripts/audit-zkt.mjs
 run zkt-reliability   npx dotenv -e .env -- npx tsx scripts/audit-zkt-reliability.mjs
 run adms              npx dotenv -e .env -- npx tsx scripts/audit-adms.mjs
+run connector         npx dotenv -e .env -- npx tsx scripts/audit-connector.mjs
+# Needs no database and no API: a simulated terminal and a stub HRMS, both local.
+run connector-agent   npx tsx scripts/audit-connector-agent.mjs
 run payroll-calc      npx tsx scripts/verify-payroll-calc.mjs
 # Signs in three times, so it needs the same room as the shell suites above.
 sleep 150

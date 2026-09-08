@@ -164,7 +164,7 @@ Changing it does not rescore existing records.
 | Comm key wrong | If the terminal has one set, it must match. Re-enter it |
 | Device disabled | A disabled device is never contacted |
 | Sync already running | A per-device lock; a lock older than 15 minutes is treated as stale |
-| Device is ADMS | Pushing devices are never polled — the Test and Sync buttons are hidden for them |
+| Device is ADMS or connector | Neither is polled from here — the Test and Sync buttons are hidden for both |
 
 **Push devices** — nothing appears in **Last contact**.
 
@@ -181,6 +181,28 @@ Changing it does not rescore existing records.
 Server logs record every rejection with an event of `PUSH_REJECTED` and the
 reason — the push token is redacted.
 
+**Connector devices** — nothing appears in **Last contact**. Read the
+connector's own log first; it names its problem in plain words and its events
+are listed in `apps/connector/README.md`.
+
+| Cause | Where it shows | Fix |
+|---|---|---|
+| Connector not running | Nothing in its log since the last reboot | It is not set to start at boot. See the deploy notes beside it |
+| Connector exited with code 78 | Its first and only log line | Not configured. The message names every missing setting |
+| `HANDSHAKE_FAILED` 401 | Connector log | Wrong token, or the terminal's serial is not registered here |
+| `HANDSHAKE_FAILED` 409 | Connector log | The device has no connector token set. Set one on its page |
+| `HANDSHAKE_FAILED` 403 | Connector log | The allow-list does not include the office's **public** address. It is not the terminal's LAN address |
+| `DEVICE_UNREACHABLE` | Connector log | The terminal is off, or `deviceHost` is wrong, or that machine is not on the terminal's network |
+| Protocol set to pull | Connector log, 401 | A pull device is refused on the connector endpoints |
+| Terminal reachable, nothing new | `NOTHING_NEW` every poll | Healthy. The terminal genuinely holds nothing past the watermark |
+
+Server logs record connector rejections as `CONNECTOR_REJECTED`, with the
+bearer token redacted, and a terminal whose clock has drifted five minutes or
+more from the server's as `CONNECTOR_CLOCK_DRIFT`. Drift is reported and never
+corrected: a punch is evidence of when somebody was at a door, and shifting it
+would hide the reason shift boundaries are being missed. Set the clock at the
+terminal.
+
 ### ZKTeco connection failure, first ever attempt
 
 The physical K50 has **never been connected**. The integration is verified
@@ -194,6 +216,11 @@ direction. See the [device guide](HRMS-DEVICE-GUIDE.md#what-is-still-pending).
 *Devices → Device users* lists what the terminal holds plus everything mapped.
 Map the PIN to an employee, then **Reprocess** to turn the stored punches into
 attendance.
+
+For a connector device the list is whatever the connector last reported, since
+nothing here can read that terminal. If it is empty the screen says so rather
+than showing a bare list — the connector sends a roster when it starts up and
+every few hours after that.
 
 No employee is ever created automatically from an unknown device user — that
 would let anyone who can enrol a finger create a person in the HRMS.

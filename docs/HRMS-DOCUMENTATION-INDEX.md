@@ -30,7 +30,7 @@ something is missing, it says so.
 | Document | Covers |
 |---|---|
 | [Attendance guide](HRMS-ATTENDANCE-GUIDE.md) | the full attendance lifecycle and every calculation rule |
-| [Device guide](HRMS-DEVICE-GUIDE.md) | ZKTeco K50 integration, pull and ADMS push |
+| [Device guide](HRMS-DEVICE-GUIDE.md) | ZKTeco K50 integration: pull, ADMS push and the LAN connector |
 | [Troubleshooting](HRMS-TROUBLESHOOTING.md) | when something is wrong |
 
 ## Technical references

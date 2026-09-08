@@ -22,7 +22,9 @@ import {
   encodePacket,
   encodeUsers,
   makeAuthKey,
-} from '../apps/api/src/modules/attendance-device/zkteco.protocol.ts';
+} from '../packages/zkteco/src/protocol.ts';
+import { toReadings } from '../packages/zkteco/src/readings.ts';
+import { toPunches } from '../apps/api/src/modules/attendance-device/zkteco.adapter.ts';
 
 let pass = 0;
 let fail = 0;
@@ -156,6 +158,57 @@ const b = makeAuthKey(1234, 43);
 check('the auth blob is 4 bytes', 4, a.length);
 check('it is bound to the session, so it cannot be replayed', false, a.equals(b));
 check('the same key and session are deterministic', true, a.equals(makeAuthKey(1234, 42)));
+
+console.log();
+console.log('################ G. READINGS AND INSTANTS ################');
+// The seam the connector and the server share. `toReadings` names a punch;
+// `toPunches` adds the instant. A disagreement between them about either would
+// mean one transaction becoming two attendance events under two identities.
+const record = (y, mo, d, h, mi, sec, punch = 0, status = 1) => ({
+  uid: 1,
+  deviceUserId: '1007',
+  status,
+  punch,
+  clock: { year: y, month: mo, day: d, hour: h, minute: mi, second: sec },
+});
+
+const readings = toReadings([record(2026, 3, 7, 8, 56, 12, 0, 1), record(2026, 3, 7, 18, 14, 3, 1, 2)]);
+check('the reading is zero padded to a sortable string', '2026-03-07 08:56:12', readings[0].rawTimestamp);
+check('an entry punch is named IN', 'IN', readings[0].punchState);
+check('an exit punch is named OUT', 'OUT', readings[1].punchState);
+check('verify mode 1 is a fingerprint', 'FINGERPRINT', readings[0].verifyMode);
+check('verify mode 2 is a card', 'CARD', readings[1].verifyMode);
+
+// Karachi is UTC+5 with no daylight saving, so the arithmetic is checkable by
+// hand: 08:56:12 local is 03:56:12Z. This is the assertion that catches a zone
+// applied backwards, which silently shifts every imported time by hours.
+const punches = toPunches(
+  [record(2026, 3, 7, 8, 56, 12, 0, 1), record(2026, 3, 7, 18, 14, 3, 1, 2), record(2026, 12, 31, 23, 59, 59)],
+  'Asia/Karachi',
+  null,
+);
+check('the reading survives the conversion unchanged', readings[0].rawTimestamp, punches[0].rawTimestamp);
+check('the device zone is applied', '2026-03-07T03:56:12.000Z', punches[0].punchedAt.toISOString());
+check('seconds are not lost', '2026-03-07T13:14:03.000Z', punches[1].punchedAt.toISOString());
+check('and the last second of the year still lands in it', '2026-12-31T18:59:59.000Z', punches[2].punchedAt.toISOString());
+check('a pulled punch carries no transaction id', 'null', String(punches[0].deviceTransactionId));
+
+// The watermark filter is applied to the instant, because the server holds an
+// instant. The connector filters the string form instead, which is why the two
+// keep separate watermarks.
+const since = toPunches([record(2026, 3, 7, 8, 0, 0), record(2026, 3, 7, 18, 0, 0)], 'Asia/Karachi', new Date('2026-03-07T10:00:00.000Z'));
+check('the since filter drops what the server already has', 1, since.length);
+check('and keeps the later one', '2026-03-07 18:00:00', since[0].rawTimestamp);
+
+let zoneThrew = false;
+try {
+  toPunches([record(2026, 3, 7, 8, 0, 0)], 'Not/A_Zone', null);
+} catch {
+  zoneThrew = true;
+}
+// A zone this runtime cannot read must fail loudly. Absorbing it would produce
+// an Invalid Date and file every punch of that device at an unknown moment.
+check('an unreadable zone is not silently absorbed', true, zoneThrew);
 
 console.log();
 console.log('################ SUMMARY ################');

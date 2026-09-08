@@ -18,10 +18,24 @@ import {
   ZK_COMMANDS,
   decodeFrame,
   encodeAttendance,
+  encodeDeviceTime,
   encodePacket,
   encodeUsers,
   makeAuthKey,
-} from '../apps/api/src/modules/attendance-device/zkteco.protocol.ts';
+} from '../packages/zkteco/src/protocol.ts';
+
+/** The simulator's own clock, in the parts the packed format wants. */
+function readClockNow() {
+  const now = new Date();
+  return {
+    year: now.getFullYear(),
+    month: now.getMonth() + 1,
+    day: now.getDate(),
+    hour: now.getHours(),
+    minute: now.getMinutes(),
+    second: now.getSeconds(),
+  };
+}
 
 const DEFAULT_USERS = [
   { uid: 1, deviceUserId: '1007', name: 'Ahmed Raza', privilege: 0, cardNumber: null },
@@ -39,6 +53,8 @@ const DEFAULT_USERS = [
  * @param {'ok'|'silent'|'garbage'|'reset'|'truncate'|'dropMidTransfer'} [options.fault]
  *        how the terminal misbehaves once the attendance log is requested
  * @param {number} [options.resetAfterPackets] destroy the socket after N packets
+ * @param {object|null} [options.clock] wall-clock parts the terminal reports as
+ *        its own time, for exercising drift reporting. Defaults to now.
  */
 export function startSimulator(options) {
   const {
@@ -50,6 +66,7 @@ export function startSimulator(options) {
     refuse = false,
     fault = 'ok',
     resetAfterPackets = 0,
+    clock = null,
   } = options;
 
   const state = { connections: 0, disabled: false, punches: [...punches] };
@@ -139,6 +156,15 @@ export function startSimulator(options) {
             state.disabled = false;
             reply(ZK_COMMANDS.ACK_OK);
             break;
+          case ZK_COMMANDS.GET_TIME: {
+            // The packed integer, which is what real firmware answers with -
+            // the `~Time` option string above is not consistently supported.
+            const now = clock ?? readClockNow();
+            const packed = Buffer.alloc(4);
+            packed.writeUInt32LE(encodeDeviceTime(now), 0);
+            reply(ZK_COMMANDS.ACK_OK, packed);
+            break;
+          }
           case ZK_COMMANDS.OPTIONS_RRQ: {
             const name = data.toString('ascii').replace(/\0.*$/, '').trim();
             reply(ZK_COMMANDS.ACK_OK, Buffer.from(`${name}=${option(name)}\0`, 'ascii'));

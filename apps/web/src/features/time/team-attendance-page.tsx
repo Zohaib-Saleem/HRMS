@@ -5,21 +5,24 @@ import { CalendarCheck, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import {
   ATTENDANCE_STATUSES,
   ATTENDANCE_STATUS_LABELS,
+  DERIVED_ATTENDANCE_STATUS_LABELS,
   PERMISSIONS,
   type AttendanceTotals,
   type MarkAbsencesResult,
   type Paginated,
   type TeamAttendanceRow,
+  type TeamAttendanceSummaryRow,
+  UNASSIGNED_TEAM_ID,
+  UNASSIGNED_TEAM_LABEL,
 } from '@hrms/shared';
 import { api, errorMessage } from '@/lib/api';
 import { useDebounced } from '@/lib/use-debounced';
-import { formatDate } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 import { Link } from 'react-router-dom';
 import { useLookups } from '@/lib/lookups';
 import { usePermissions } from '@/features/auth/session-context';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input, NativeSelect } from '@/components/ui/field';
 import { ListToolbar } from '@/components/ui/list-toolbar';
@@ -27,7 +30,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
-import { STATUS_TONE, minutesLabel, timeLabel } from './attendance-ui';
+import { LATE_TEXT, STATUS_BADGE, STATUS_TEXT, minutesLabel, timeLabel } from './attendance-ui';
 
 /**
  * Team attendance.
@@ -42,6 +45,12 @@ import { STATUS_TONE, minutesLabel, timeLabel } from './attendance-ui';
 interface TeamResponse extends Paginated<TeamAttendanceRow> {
   totals: AttendanceTotals;
   range: { from: string; to: string };
+}
+
+interface TeamSummaryResponse {
+  data: TeamAttendanceSummaryRow[];
+  range: { from: string; to: string };
+  truncated: boolean;
 }
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
@@ -103,6 +112,22 @@ export function TeamAttendancePage() {
     onError: (error: unknown) => toast.error(errorMessage(error)),
   });
 
+  // Separate from the paginated list on purpose: a summary built from one page
+  // would describe 25 people while appearing to describe everyone.
+  const summaryQuery = useQuery({
+    queryKey: ['attendance', 'team-summary', { ...filters, q: debouncedQuery, page: 0, limit: 0 }],
+    queryFn: () =>
+      api.get<TeamSummaryResponse>('/attendance/team-summary', {
+        query: {
+          departmentId: filters.departmentId || undefined,
+          teamId: filters.teamId || undefined,
+          from: filters.from,
+          to: filters.to,
+        },
+      }),
+    placeholderData: keepPreviousData,
+  });
+
   const rows = query.data?.data ?? [];
   const totals = query.data?.totals;
   const singleDay = filters.from === filters.to;
@@ -141,12 +166,12 @@ export function TeamAttendancePage() {
       {totals ? (
         <Card className="mb-6">
           <div className="tabular flex flex-wrap gap-x-6 gap-y-2 p-4 text-[13px] text-muted-foreground">
-            <span><span className="font-semibold text-foreground">{totals.present}</span> present</span>
-            <span><span className="font-semibold text-foreground">{totals.halfDay}</span> half day</span>
-            <span><span className="font-semibold text-foreground">{totals.absent}</span> absent</span>
-            <span><span className="font-semibold text-foreground">{totals.onLeave}</span> on leave</span>
-            <span><span className="font-semibold text-foreground">{totals.holiday}</span> holiday</span>
-            <span><span className="font-semibold text-foreground">{totals.weekend}</span> weekend</span>
+            <span><span className={cn('font-semibold', STATUS_TEXT.PRESENT)}>{totals.present}</span> present</span>
+            <span><span className={cn('font-semibold', STATUS_TEXT.HALF_DAY)}>{totals.halfDay}</span> half day</span>
+            <span><span className={cn('font-semibold', STATUS_TEXT.ABSENT)}>{totals.absent}</span> absent</span>
+            <span><span className={cn('font-semibold', STATUS_TEXT.ON_LEAVE)}>{totals.onLeave}</span> on leave</span>
+            <span><span className={cn('font-semibold', STATUS_TEXT.HOLIDAY)}>{totals.holiday}</span> holiday</span>
+            <span><span className={cn('font-semibold', STATUS_TEXT.WEEKEND)}>{totals.weekend}</span> weekend</span>
             <span>
               <span className="font-semibold text-foreground">
                 {(totals.workedMinutes / 60).toFixed(1)}
@@ -163,6 +188,12 @@ export function TeamAttendancePage() {
           </div>
         </Card>
       ) : null}
+
+      <TeamSummaryCard
+        rows={summaryQuery.data?.data ?? []}
+        loading={summaryQuery.isLoading}
+        truncated={summaryQuery.data?.truncated ?? false}
+      />
 
       <Card className="overflow-hidden">
         <ListToolbar
@@ -203,6 +234,7 @@ export function TeamAttendancePage() {
                 className="w-40"
               >
                 <option value="">All teams</option>
+                <option value={UNASSIGNED_TEAM_ID}>{UNASSIGNED_TEAM_LABEL}</option>
                 {teamOptions.map((t) => (
                   <option key={t.id} value={t.id}>{t.label}</option>
                 ))}
@@ -246,6 +278,7 @@ export function TeamAttendancePage() {
                   <TR className="hover:bg-transparent">
                     <TH>Employee</TH>
                     <TH className="w-40">Department</TH>
+                    <TH className="w-32">Team</TH>
                     <TH className="w-28">Shift</TH>
                     {singleDay ? (
                       <>
@@ -270,10 +303,10 @@ export function TeamAttendancePage() {
                 </THead>
                 <TBody>
                   {query.isLoading ? (
-                    <TableSkeleton rows={6} columns={singleDay ? 9 : 9} />
+                    <TableSkeleton rows={6} columns={10} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={9} className="p-0">
+                      <TD colSpan={10} className="p-0">
                         <EmptyState
                           icon={Users}
                           title={hasFilters ? 'Nobody matches those filters' : 'No one in your team yet'}
@@ -332,6 +365,117 @@ function EmployeeCell({ row }: { row: TeamAttendanceRow }) {
   );
 }
 
+/**
+ * Attendance rolled up per team.
+ *
+ * Counts days, not minutes: "how did each team do" is a different question from
+ * "how long was everyone at their desk", and the per-person rows below already
+ * answer the second one. Unassigned is a row like any other, so people with no
+ * team are visible in the summary rather than quietly missing from the totals.
+ */
+function TeamSummaryCard({
+  rows,
+  loading,
+  truncated,
+}: {
+  rows: TeamAttendanceSummaryRow[];
+  loading: boolean;
+  truncated: boolean;
+}) {
+  if (loading) {
+    return (
+      <Card className="mb-6 p-4">
+        <TableSkeleton rows={3} columns={6} />
+      </Card>
+    );
+  }
+  if (rows.length === 0) return null;
+
+  return (
+    <Card className="mb-6 overflow-hidden">
+      <div className="border-b border-border px-4 py-2.5 text-[13px] font-semibold">
+        By team
+        {truncated ? (
+          <span className="ml-2 text-[11.5px] font-normal text-muted-foreground">
+            showing the first 2,000 people
+          </span>
+        ) : null}
+      </div>
+      <TableWrapper>
+        <Table>
+          <THead>
+            <TR className="hover:bg-transparent">
+              <TH>Team</TH>
+              <TH className="w-40">Department</TH>
+              <TH className="w-24 text-right">People</TH>
+              <TH className="w-24 text-right">Present</TH>
+              <TH className="w-24 text-right">Late</TH>
+              <TH className="w-24 text-right">Absent</TH>
+              <TH className="w-24 text-right">Total</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {rows.map((row) => (
+              <TR key={row.teamId ?? UNASSIGNED_TEAM_ID} className="hover:bg-transparent">
+                <TD className="text-[13px] font-medium">
+                  {row.teamId === null ? (
+                    <span className="italic text-muted-foreground">{row.teamName}</span>
+                  ) : (
+                    row.teamName
+                  )}
+                </TD>
+                <TD className="text-[13px] text-muted-foreground">{row.departmentName ?? '--'}</TD>
+                <TD className="tabular text-right text-[13px] text-muted-foreground">
+                  {row.employees}
+                </TD>
+                <TD className="tabular text-right text-[13px]">
+                  {row.present > 0 ? (
+                    <span className={cn('font-medium', STATUS_TEXT.PRESENT)}>{row.present}</span>
+                  ) : (
+                    <span className="text-muted-foreground">--</span>
+                  )}
+                </TD>
+                <TD className="tabular text-right text-[13px]">
+                  {row.late > 0 ? (
+                    <span className={cn('font-medium', STATUS_TEXT.HALF_DAY)}>{row.late}</span>
+                  ) : (
+                    <span className="text-muted-foreground">--</span>
+                  )}
+                </TD>
+                <TD className="tabular text-right text-[13px]">
+                  {row.absent > 0 ? (
+                    <span className={cn('font-medium', STATUS_TEXT.ABSENT)}>{row.absent}</span>
+                  ) : (
+                    <span className="text-muted-foreground">--</span>
+                  )}
+                </TD>
+                <TD className="tabular text-right text-[13px] font-medium">{row.total}</TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+      </TableWrapper>
+    </Card>
+  );
+}
+
+/**
+ * The team column.
+ *
+ * An employee on no team reads "Unassigned" rather than a dash: they are a real
+ * person the report is accountable for, and a blank cell invites the reader to
+ * assume the row is incomplete rather than that the assignment is missing.
+ */
+function TeamCell({ row }: { row: TeamAttendanceRow }) {
+  return (
+    <TD className="text-[13px] text-muted-foreground">
+      {row.teamName ?? (
+        <span className="italic text-muted-foreground/80">{UNASSIGNED_TEAM_LABEL}</span>
+      )}
+    </TD>
+  );
+}
+
 function SingleDayRow({ row }: { row: TeamAttendanceRow }) {
   const day = row.days[0];
 
@@ -339,6 +483,7 @@ function SingleDayRow({ row }: { row: TeamAttendanceRow }) {
     <TR>
       <EmployeeCell row={row} />
       <TD className="text-[13px] text-muted-foreground">{row.departmentName ?? '--'}</TD>
+      <TeamCell row={row} />
       <TD className="text-[12.5px] text-muted-foreground">{row.shiftName ?? 'Unassigned'}</TD>
       <TD className="tabular text-[13px] text-muted-foreground">{timeLabel(day?.checkInAt)}</TD>
       <TD className="tabular text-[13px] text-muted-foreground">{timeLabel(day?.checkOutAt)}</TD>
@@ -352,7 +497,7 @@ function SingleDayRow({ row }: { row: TeamAttendanceRow }) {
       </TD>
       <TD className="tabular text-[12.5px]">
         {day?.lateMinutes || day?.earlyLeaveMinutes ? (
-          <span className="text-warning-foreground">
+          <span className={LATE_TEXT}>
             {day.lateMinutes ? `${day.lateMinutes}m late` : ''}
             {day.lateMinutes && day.earlyLeaveMinutes ? ' · ' : ''}
             {day.earlyLeaveMinutes ? `${day.earlyLeaveMinutes}m early` : ''}
@@ -363,9 +508,9 @@ function SingleDayRow({ row }: { row: TeamAttendanceRow }) {
       </TD>
       <TD>
         {day ? (
-          <Badge variant={STATUS_TONE[day.status]}>
-            {day.holidayName ?? day.leaveTypeName ?? ATTENDANCE_STATUS_LABELS[day.status]}
-          </Badge>
+          <span className={STATUS_BADGE[day.status]}>
+            {day.holidayName ?? day.leaveTypeName ?? DERIVED_ATTENDANCE_STATUS_LABELS[day.status]}
+          </span>
         ) : (
           <span className="text-[12px] text-muted-foreground">--</span>
         )}
@@ -406,11 +551,12 @@ function RangeRow({
           </button>
         </TD>
         <TD className="text-[13px] text-muted-foreground">{row.departmentName ?? '--'}</TD>
+        <TeamCell row={row} />
         <TD className="text-[12.5px] text-muted-foreground">{row.shiftName ?? 'Unassigned'}</TD>
         <TD className="tabular text-right text-[13px]">
           {row.totals.present}
           {row.totals.halfDay > 0 ? (
-            <span className="text-warning-foreground"> +{row.totals.halfDay}½</span>
+            <span className={LATE_TEXT}> +{row.totals.halfDay}½</span>
           ) : null}
         </TD>
         <TD className="tabular text-right text-[13px]">{row.totals.absent}</TD>
@@ -430,7 +576,7 @@ function RangeRow({
 
       {open ? (
         <TR className="hover:bg-transparent">
-          <TD colSpan={9} className="bg-muted/40 p-0">
+          <TD colSpan={10} className="bg-muted/40 p-0">
             <div className="divide-y divide-border">
               {row.days.map((day) => (
                 <div
@@ -438,9 +584,9 @@ function RangeRow({
                   className="tabular flex flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2 text-[12.5px]"
                 >
                   <span className="w-28 font-medium">{formatDate(day.date)}</span>
-                  <Badge variant={STATUS_TONE[day.status]}>
-                    {day.holidayName ?? day.leaveTypeName ?? ATTENDANCE_STATUS_LABELS[day.status]}
-                  </Badge>
+                  <span className={STATUS_BADGE[day.status]}>
+                    {day.holidayName ?? day.leaveTypeName ?? DERIVED_ATTENDANCE_STATUS_LABELS[day.status]}
+                  </span>
                   <span className="text-muted-foreground">
                     In {timeLabel(day.checkInAt)} · Out {timeLabel(day.checkOutAt)}
                   </span>
@@ -451,10 +597,10 @@ function RangeRow({
                     <span className="text-success">+{minutesLabel(day.overtimeMinutes)} overtime</span>
                   ) : null}
                   {day.lateMinutes ? (
-                    <span className="text-warning-foreground">{day.lateMinutes}m late</span>
+                    <span className={LATE_TEXT}>{day.lateMinutes}m late</span>
                   ) : null}
                   {day.earlyLeaveMinutes ? (
-                    <span className="text-warning-foreground">{day.earlyLeaveMinutes}m early</span>
+                    <span className={LATE_TEXT}>{day.earlyLeaveMinutes}m early</span>
                   ) : null}
                 </div>
               ))}

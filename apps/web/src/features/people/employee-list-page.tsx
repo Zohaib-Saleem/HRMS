@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Download, GitBranch, Plus, Users } from 'lucide-react';
 import {
@@ -58,6 +58,30 @@ export function EmployeeListPage() {
   const [filters, setFilters] = React.useState(INITIAL);
   const [creating, setCreating] = React.useState(false);
   const debouncedQuery = useDebounced(filters.q, 350);
+
+  /**
+   * `?new=1` opens the create drawer.
+   *
+   * The dashboard's "Add employee" shortcut has to land somewhere, and the form
+   * is a drawer over this list rather than a route of its own. The parameter is
+   * removed as soon as it is read so the drawer does not reopen on a back
+   * navigation, and it is ignored without the permission that draws the button.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const wantsNew = searchParams.get('new') === '1';
+  const canCreate = has(PERMISSIONS.EMPLOYEE_MANAGE);
+  React.useEffect(() => {
+    if (!wantsNew) return;
+    if (canCreate) setCreating(true);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('new');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [wantsNew, canCreate, setSearchParams]);
 
   const update = React.useCallback(
     (patch: Partial<typeof INITIAL>) =>

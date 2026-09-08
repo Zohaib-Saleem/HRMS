@@ -2,9 +2,9 @@ import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import {
-  ATTENDANCE_STATUS_LABELS,
+  DERIVED_ATTENDANCE_STATUS_LABELS,
+  type DerivedAttendanceStatus,
   type AttendanceDay,
-  type AttendanceStatus,
   type AttendanceTotals,
 } from '@hrms/shared';
 import { api } from '@/lib/api';
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/feedback/states';
 import { cn } from '@/lib/utils';
-import { STATUS_CELL } from './attendance-ui';
+import { STATUS_CELL, STATUS_COLOR, STATUS_TEXT } from './attendance-ui';
 
 const monthLabel = (d: Date) =>
   d.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -73,13 +73,13 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
         <CardContent>
           {totals ? (
             <div className="tabular mb-4 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-muted-foreground">
-              <span><span className="font-medium text-foreground">{totals.present}</span> present</span>
+              <span><span className={cn('font-semibold', STATUS_TEXT.PRESENT)}>{totals.present}</span> present</span>
               {totals.halfDay > 0 ? (
-                <span><span className="font-medium text-foreground">{totals.halfDay}</span> half day</span>
+                <span><span className={cn('font-semibold', STATUS_TEXT.HALF_DAY)}>{totals.halfDay}</span> half day</span>
               ) : null}
-              <span><span className="font-medium text-foreground">{totals.absent}</span> absent</span>
-              <span><span className="font-medium text-foreground">{totals.onLeave}</span> on leave</span>
-              <span><span className="font-medium text-foreground">{totals.holiday}</span> holiday</span>
+              <span><span className={cn('font-semibold', STATUS_TEXT.ABSENT)}>{totals.absent}</span> absent</span>
+              <span><span className={cn('font-semibold', STATUS_TEXT.ON_LEAVE)}>{totals.onLeave}</span> on leave</span>
+              <span><span className={cn('font-semibold', STATUS_TEXT.HOLIDAY)}>{totals.holiday}</span> holiday</span>
               <span>
                 <span className="font-medium text-foreground">
                   {(totals.workedMinutes / 60).toFixed(1)}
@@ -120,7 +120,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
                     const dayNumber = Number(day.date.slice(8, 10));
                     const title = [
                       day.date,
-                      ATTENDANCE_STATUS_LABELS[day.status],
+                      DERIVED_ATTENDANCE_STATUS_LABELS[day.status],
                       day.holidayName ?? day.leaveTypeName ?? '',
                       day.workedMinutes !== null ? `${(day.workedMinutes / 60).toFixed(1)}h` : '',
                       day.lateMinutes ? `${day.lateMinutes}m late` : '',
@@ -134,13 +134,13 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
                         key={day.date}
                         title={title}
                         className={cn(
-                          'flex aspect-square flex-col items-center justify-center rounded-lg border p-1 text-center',
+                          'flex aspect-square flex-col items-center justify-center rounded-lg border p-1 text-center transition-colors',
                           STATUS_CELL[day.status],
                         )}
                       >
                         <span className="tabular text-[13px] font-semibold leading-none">{dayNumber}</span>
-                        <span className="mt-1 line-clamp-2 text-[9.5px] leading-tight opacity-80">
-                          {day.holidayName ?? day.leaveTypeName ?? ATTENDANCE_STATUS_LABELS[day.status]}
+                        <span className="mt-1 line-clamp-2 text-[9.5px] font-medium leading-tight">
+                          {day.holidayName ?? day.leaveTypeName ?? DERIVED_ATTENDANCE_STATUS_LABELS[day.status]}
                         </span>
                       </div>
                     );
@@ -150,10 +150,10 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
           </div>
 
           <div className="mt-4 flex flex-wrap gap-3 border-t border-border pt-3 text-[11.5px] text-muted-foreground">
-            {(Object.keys(STATUS_CELL) as AttendanceStatus[]).map((s) => (
+            {(Object.keys(STATUS_COLOR) as DerivedAttendanceStatus[]).map((s) => (
               <span key={s} className="inline-flex items-center gap-1.5">
-                <span className={cn('size-3 rounded border', STATUS_CELL[s])} aria-hidden />
-                {ATTENDANCE_STATUS_LABELS[s]}
+                <span className={cn('size-3 rounded border', STATUS_COLOR[s])} aria-hidden />
+                {DERIVED_ATTENDANCE_STATUS_LABELS[s]}
               </span>
             ))}
           </div>

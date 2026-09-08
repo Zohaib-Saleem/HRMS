@@ -91,9 +91,11 @@ anywhere else, and never seed this account outside a development machine.
 ## Layout
 
 ```
-packages/shared     Zod schemas, permission registry and types shared by both apps
+packages/shared     Zod schemas, permission registry and types shared by every app
+packages/zkteco     The ZKTeco terminal protocol, shared by the API and the connector
 apps/api            Fastify + Prisma REST API
 apps/web            React + Vite single-page application
+apps/connector      Standalone agent for terminals the server cannot reach
 scripts             One-off setup scripts
 docs                Architecture notes and the feature roadmap
 ```

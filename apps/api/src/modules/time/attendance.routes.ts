@@ -12,6 +12,7 @@ import {
   type PayPeriodRow,
   type PayPeriodSummary,
   type TeamAttendanceRow,
+  type TeamAttendanceSummaryRow,
   attendanceQuerySchema,
   attendanceSummaryQuerySchema,
   attendanceUpsertSchema,
@@ -33,6 +34,7 @@ import {
   resolveDefaultApprovers,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
+import { summariseByTeam, teamFilterClause } from './team-attendance.service.js';
 import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import {
   assertCheckInIpAllowed,
@@ -58,6 +60,7 @@ const emptyTotals = (): AttendanceTotals => ({
   onLeave: 0,
   holiday: 0,
   weekend: 0,
+  upcoming: 0,
   workedMinutes: 0,
   lateMinutes: 0,
   overtimeMinutes: 0,
@@ -72,6 +75,8 @@ function tally(days: readonly AttendanceDay[]): AttendanceTotals {
     else if (d.status === 'ON_LEAVE') acc.onLeave += 1;
     else if (d.status === 'HOLIDAY') acc.holiday += 1;
     else if (d.status === 'WEEKEND') acc.weekend += 1;
+    // A working day that has not arrived is counted separately, never as absence.
+    else if (d.status === 'UPCOMING') acc.upcoming += 1;
 
     acc.workedMinutes += d.workedMinutes ?? 0;
     acc.lateMinutes += d.lateMinutes ?? 0;
@@ -82,6 +87,9 @@ function tally(days: readonly AttendanceDay[]): AttendanceTotals {
 
 /** A range longer than this is a report, not a screen. */
 const MAX_RANGE_DAYS = 62;
+
+/** Same reasoning for the team summary's width: a ceiling, not a page. */
+const SUMMARY_EMPLOYEE_CAP = 2000;
 
 function assertUsableRange(from: Date, to: Date): void {
   if (to < from) {
@@ -522,7 +530,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         // department filters narrow inside it and can only ever remove rows.
         scopeFilter,
         query.employeeId ? { id: query.employeeId } : {},
-        query.teamId ? { teamId: query.teamId } : {},
+        teamFilterClause(query.teamId),
         query.departmentId ? { departmentId: query.departmentId } : {},
         ...searchClauses,
       ],
@@ -544,6 +552,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
           employeeNumber: true,
           locationId: true,
           department: { select: { name: true } },
+          team: { select: { id: true, name: true } },
         },
       }),
     ]);
@@ -560,6 +569,8 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         employeeName: displayName(employee),
         employeeNumber: employee.employeeNumber,
         departmentName: employee.department?.name ?? null,
+        teamId: employee.team?.id ?? null,
+        teamName: employee.team?.name ?? null,
         shiftName: shifts[index]?.name ?? null,
         days: query.status ? days.filter((d) => d.status === query.status) : days,
         totals: tally(days),
@@ -575,6 +586,72 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       meta: buildMeta(query.page, query.limit, total),
       totals,
       range: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+    });
+  });
+
+  /**
+   * Attendance grouped by team, for the dashboard's team summary.
+   *
+   * Deliberately not part of `/team`: that endpoint is paginated, and a summary
+   * built from one page would silently describe 25 people while claiming to
+   * describe the company. This aggregates everyone the caller may see, under
+   * the same scope and the same filters.
+   *
+   * The grouping is a join through the employee - see team-attendance.service -
+   * so it reads live team membership and needs no backfill of historic rows.
+   */
+  app.get('/team-summary', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const query = parseOrThrow(attendanceQuerySchema, request.query);
+
+    const scopeFilter = await employeeScopeFilter(auth);
+    if (scopeFilter === null) return reply.send({ data: [] });
+
+    const todayIso = new Date().toISOString();
+    const from = toDateOnly(query.from ?? todayIso);
+    const to = toDateOnly(query.to ?? query.from ?? todayIso);
+    assertUsableRange(from, to);
+
+    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+
+    const where: Prisma.EmployeeWhereInput = {
+      AND: [
+        { companyId: auth.companyId },
+        scopeFilter,
+        query.employeeId ? { id: query.employeeId } : {},
+        teamFilterClause(query.teamId),
+        query.departmentId ? { departmentId: query.departmentId } : {},
+      ],
+    };
+
+    // Unpaginated by design, but not unbounded: a company far past this size
+    // wants a report, not a dashboard tile.
+    const employees = await prisma.employee.findMany({
+      where,
+      take: SUMMARY_EMPLOYEE_CAP,
+      select: {
+        id: true,
+        locationId: true,
+        department: { select: { name: true } },
+        team: { select: { id: true, name: true } },
+      },
+    });
+
+    const derived = await deriveRangeForEmployees(auth.companyId, employees, from, to);
+
+    const summary: TeamAttendanceSummaryRow[] = summariseByTeam(
+      employees.map((employee) => ({
+        teamId: employee.team?.id ?? null,
+        teamName: employee.team?.name ?? null,
+        departmentName: employee.department?.name ?? null,
+        days: derived.get(employee.id) ?? [],
+      })),
+    );
+
+    return reply.send({
+      data: summary,
+      range: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+      truncated: employees.length === SUMMARY_EMPLOYEE_CAP,
     });
   });
 

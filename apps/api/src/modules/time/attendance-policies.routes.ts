@@ -77,7 +77,17 @@ async function assertTargetExists(
 }
 
 export const attendancePolicyRoutes: FastifyPluginAsync = async (app) => {
-  app.addHook('preHandler', requirePermission(PERMISSIONS.COMPANY_READ));
+  /**
+   * Reading the policy catalogue is an administrative act.
+   *
+   * These rows carry the grace, half-day, overtime and geofence thresholds that
+   * decide how an employee's own attendance is scored. `company.read` is held
+   * by every signed-in user, so gating on it published the enforcement rules to
+   * the people they are enforced against. The employee-facing surface already
+   * reports what actually matters to them - whether today is a working day, and
+   * whether location or network is required - through GET /attendance/today.
+   */
+  app.addHook('preHandler', requirePermission(PERMISSIONS.COMPANY_MANAGE));
 
   app.get('/', async (request, reply) => {
     const auth = requireAuthContext(request);

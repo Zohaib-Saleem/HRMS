@@ -1,0 +1,8 @@
+{
+  "serverUrl": "https://hrms.example.com",
+  "token": "paste the connector token from the device page in the HRMS",
+  "deviceHost": "192.168.1.201",
+  "devicePort": 4370,
+  "commKey": null,
+  "logLevel": "info"
+}

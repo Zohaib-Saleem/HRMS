@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, CalendarClock, Fingerprint } from 'lucide-react';
 import {
   ATTENDANCE_POLICY_SCOPE_LABELS,
-  ATTENDANCE_STATUS_LABELS,
+  DERIVED_ATTENDANCE_STATUS_LABELS,
   PERMISSIONS,
   type AttendanceRecordItem,
   type EffectivePolicyView,
@@ -21,7 +21,7 @@ import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/t
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { usePermissions } from '@/features/auth/session-context';
 import { AttendanceCalendar } from './attendance-calendar';
-import { STATUS_TONE, minutesLabel, timeLabel } from './attendance-ui';
+import { LATE_TEXT, STATUS_BADGE, minutesLabel, timeLabel } from './attendance-ui';
 
 /**
  * One employee's attendance, reached from the team view.
@@ -202,7 +202,7 @@ export function TeamAttendanceDetailPage() {
                       </TD>
                       <TD className="tabular text-[12.5px]">
                         {row.lateMinutes || row.earlyLeaveMinutes ? (
-                          <span className="text-warning-foreground">
+                          <span className={LATE_TEXT}>
                             {row.lateMinutes ? `${row.lateMinutes}m late` : ''}
                             {row.lateMinutes && row.earlyLeaveMinutes ? ' · ' : ''}
                             {row.earlyLeaveMinutes ? `${row.earlyLeaveMinutes}m early` : ''}
@@ -214,9 +214,9 @@ export function TeamAttendanceDetailPage() {
                         )}
                       </TD>
                       <TD>
-                        <Badge variant={STATUS_TONE[row.status]}>
-                          {ATTENDANCE_STATUS_LABELS[row.status]}
-                        </Badge>
+                        <span className={STATUS_BADGE[row.status]}>
+                          {DERIVED_ATTENDANCE_STATUS_LABELS[row.status]}
+                        </span>
                       </TD>
                       <TD className="text-[12px] text-muted-foreground">{row.source}</TD>
                     </TR>

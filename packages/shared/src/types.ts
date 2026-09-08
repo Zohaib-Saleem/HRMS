@@ -1,4 +1,4 @@
-import type { Permission } from './permissions.js';
+import type { DataScope, Permission } from './permissions.js';
 
 export interface SessionUser {
   id: string;
@@ -34,6 +34,16 @@ export interface SessionContext {
   user: SessionUser;
   company: SessionCompany;
   permissions: Permission[];
+  /**
+   * The caller's widest data scope. The shell needs it to decide WHICH
+   * dashboard to render: permissions say what you may do, scope says over how
+   * many people, and "my own figures" versus "the company's figures" is a
+   * scope question. Authorisation is still enforced server-side - this only
+   * saves the client from requesting a page it would be refused.
+   */
+  dataScope: DataScope;
+  /** False when the login has no employee record, so personal data is unavailable. */
+  employeeLinked: boolean;
 }
 
 export interface AuditLogEntry {

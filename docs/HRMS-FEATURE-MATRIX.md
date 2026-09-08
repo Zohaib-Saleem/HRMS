@@ -95,6 +95,7 @@ Employee (EMP). A role appears only if it holds the permission by default.
 | Device registry | IMPLEMENTED | SA, HR | — | `device.manage` to change |
 | ZKTeco pull (TCP 4370) | IMPLEMENTED | SA, HR | — | Tested against a protocol simulator |
 | ADMS push (`/iclock`) | IMPLEMENTED | SA, HR | — | Tested against synthetic posts |
+| LAN connector ingest (`/connector`) | IMPLEMENTED | SA, HR | — | Endpoints plus the on-site agent in `apps/connector` |
 | **Physical K50 connection** | **PENDING** | — | hardware | Never connected. No claim of hardware verification is made anywhere |
 | Device user mapping | IMPLEMENTED | SA, HR | employees | Unmapped punches are stored and reported, never discarded |
 | Sync history and diagnostics | IMPLEMENTED | SA, HR | — | Per-run counts and per-record failure reasons |

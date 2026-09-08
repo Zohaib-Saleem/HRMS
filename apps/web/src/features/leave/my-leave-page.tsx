@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
-import { CalendarDays, CalendarPlus, Plane } from 'lucide-react';
+import { CalendarDays, CalendarPlus, Plane, CircleAlert } from 'lucide-react';
 import {
   APPROVAL_STATUS_LABELS,
   LEAVE_DAY_PARTS,
@@ -18,6 +18,7 @@ import {
 } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
+import { useAuthenticatedSession } from '@/features/auth/session-context';
 import { PageHeader } from '@/components/layout/page-header';
 import { HelpLink } from '@/features/help/help-link';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
@@ -52,7 +53,7 @@ export const LEAVE_STATUS_TONE: Record<
 
 const days = (n: number) => `${n % 1 === 0 ? n : n.toFixed(1)}`;
 
-export function MyLeavePage() {
+function MyLeavePageInner() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const [requesting, setRequesting] = React.useState(false);
@@ -400,4 +401,33 @@ function LeaveRequestDrawer({ open, onClose }: { open: boolean; onClose: () => v
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Gate in front of the page.
+ *
+ * A login with no employee record has no personal your leave to show, and every
+ * query on the page would 403. Checked out here rather than inside the page so
+ * the page's own hooks are never conditionally skipped - an early return in the
+ * middle of a component changes hook order between renders.
+ */
+export function MyLeavePage() {
+  const session = useAuthenticatedSession();
+
+  if (!session.employeeLinked) {
+    return (
+      <>
+        <PageHeader title="My leave" />
+        <Card>
+          <EmptyState
+            icon={CircleAlert}
+            title="Employee profile not configured"
+            description="Your login is not linked to an employee record, so your leave is unavailable. Ask an administrator to link your account."
+          />
+        </Card>
+      </>
+    );
+  }
+
+  return <MyLeavePageInner />;
 }

@@ -34,6 +34,17 @@ export interface CreateApprovalInput {
   /** Ordered chain. Step 1 decides first. */
   approverEmployeeIds: readonly string[];
   request?: FastifyRequest;
+  /**
+   * Runs the write on a transaction client instead of the global one, so a
+   * caller can make "subject row + approval record" a single atomic unit. The
+   * audit entry and the approver notification are deliberately NOT part of it:
+   * both are side effects that must happen only once the transaction has
+   * actually committed, and a failing notification must never roll back a
+   * legitimately submitted request.
+   */
+  client?: Prisma.TransactionClient;
+  /** Caller will record the audit entry itself, after its transaction commits. */
+  deferAudit?: boolean;
 }
 
 const TERMINAL: readonly ApprovalStatus[] = ['APPROVED', 'REJECTED', 'CANCELLED'];
@@ -74,8 +85,20 @@ export async function resolveDefaultApprovers(
   return chain;
 }
 
-export async function createApprovalRequest(input: CreateApprovalInput) {
-  if (input.approverEmployeeIds.length === 0) {
+/**
+ * Every reason an approval chain can be rejected, checked without writing
+ * anything.
+ *
+ * Callers run this BEFORE creating the row the approval will hang off. The
+ * checks used to live only inside `createApprovalRequest`, which meant a caller
+ * that had already inserted its subject row was left with an orphan when the
+ * chain turned out to be empty.
+ */
+export function assertApproverChainUsable(
+  approverEmployeeIds: readonly string[],
+  requesterEmployeeId: string,
+): void {
+  if (approverEmployeeIds.length === 0) {
     throw new ValidationError({
       _: [
         'No approver could be determined for this request. Assign a reporting manager or a department head first.',
@@ -83,11 +106,17 @@ export async function createApprovalRequest(input: CreateApprovalInput) {
     });
   }
 
-  if (input.approverEmployeeIds.includes(input.requesterEmployeeId)) {
+  if (approverEmployeeIds.includes(requesterEmployeeId)) {
     throw new ValidationError({ _: ['A request cannot be approved by the person who raised it.'] });
   }
+}
 
-  const approval = await prisma.approvalRequest.create({
+export async function createApprovalRequest(input: CreateApprovalInput) {
+  assertApproverChainUsable(input.approverEmployeeIds, input.requesterEmployeeId);
+
+  const db = input.client ?? prisma;
+
+  const approval = await db.approvalRequest.create({
     data: {
       companyId: input.companyId,
       subjectType: input.subjectType,
@@ -116,24 +145,26 @@ export async function createApprovalRequest(input: CreateApprovalInput) {
     include: { steps: { orderBy: { stepOrder: 'asc' } } },
   });
 
-  await recordAudit({
-    companyId: input.companyId,
-    actorId: input.requesterUserId ?? null,
-    action: 'approval.submit',
-    entityType: 'ApprovalRequest',
-    entityId: approval.id,
-    summary: `Submitted for approval: ${input.title}`,
-    after: { subjectType: input.subjectType, subjectId: input.subjectId, steps: approval.steps.length },
-    request: input.request,
-  });
+  if (!input.deferAudit) {
+    await recordAudit({
+      companyId: input.companyId,
+      actorId: input.requesterUserId ?? null,
+      action: 'approval.submit',
+      entityType: 'ApprovalRequest',
+      entityId: approval.id,
+      summary: `Submitted for approval: ${input.title}`,
+      after: { subjectType: input.subjectType, subjectId: input.subjectId, steps: approval.steps.length },
+      request: input.request,
+    });
 
-  await notifyApprover(approval.id, 1, input.request);
+    await notifyApprover(approval.id, 1, input.request);
+  }
 
   return approval;
 }
 
 /** Tells whoever owns the given step that something is waiting for them. */
-async function notifyApprover(
+export async function notifyApprover(
   approvalRequestId: string,
   stepOrder: number,
   request?: FastifyRequest,

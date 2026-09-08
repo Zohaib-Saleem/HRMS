@@ -27,6 +27,12 @@ Thumbs.db
 apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 
+# connector, on a machine where it is actually installed. The config holds a
+# token, so it must never be committed by accident.
+apps/connector/connector.config.json
+apps/connector/connector.state.json
+!apps/connector/connector.config.example.json
+
 # misc
 .cache/
 coverage/

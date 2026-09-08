@@ -6,6 +6,7 @@ import {
   PERMISSIONS,
   type EmployeeTreeNode,
   employeeInputSchema,
+  employeeUpdateSchema,
   employeeQuerySchema,
   idParamSchema,
   terminateEmployeeSchema,
@@ -307,7 +308,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const auth = requireAuthContext(request);
       const { id } = parseOrThrow(idParamSchema, request.params);
-      const input = parseOrThrow(employeeInputSchema, request.body);
+      const input = parseOrThrow(employeeUpdateSchema, request.body);
 
       await assertEmployeeInScope(auth, id);
 

@@ -27,6 +27,15 @@ or a mistyped permission is a compile error rather than a runtime 403.
 
 It compiles to `dist/` before either app starts — `npm run dev` handles this.
 
+`packages/zkteco` is a second, narrower seam, and it exists for a different reason. The
+ZKTeco terminal protocol is needed in two places: by the API, when it can open a socket to
+a device, and by `apps/connector`, when it cannot and something on the device's own LAN
+has to do the reading instead. A second copy of that decoder would eventually disagree
+with the first about a byte, and since the two paths feed the same deduplication
+fingerprint, disagreeing about a byte means one transaction becoming two attendance events
+under two identities. So there is one decoder, and it knows nothing about the HRMS — no
+database, no employee, no attendance rule, and deliberately no timezone.
+
 ## Data model
 
 Three decisions are worth calling out.

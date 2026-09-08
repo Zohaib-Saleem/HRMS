@@ -21,8 +21,10 @@ import { ForbiddenError, NotFoundError, ValidationError } from '../../core/error
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import {
+  assertApproverChainUsable,
   cancel as cancelApproval,
   createApprovalRequest,
+  notifyApprover,
   resolveDefaultApprovers,
   syncSubjectStatus,
 } from '../../core/approvals/approval.service.js';
@@ -213,38 +215,75 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      const created = await prisma.leaveRequest.create({
-        data: {
+      /**
+       * Approvers are resolved and validated BEFORE anything is written.
+       *
+       * This used to happen after the leave request had already been inserted,
+       * so an employee with no manager and no department head got a 422 and a
+       * committed PENDING row with a null approvalRequestId: it consumed their
+       * balance, blocked those dates against re-submission, and could not be
+       * cancelled because the cancel path looks up the (missing) approval
+       * record. Validating first means that failure now writes nothing at all.
+       */
+      const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
+      assertApproverChainUsable(approvers, self.id);
+
+      /**
+       * The row and its approval record are one atomic unit. If either insert
+       * fails - or the link-back update does - the whole thing rolls back and
+       * the employee's balance is untouched.
+       */
+      const { created, approval } = await prisma.$transaction(async (tx) => {
+        const created = await tx.leaveRequest.create({
+          data: {
+            companyId: auth.companyId,
+            employeeId: self.id,
+            leaveTypeId: leaveType.id,
+            startDate: start,
+            endDate: end,
+            dayPart: input.dayPart,
+            totalDays,
+            reason: input.reason,
+            status: 'PENDING',
+          },
+        });
+
+        // Same engine as attendance, shifts and timesheets - no second workflow.
+        const approval = await createApprovalRequest({
           companyId: auth.companyId,
-          employeeId: self.id,
-          leaveTypeId: leaveType.id,
-          startDate: start,
-          endDate: end,
-          dayPart: input.dayPart,
-          totalDays,
-          reason: input.reason,
-          status: 'PENDING',
-        },
+          subjectType: 'LEAVE_REQUEST',
+          subjectId: created.id,
+          requesterEmployeeId: self.id,
+          requesterUserId: auth.userId,
+          title: `${leaveType.name}: ${input.startDate} to ${input.endDate} (${totalDays} day${totalDays === 1 ? '' : 's'})`,
+          summary: input.reason,
+          approverEmployeeIds: approvers,
+          request,
+          client: tx,
+          // Audit and notification are side effects; they run below, once the
+          // transaction has actually committed.
+          deferAudit: true,
+        });
+
+        await tx.leaveRequest.update({
+          where: { id: created.id },
+          data: { approvalRequestId: approval.id },
+        });
+
+        return { created, approval };
       });
 
-      // Same engine as attendance, shifts and timesheets - no second workflow.
-      const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
-      const approval = await createApprovalRequest({
+      await recordAudit({
         companyId: auth.companyId,
-        subjectType: 'LEAVE_REQUEST',
-        subjectId: created.id,
-        requesterEmployeeId: self.id,
-        requesterUserId: auth.userId,
-        title: `${leaveType.name}: ${input.startDate} to ${input.endDate} (${totalDays} day${totalDays === 1 ? '' : 's'})`,
-        summary: input.reason,
-        approverEmployeeIds: approvers,
+        actorId: auth.userId,
+        action: 'approval.submit',
+        entityType: 'ApprovalRequest',
+        entityId: approval.id,
+        summary: `Submitted for approval: ${leaveType.name}`,
+        after: { subjectType: 'LEAVE_REQUEST', subjectId: created.id, steps: approvers.length },
         request,
       });
-
-      await prisma.leaveRequest.update({
-        where: { id: created.id },
-        data: { approvalRequestId: approval.id },
-      });
+      await notifyApprover(approval.id, 1, request);
 
       await recordAudit({
         companyId: auth.companyId,

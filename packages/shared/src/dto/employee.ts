@@ -61,7 +61,7 @@ const optionalDate = z
 
 const optionalId = optionalText(64);
 
-export const employeeInputSchema = z
+const employeeBaseSchema = z
   .object({
     // identity
     employeeNumber: optionalText(32),
@@ -113,7 +113,10 @@ export const employeeInputSchema = z
     bankAccountNumber: optionalText(64),
 
     notes: optionalText(2000),
-  })
+  });
+
+/** Creating an employee: first and last name are genuinely required. */
+export const employeeInputSchema = employeeBaseSchema
   .refine(
     (v) => v.status !== 'TERMINATED' || v.terminationDate !== null,
     { message: 'A termination date is required when the status is Terminated.', path: ['terminationDate'] },
@@ -130,7 +133,51 @@ export const employeeInputSchema = z
     path: ['secondaryManagerId'],
   });
 
+/**
+ * Updating an employee.
+ *
+ * Every field optional, because PATCH means "change these fields" - it is not
+ * a whole-record replace. Sending `{ managerId }` alone used to fail asking for
+ * firstName and lastName, which forced every caller to read the record, merge,
+ * and send it all back: three round trips to set one field, and a lost update
+ * whenever two of them overlapped.
+ *
+ * The cross-field rules below therefore fire only when the payload actually
+ * carries the fields they compare. A rule cannot judge a field that is not
+ * being changed, and the route still merges against the stored row.
+ */
+export const employeeUpdateSchema = employeeBaseSchema
+  .partial()
+  .refine(
+    (v) => v.status !== 'TERMINATED' || (v.terminationDate !== null && v.terminationDate !== undefined),
+    {
+      message: 'A termination date is required when the status is Terminated.',
+      path: ['terminationDate'],
+    },
+  )
+  .refine(
+    (v) =>
+      v.hireDate === undefined ||
+      v.terminationDate === undefined ||
+      v.hireDate === null ||
+      v.terminationDate === null ||
+      Date.parse(v.terminationDate) >= Date.parse(v.hireDate),
+    { message: 'Termination cannot be before the hire date.', path: ['terminationDate'] },
+  )
+  .refine(
+    (v) =>
+      v.managerId === undefined ||
+      v.secondaryManagerId === undefined ||
+      v.managerId === null ||
+      v.managerId !== v.secondaryManagerId,
+    {
+      message: 'Secondary manager must be different from the primary manager.',
+      path: ['secondaryManagerId'],
+    },
+  );
+
 export type EmployeeInput = z.infer<typeof employeeInputSchema>;
+export type EmployeeUpdateInput = z.infer<typeof employeeUpdateSchema>;
 
 export const EMPLOYEE_SORT_FIELDS = [
   'employeeNumber',

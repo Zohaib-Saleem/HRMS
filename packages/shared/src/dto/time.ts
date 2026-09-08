@@ -51,6 +51,25 @@ export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
   HOLIDAY: 'Holiday',
 };
 
+/**
+ * Statuses a day can be REPORTED as, which is a wider set than the ones a day
+ * can be STORED as.
+ *
+ * `UPCOMING` is derived, never persisted and deliberately absent from the
+ * Prisma enum: a working day that has not happened yet has no attendance fact
+ * to record. It exists because the deriver used to fall through to ABSENT for
+ * any working day without a record, which meant the rest of the month was
+ * reported as absence the moment it was requested - a new joiner opened the
+ * attendance page and saw every remaining day of the month marked against them.
+ */
+export const DERIVED_ATTENDANCE_STATUSES = [...ATTENDANCE_STATUSES, 'UPCOMING'] as const;
+export type DerivedAttendanceStatus = (typeof DERIVED_ATTENDANCE_STATUSES)[number];
+
+export const DERIVED_ATTENDANCE_STATUS_LABELS: Record<DerivedAttendanceStatus, string> = {
+  ...ATTENDANCE_STATUS_LABELS,
+  UPCOMING: 'Upcoming',
+};
+
 const isoDate = z
   .string()
   .trim()
@@ -284,7 +303,8 @@ export const attendanceSummaryQuerySchema = z.object({
 /** One calendar day, whether or not a record exists for it. */
 export interface AttendanceDay {
   date: string;
-  status: AttendanceStatus;
+  /** Derived, so it can also be UPCOMING - see DERIVED_ATTENDANCE_STATUSES. */
+  status: DerivedAttendanceStatus;
   checkInAt: string | null;
   checkOutAt: string | null;
   workedMinutes: number | null;
@@ -307,6 +327,8 @@ export interface AttendanceTotals {
   onLeave: number;
   holiday: number;
   weekend: number;
+  /** Working days still ahead in the range. Counted, never treated as absence. */
+  upcoming: number;
   workedMinutes: number;
   lateMinutes: number;
   overtimeMinutes: number;
@@ -314,7 +336,7 @@ export interface AttendanceTotals {
 
 export interface AttendanceTodayState {
   date: string;
-  status: AttendanceStatus;
+  status: DerivedAttendanceStatus;
   checkedIn: boolean;
   checkedOut: boolean;
   checkInAt: string | null;
@@ -346,9 +368,48 @@ export interface TeamAttendanceRow {
   employeeName: string;
   employeeNumber: string;
   departmentName: string | null;
+  /// Null when the employee is on no team. The row is still returned - a person
+  /// without a team is unassigned, not invisible.
+  teamId: string | null;
+  teamName: string | null;
   shiftName: string | null;
   days: AttendanceDay[];
   totals: AttendanceTotals;
+}
+
+/**
+ * The `teamId` filter value that means "employees on no team at all".
+ *
+ * A sentinel rather than an empty string, because empty already means "do not
+ * filter". Without it there is no way to ask for the unassigned: `teamId=<id>`
+ * narrows to one team and omitting it returns everyone, so the people with a
+ * null team can be seen only in a list that also contains everybody else.
+ */
+export const UNASSIGNED_TEAM_ID = 'unassigned';
+
+/** The label shown for the null-team bucket. Not a team name - there is no such team. */
+export const UNASSIGNED_TEAM_LABEL = 'Unassigned';
+
+/**
+ * One team's attendance headline.
+ *
+ * Deliberately day counts, not minutes: this answers "how is the team doing
+ * today", and the per-person rows already carry the detail. `late` counts days
+ * where someone arrived late, which is not the same question as `lateMinutes`
+ * in AttendanceTotals - one late day is one late day however many minutes it ran.
+ */
+export interface TeamAttendanceSummaryRow {
+  /** Null for the unassigned bucket, which is always last. */
+  teamId: string | null;
+  teamName: string;
+  departmentName: string | null;
+  /** Employees counted in this bucket, whether or not they have any days. */
+  employees: number;
+  present: number;
+  late: number;
+  absent: number;
+  /** Working days scored in the range: present + halfDay + absent + onLeave. */
+  total: number;
 }
 
 /** Absence finalisation for one day. Safe to repeat: it never overwrites. */

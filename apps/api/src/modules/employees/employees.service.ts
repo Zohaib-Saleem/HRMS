@@ -268,10 +268,24 @@ export function toPrismaData(
     'visaExpiry',
   ];
 
-  const data: Record<string, unknown> = { ...input };
-  for (const field of dateFields) {
-    const value = data[field];
-    data[field] = typeof value === 'string' && value !== '' ? new Date(value) : null;
+  /**
+   * A key that is absent is left absent.
+   *
+   * This used to rewrite every date field on every call, so any field the
+   * caller did not send became null. That was harmless while the only caller
+   * was a whole-record form, and destructive the moment PATCH accepted a
+   * partial body: `{ managerId }` would have silently cleared the employee's
+   * hire, confirmation, birth and visa dates. Prisma ignores undefined, so
+   * dropping the key is what "do not change this column" looks like.
+   */
+  const data: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined) continue;
+    if (dateFields.includes(key) && !(value instanceof Date)) {
+      data[key] = typeof value === 'string' && value !== '' ? new Date(value) : null;
+    } else {
+      data[key] = value;
+    }
   }
   return data;
 }

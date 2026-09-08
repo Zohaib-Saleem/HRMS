@@ -1,7 +1,9 @@
 import type { AttendanceStatus } from '@prisma/client';
+import type { DerivedAttendanceStatus } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { ForbiddenError, ValidationError } from '../../core/errors.js';
 import { toDateOnly } from '../leave/leave.service.js';
+import { todayInZone } from '../../core/zoned-time.js';
 import {
   computeAttendance,
   haversineMeters,
@@ -32,7 +34,7 @@ export { isWeekendFor } from './attendance-policy.js';
 
 export interface DerivedDay {
   date: string;
-  status: AttendanceStatus;
+  status: DerivedAttendanceStatus;
   checkInAt: string | null;
   checkOutAt: string | null;
   workedMinutes: number | null;
@@ -117,6 +119,10 @@ export async function deriveRangeForEmployees(
     else leaveByEmployee.set(l.employeeId, [l]);
   }
 
+  // "Future" is relative to the company's own clock, not the server's: at
+  // 02:00 UTC it is already the next working day in Karachi.
+  const todayKey = todayInZone(policy.timeZone);
+
   for (const employee of employees) {
     const recordByDate = recordsByEmployee.get(employee.id) ?? new Map();
     const employeeLeave = leaveByEmployee.get(employee.id) ?? [];
@@ -139,11 +145,20 @@ export async function deriveRangeForEmployees(
         (l) => dateKey(l.startDate) <= key && dateKey(l.endDate) >= key,
       );
 
-      let status: AttendanceStatus;
+      /**
+       * Order matters. Weekend, holiday and approved leave describe the day
+       * itself and hold whether it is past or future. A stored record is fact.
+       * Only then does the absence of a record mean anything - and it means
+       * "absent" solely for a day that has already happened. A working day in
+       * the future is UPCOMING: nobody has failed to attend a day that has not
+       * arrived.
+       */
+      let status: DerivedAttendanceStatus;
       if (isWeekendFor(d, policy.weekendDays)) status = 'WEEKEND';
       else if (holidayName) status = 'HOLIDAY';
       else if (onLeave) status = 'ON_LEAVE';
       else if (record) status = record.status;
+      else if (key > todayKey) status = 'UPCOMING';
       else status = 'ABSENT';
 
       days.push({

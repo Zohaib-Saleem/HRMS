@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
-import { CalendarClock, Plus } from 'lucide-react';
+import { CalendarClock, Plus, CircleAlert } from 'lucide-react';
 import {
   ATTENDANCE_STATUSES,
   ATTENDANCE_STATUS_LABELS,
@@ -15,10 +15,10 @@ import { ApiError, api, errorMessage } from '@/lib/api';
 import { useLookups } from '@/lib/lookups';
 import { useDebounced } from '@/lib/use-debounced';
 import { formatDate } from '@/lib/utils';
+import { useAuthenticatedSession } from '@/features/auth/session-context';
 import { PageHeader } from '@/components/layout/page-header';
 import { HelpLink } from '@/features/help/help-link';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { ListToolbar } from '@/components/ui/list-toolbar';
@@ -37,11 +37,11 @@ import {
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { AttendanceToday } from './attendance-today';
 import { AttendanceCalendar } from './attendance-calendar';
-import { STATUS_TONE, minutesLabel, timeLabel } from './attendance-ui';
+import { LATE_TEXT, STATUS_BADGE, minutesLabel, timeLabel } from './attendance-ui';
 
 const INITIAL = { q: '', employeeId: '', status: '', page: 1, limit: 20 };
 
-export function AttendancePage() {
+function AttendancePageInner() {
   const { lookups } = useLookups();
   const [filters, setFilters] = React.useState(INITIAL);
   const [requesting, setRequesting] = React.useState(false);
@@ -185,7 +185,7 @@ export function AttendancePage() {
                         </TD>
                         <TD className="tabular text-[12.5px]">
                           {row.lateMinutes || row.earlyLeaveMinutes ? (
-                            <span className="text-warning-foreground">
+                            <span className={LATE_TEXT}>
                               {row.lateMinutes ? `${row.lateMinutes}m late` : ''}
                               {row.lateMinutes && row.earlyLeaveMinutes ? ' · ' : ''}
                               {row.earlyLeaveMinutes ? `${row.earlyLeaveMinutes}m early` : ''}
@@ -200,9 +200,9 @@ export function AttendancePage() {
                           )}
                         </TD>
                         <TD>
-                          <Badge variant={STATUS_TONE[row.status]}>
+                          <span className={STATUS_BADGE[row.status]}>
                             {ATTENDANCE_STATUS_LABELS[row.status]}
-                          </Badge>
+                          </span>
                         </TD>
                         <TD className="text-[12px] text-muted-foreground">{row.source}</TD>
                       </TR>
@@ -307,3 +307,31 @@ function RegularizationDrawer({ open, onClose }: { open: boolean; onClose: () =>
   );
 }
 
+/**
+ * Gate in front of the page.
+ *
+ * A login with no employee record has no personal your attendance to show, and every
+ * query on the page would 403. Checked out here rather than inside the page so
+ * the page's own hooks are never conditionally skipped - an early return in the
+ * middle of a component changes hook order between renders.
+ */
+export function AttendancePage() {
+  const session = useAuthenticatedSession();
+
+  if (!session.employeeLinked) {
+    return (
+      <>
+        <PageHeader title="Attendance" />
+        <Card>
+          <EmptyState
+            icon={CircleAlert}
+            title="Employee profile not configured"
+            description="Your login is not linked to an employee record, so your attendance is unavailable. Ask an administrator to link your account."
+          />
+        </Card>
+      </>
+    );
+  }
+
+  return <AttendancePageInner />;
+}

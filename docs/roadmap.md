@@ -240,6 +240,56 @@ See `docs/attendance-devices.md` for setup.
 
 ---
 
+## Phase 8B — LAN connector ✅
+
+The case neither pull nor push covers: a terminal on an office LAN this server
+cannot reach, on firmware with no ADMS option at all. A connector on that LAN
+polls the terminal the way the pull adapter would and posts what it read over
+ordinary outbound HTTPS.
+
+- A third protocol, `ZKTECO_LAN_CONNECTOR`, rather than a flag on the pull one —
+  the scheduler polls by protocol, so a device recorded as TCP is dialled every
+  interval whether or not a route exists, which is precisely the failure the
+  connector exists to stop ✅
+- `/connector` endpoints: handshake, punch batches capped at 1000 records, and
+  the enrolment roster — authenticated by a bearer token *and* the serial read
+  off the terminal, so a connector aimed at the wrong terminal in a two-device
+  office is caught rather than silently filing one department under another ✅
+- The token is mandatory here, unlike ADMS: a connector can hold a secret in a
+  config file, so a device with none refuses with `409` instead of becoming an
+  unauthenticated ingest endpoint ✅
+- The connector is a courier — it sends raw device wall-clock readings and
+  nothing derived from them, so the timezone stays one setting on the Devices
+  page rather than a file on a machine in another building ✅
+- Batches go through the *same* ingest as polled and pushed ones, land on the
+  same fingerprints, and appear in the ordinary sync history ✅
+- The pull watermark is deliberately not advanced, so a later direct poll cannot
+  skip records the connector never sent ✅
+- The enrolment roster is cached for the mapping screen, so PINs arrive with the
+  names typed into the terminal — it never creates a mapping or an employee ✅
+- Terminal clock drift is reported, never corrected ✅
+
+The connector itself is `apps/connector`: a single-file Node program with no
+runtime dependencies, built by `npm run connector:build`, with a systemd unit
+and Windows service notes beside it. The ZKTeco protocol it speaks moved to
+`packages/zkteco`, shared with the API, so there is one decoder rather than two
+that could drift apart.
+
+- The watermark advances only after the HRMS acknowledges a batch, and the
+  comparison is inclusive, so two transactions in the same second cannot be
+  lost the moment the first is acknowledged ✅
+- Failures back off and retry forever, and the only fatal error is a missing
+  configuration - a service restarting in a loop hides its reason ✅
+- Covered by `scripts/audit-connector-agent.mjs`, which runs the built bundle
+  against a simulated terminal on a real socket and a stub HRMS on a real
+  port - no database and no API needed ✅
+
+**No physical terminal has been connected.** The simulator and the connector
+share a protocol implementation, so a shared misunderstanding of the firmware
+would pass every test here and fail on the wall.
+
+---
+
 ## Phase 9 — Payroll backend and calculation engine ✅
 
 Payroll as a consumer of the attendance engine, not a second one.
