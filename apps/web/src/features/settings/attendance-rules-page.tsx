@@ -59,6 +59,7 @@ interface Outcome {
   overtime: number | null;
   early: number | null;
   irregular: boolean;
+  status: 'Full day' | 'Half day' | 'Absent';
 }
 
 /**
@@ -68,14 +69,19 @@ interface Outcome {
  * unsaved form values, has no shift assignment to resolve and no timezone to
  * reason about. It is a worked example, and nothing is ever stored from it.
  */
-function preview(rules: AttendanceRulesInput, inAt: string, outAt: string): Outcome {
+function preview(
+  rules: AttendanceRulesInput,
+  thresholds: { fullDayMinutes: number; halfDayMinutes: number },
+  inAt: string,
+  outAt: string,
+): Outcome {
   const start = toMinutes(rules.defaultShiftStart);
   const end = toMinutes(rules.defaultShiftEnd);
   const cutoff = toMinutes(rules.irregularCheckInCutoff);
   const arrive = toMinutes(inAt);
   const leave = toMinutes(outAt);
   if (start === null || end === null || arrive === null || leave === null) {
-    return { late: null, overtime: null, early: null, irregular: false };
+    return { late: null, overtime: null, early: null, irregular: false, status: 'Absent' };
   }
 
   const irregular = rules.irregularCheckInEnabled && cutoff !== null && arrive > cutoff;
@@ -103,7 +109,18 @@ function preview(rules: AttendanceRulesInput, inAt: string, outAt: string): Outc
     overtime = Math.min(Math.max(0, minutes), rules.overtimeDailyCapMinutes);
   }
 
-  return { late, overtime, early, irregular };
+  // Classification: how much of the SCHEDULED shift the day covered, counted
+  // from the shift start so lateness is not charged twice. Falls back to
+  // elapsed time for an irregular day, exactly as the server does.
+  const covered = irregular ? null : Math.max(0, Math.min(leave, end) - start);
+  const worth = covered ?? leave - arrive;
+  const tolerance = covered === null ? 0 : Math.max(0, rules.fullDayToleranceMinutes);
+  const fullDayFrom = Math.max(thresholds.halfDayMinutes, thresholds.fullDayMinutes - tolerance);
+
+  const status: Outcome['status'] =
+    worth >= fullDayFrom ? 'Full day' : worth >= thresholds.halfDayMinutes ? 'Half day' : 'Absent';
+
+  return { late, overtime, early, irregular, status };
 }
 
 const EXAMPLES: Array<{ label: string; in: string; out: string }> = [
@@ -115,7 +132,13 @@ const EXAMPLES: Array<{ label: string; in: string; out: string }> = [
   { label: 'Irregular', in: '14:00', out: '21:00' },
 ];
 
-function Examples({ rules }: { rules: AttendanceRulesInput }) {
+function Examples({
+  rules,
+  thresholds,
+}: {
+  rules: AttendanceRulesInput;
+  thresholds: { fullDayMinutes: number; halfDayMinutes: number };
+}) {
   return (
     <Card>
       <CardHeader>
@@ -127,7 +150,7 @@ function Examples({ rules }: { rules: AttendanceRulesInput }) {
       </CardHeader>
       <CardContent className="space-y-2 p-4 pt-0">
         {EXAMPLES.map((example) => {
-          const o = preview(rules, example.in, example.out);
+          const o = preview(rules, thresholds, example.in, example.out);
           const parts: string[] = [];
           if (o.late) parts.push(`${o.late} min late`);
           if (o.early) parts.push(`${o.early} min early departure`);
@@ -153,7 +176,8 @@ function Examples({ rules }: { rules: AttendanceRulesInput }) {
                     requires review
                   </span>
                 ) : null}
-                {parts.join(' \u00b7 ')}
+                <span className="font-semibold">{o.status}</span>
+                {parts.length > 0 ? ` \u00b7 ${parts.join(' \u00b7 ')}` : null}
               </p>
             </div>
           );
@@ -235,6 +259,7 @@ const FIELD_LABELS: Record<keyof AttendanceRulesInput, string> = {
   graceMinutes: 'Late grace',
   earlyDepartureTrackingEnabled: 'Track early departure',
   earlyLeaveGraceMinutes: 'Early departure grace',
+  fullDayToleranceMinutes: 'Full-day tolerance',
   irregularCheckInEnabled: 'Flag irregular check-ins',
   irregularCheckInCutoff: 'Check-in cutoff',
 };
@@ -285,6 +310,7 @@ export function AttendanceRulesPage() {
           graceMinutes: query.data.graceMinutes,
           earlyDepartureTrackingEnabled: query.data.earlyDepartureTrackingEnabled,
           earlyLeaveGraceMinutes: query.data.earlyLeaveGraceMinutes,
+          fullDayToleranceMinutes: query.data.fullDayToleranceMinutes,
           irregularCheckInEnabled: query.data.irregularCheckInEnabled,
           irregularCheckInCutoff: query.data.irregularCheckInCutoff,
         }
@@ -342,6 +368,7 @@ export function AttendanceRulesPage() {
     graceMinutes: rules.graceMinutes,
     earlyDepartureTrackingEnabled: rules.earlyDepartureTrackingEnabled,
     earlyLeaveGraceMinutes: rules.earlyLeaveGraceMinutes,
+    fullDayToleranceMinutes: rules.fullDayToleranceMinutes,
     irregularCheckInEnabled: rules.irregularCheckInEnabled,
     irregularCheckInCutoff: rules.irregularCheckInCutoff,
   };
@@ -635,6 +662,7 @@ export function AttendanceRulesPage() {
             <FormField
               label="Early departure grace (minutes)"
               htmlFor="earlyLeaveGraceMinutes"
+              hint="Below this, no early departure is recorded at all."
               error={form.formState.errors.earlyLeaveGraceMinutes?.message}
             >
               <Input
@@ -643,6 +671,21 @@ export function AttendanceRulesPage() {
                 min={0}
                 disabled={!canManage}
                 {...form.register('earlyLeaveGraceMinutes')}
+              />
+            </FormField>
+            <FormField
+              label="Full-day tolerance (minutes)"
+              htmlFor="fullDayToleranceMinutes"
+              hint="How far short of a full day someone may fall and still be credited one. The early departure is still recorded."
+              error={form.formState.errors.fullDayToleranceMinutes?.message}
+              className="sm:col-span-2"
+            >
+              <Input
+                id="fullDayToleranceMinutes"
+                type="number"
+                min={0}
+                disabled={!canManage}
+                {...form.register('fullDayToleranceMinutes')}
               />
             </FormField>
           </CardContent>
@@ -709,7 +752,15 @@ export function AttendanceRulesPage() {
       </div>
 
       <div className="space-y-4 xl:sticky xl:top-20">
-        {live ? <Examples rules={live} /> : null}
+        {live ? (
+          <Examples
+            rules={live}
+            thresholds={{
+              fullDayMinutes: rules.fullDayMinutes,
+              halfDayMinutes: rules.halfDayMinutes,
+            }}
+          />
+        ) : null}
         {canManage ? (
           <Card>
             <CardFooter className="flex flex-wrap justify-end gap-2 py-4">

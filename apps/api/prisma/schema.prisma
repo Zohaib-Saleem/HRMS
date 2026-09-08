@@ -167,6 +167,14 @@ model Company {
   lateTrackingEnabled Boolean @default(true)
   /// Whether leaving before shift end is measured at all.
   earlyDepartureTrackingEnabled Boolean @default(true)
+  /// How far short of a full day someone may fall and still be credited one.
+  ///
+  /// Distinct from earlyLeaveGraceMinutes, which decides whether an early
+  /// departure is RECORDED. This decides whether it costs them the day. Leaving
+  /// half an hour early is worth reporting and not worth downgrading a day
+  /// over, and the two thresholds are set independently because they answer
+  /// different questions.
+  fullDayToleranceMinutes Int @default(30)
 
   /// A check-in later than the cutoff makes the day irregular: it does not fit
   /// the shift it would otherwise be scored against, so no overtime is derived

@@ -34,6 +34,7 @@ const STORED = {
   graceMinutes: 10,
   earlyDepartureTrackingEnabled: true,
   earlyLeaveGraceMinutes: 10,
+  fullDayToleranceMinutes: 30,
   irregularCheckInEnabled: true,
   irregularCheckInCutoff: '11:00',
   timezone: 'Asia/Karachi',
@@ -56,6 +57,7 @@ const VALID = {
   graceMinutes: 10,
   earlyDepartureTrackingEnabled: true,
   earlyLeaveGraceMinutes: 10,
+  fullDayToleranceMinutes: 30,
   irregularCheckInEnabled: true,
   irregularCheckInCutoff: '11:00',
 };

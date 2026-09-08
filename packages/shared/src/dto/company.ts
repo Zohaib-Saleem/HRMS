@@ -169,6 +169,11 @@ export const attendanceRulesSchema = z
       .int('Use whole minutes.')
       .min(0, 'The grace period cannot be negative.')
       .max(480),
+    fullDayToleranceMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The tolerance cannot be negative.')
+      .max(240, 'A tolerance longer than four hours would retire the half day.'),
 
     irregularCheckInEnabled: z.boolean(),
     irregularCheckInCutoff: clockTime('The irregular check-in cutoff'),

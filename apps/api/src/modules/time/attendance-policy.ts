@@ -44,6 +44,7 @@ export interface AttendancePolicy {
   overtimeReducedByLateArrival: boolean;
   lateTrackingEnabled: boolean;
   earlyDepartureTrackingEnabled: boolean;
+  fullDayToleranceMinutes: number;
   irregularCheckInEnabled: boolean;
   irregularCheckInCutoff: string;
 }
@@ -69,6 +70,7 @@ const POLICY_SELECT = {
   overtimeReducedByLateArrival: true,
   lateTrackingEnabled: true,
   earlyDepartureTrackingEnabled: true,
+  fullDayToleranceMinutes: true,
   irregularCheckInEnabled: true,
   irregularCheckInCutoff: true,
 } as const;
@@ -548,10 +550,23 @@ export function computeAttendance(input: {
 
   const dayWorth = scheduledMinutes ?? workedMinutes;
 
+  /**
+   * How far short of a full day still counts as one.
+   *
+   * Applied only to the scheduled measure. An irregular or overnight day falls
+   * back to elapsed time, and stretching elapsed time by a tolerance meant for
+   * a shift would credit a day nobody scheduled.
+   *
+   * Never below the half-day threshold: a tolerance wide enough to swallow it
+   * would silently retire half days altogether.
+   */
+  const tolerance = scheduledMinutes === null ? 0 : Math.max(0, policy.fullDayToleranceMinutes);
+  const fullDayFrom = Math.max(policy.halfDayMinutes, policy.fullDayMinutes - tolerance);
+
   let status: AttendanceComputation['status'];
   if (!checkInAt) status = 'ABSENT';
   else if (dayWorth === null) status = 'PRESENT';
-  else if (dayWorth >= policy.fullDayMinutes) status = 'PRESENT';
+  else if (dayWorth >= fullDayFrom) status = 'PRESENT';
   else if (dayWorth >= policy.halfDayMinutes) status = 'HALF_DAY';
   else status = 'ABSENT';
 

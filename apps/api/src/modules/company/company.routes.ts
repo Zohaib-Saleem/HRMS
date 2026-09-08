@@ -177,6 +177,7 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     graceMinutes: true,
     earlyDepartureTrackingEnabled: true,
     earlyLeaveGraceMinutes: true,
+    fullDayToleranceMinutes: true,
     irregularCheckInEnabled: true,
     irregularCheckInCutoff: true,
     timezone: true,

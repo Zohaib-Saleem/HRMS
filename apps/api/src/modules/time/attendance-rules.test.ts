@@ -45,6 +45,7 @@ const DEFAULTS: AttendancePolicy = {
   overtimeReducedByLateArrival: false,
   lateTrackingEnabled: true,
   earlyDepartureTrackingEnabled: true,
+  fullDayToleranceMinutes: 30,
   irregularCheckInEnabled: true,
   irregularCheckInCutoff: '11:00',
 };
@@ -338,13 +339,20 @@ describe('an assigned shift decides the day, not the company window', () => {
 describe('short days and irregular days are still not full days', () => {
   const rules = { fullDayMinutes: 540, halfDayMinutes: 270 };
 
-  it('leaving early reduces the day, and is reported as an early departure', () => {
+  it('leaving 30 minutes early is still a full day, and still reported as early', () => {
+    // Within the 30-minute tolerance: worth reporting, not worth costing the
+    // day. The early departure is recorded either way.
     const day = score('09:00', '17:30', rules);
     expect(day.scheduledMinutes).toBe(510);
     expect(day.earlyLeaveMinutes).toBe(30);
     expect(day.overtimeMinutes).toBe(0);
-    // 510 sits between the half-day and full-day thresholds, so the existing
-    // thresholds classify it. See the note in the report.
+    expect(day.status).toBe('PRESENT');
+  });
+
+  it('leaving beyond the tolerance costs the day', () => {
+    const day = score('09:00', '17:00', rules);
+    expect(day.scheduledMinutes).toBe(480);
+    expect(day.earlyLeaveMinutes).toBe(60);
     expect(day.status).toBe('HALF_DAY');
   });
 
@@ -354,6 +362,45 @@ describe('short days and irregular days are still not full days', () => {
 
   it('very short attendance is still absent', () => {
     expect(score('09:00', '11:00', rules).status).toBe('ABSENT');
+  });
+
+  it('the tolerance is configurable, and zero restores the strict rule', () => {
+    // 09:00 -> 17:30 covers 510 of a 540 window.
+    expect(score('09:00', '17:30', { ...rules, fullDayToleranceMinutes: 0 }).status).toBe('HALF_DAY');
+    expect(score('09:00', '17:30', { ...rules, fullDayToleranceMinutes: 29 }).status).toBe('HALF_DAY');
+    expect(score('09:00', '17:30', { ...rules, fullDayToleranceMinutes: 30 }).status).toBe('PRESENT');
+    expect(score('09:00', '17:00', { ...rules, fullDayToleranceMinutes: 60 }).status).toBe('PRESENT');
+  });
+
+  it('the tolerance never swallows the half day', () => {
+    // Only bites when the tolerance is wider than the gap between the two
+    // thresholds. Here half day is 500 and full day 540, so a 100-minute
+    // tolerance would put the full-day line at 440 - below the half day, which
+    // would retire it entirely. The floor holds it at 500.
+    // Half day 500, full day 540, tolerance 100. Unclamped the full-day line
+    // would fall to 440 - below the half-day threshold - and a 450-minute day
+    // shorter than half a day would be scored a FULL one. The floor holds the
+    // line at 500 so it cannot.
+    const narrow = { fullDayMinutes: 540, halfDayMinutes: 500, fullDayToleranceMinutes: 100 };
+
+    const short = score('09:00', '16:30', narrow);
+    expect(short.scheduledMinutes).toBe(450);
+    expect(short.status).toBe('ABSENT');
+
+    const full = score('09:00', '17:30', narrow);
+    expect(full.scheduledMinutes).toBe(510);
+    expect(full.status).toBe('PRESENT');
+  });
+
+  it('the tolerance does not stretch an irregular day', () => {
+    // 12:00 -> 20:00 is 480 elapsed and irregular. Applying the tolerance would
+    // drop the full-day line to 300 and hand it a full day; scored strictly on
+    // elapsed against 540, it is half a day.
+    const day = score('12:00', '20:00', { ...rules, fullDayToleranceMinutes: 240 });
+    expect(day.irregular).toBe(true);
+    expect(day.scheduledMinutes).toBeNull();
+    expect(day.workedMinutes).toBe(480);
+    expect(day.status).toBe('HALF_DAY');
   });
 
   it('an irregular day is scored on elapsed time, not credited a full shift', () => {
