@@ -1795,6 +1795,18 @@ enum PayrollComponentCalc {
   FIXED
   PERCENT_OF_BASIC
   PERCENT_OF_GROSS
+  /// value x payable days in the period
+  PER_DAY
+  /// value x hours actually worked in the period
+  PER_HOUR
+}
+
+/// How a monthly salary is split across the days a salary segment covers.
+enum PayrollProrationMethod {
+  /// share = calendar days covered / calendar days in period
+  CALENDAR_DAYS
+  /// share = scheduled working days covered / scheduled working days in period
+  WORKING_DAYS
 }
 
 /// Whether a component repeats every period or applies once.
@@ -1865,6 +1877,12 @@ model PayrollSettings {
   /// Configuration rather than a constant: a company with a different working
   /// day should not need a deployment to say so.
   fallbackScheduledMinutes Int @default(480)
+
+  /// How a monthly salary is prorated when it changes mid-period.
+  prorationMethod PayrollProrationMethod @default(CALENDAR_DAYS)
+  /// Day of the month pay is issued, used as the default pay date when a
+  /// period is created. Null leaves the pay date to be set per period.
+  payDay          Int?
 
   // --- what a day is worth --------------------------------------------------
   basis               PayrollBasis @default(FIXED_DAYS)
@@ -2019,6 +2037,12 @@ model SalaryComponent {
   /// and storing the flag now is cheaper than backfilling it later.
   isTaxable Boolean @default(true)
   isActive  Boolean @default(true)
+
+  /// Where the line sits on a payslip. Lower first; ties fall back to name.
+  displayOrder  Int       @default(0)
+  /// The component does not apply to any period ending before this. Null
+  /// means it always has.
+  effectiveFrom DateTime? @db.Date
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

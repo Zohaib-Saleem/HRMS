@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import {
   PERMISSIONS,
   employeeComponentSchema,
+  employeeComponentUpdateSchema,
   idParamSchema,
   paginationQuerySchema,
   payrollAdjustmentSchema,
@@ -26,7 +27,7 @@ import {
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { buildMeta, toSkipTake } from '../../core/pagination.js';
-import { recordAudit } from '../../core/audit.js';
+import { diff, recordAudit } from '../../core/audit.js';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
@@ -79,7 +80,7 @@ export const salaryComponentRoutes: FastifyPluginAsync = async (app) => {
         skip,
         take,
         include: { _count: { select: { assignments: true } } },
-        orderBy: [{ kind: 'asc' }, { name: 'asc' }],
+        orderBy: [{ kind: 'asc' }, { displayOrder: 'asc' }, { name: 'asc' }],
       }),
     ]);
 
@@ -92,6 +93,8 @@ export const salaryComponentRoutes: FastifyPluginAsync = async (app) => {
       calc: row.calc,
       isTaxable: row.isTaxable,
       isActive: row.isActive,
+      displayOrder: row.displayOrder,
+      effectiveFrom: day(row.effectiveFrom),
       assignedCount: row._count.assignments,
       createdAt: row.createdAt.toISOString(),
     }));
@@ -110,7 +113,11 @@ export const salaryComponentRoutes: FastifyPluginAsync = async (app) => {
     if (clash) throw new ConflictError('A component with that name already exists.');
 
     const created = await prisma.salaryComponent.create({
-      data: { companyId: auth.companyId, ...input },
+      data: {
+        companyId: auth.companyId,
+        ...input,
+        effectiveFrom: input.effectiveFrom ? toDateOnly(input.effectiveFrom) : null,
+      },
     });
 
     await recordAudit({
@@ -140,7 +147,7 @@ export const salaryComponentRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!before) throw new NotFoundError('Salary component');
 
-      await prisma.salaryComponent.update({ where: { id }, data: input });
+      await prisma.salaryComponent.update({ where: { id }, data: { ...input, effectiveFrom: input.effectiveFrom ? toDateOnly(input.effectiveFrom) : null } });
 
       await recordAudit({
         companyId: auth.companyId,
@@ -272,6 +279,71 @@ export const employeeComponentRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.status(201).send({ data: { id: created.id } });
   });
+
+  /**
+   * Edits one per-employee component. The common case is enabling or
+   * disabling it; a value or date change is the same call with more fields.
+   * Everything is scoped and audited exactly as creation is.
+   */
+  app.patch(
+    '/:id',
+    { preHandler: requirePermission(PERMISSIONS.PAYROLL_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const input = parseOrThrow(employeeComponentUpdateSchema, request.body);
+
+      const before = await prisma.employeeSalaryComponent.findFirst({
+        where: { id, companyId: auth.companyId },
+        include: { component: { select: { name: true } } },
+      });
+      if (!before) throw new NotFoundError('Assignment');
+      await assertEmployeeInScope(auth, before.employeeId);
+
+      const from = input.effectiveFrom ? toDateOnly(input.effectiveFrom) : before.effectiveFrom;
+      const to =
+        input.effectiveTo === undefined
+          ? before.effectiveTo
+          : input.effectiveTo
+            ? toDateOnly(input.effectiveTo)
+            : null;
+      if (to && to < from) {
+        throw new ValidationError({ effectiveTo: ['This cannot end before it starts.'] });
+      }
+
+      const after = await prisma.employeeSalaryComponent.update({
+        where: { id },
+        data: {
+          ...(input.value !== undefined ? { value: input.value } : {}),
+          effectiveFrom: from,
+          effectiveTo: to,
+          ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+          ...(input.note !== undefined ? { note: input.note } : {}),
+        },
+      });
+
+      const changes = diff(
+        { value: num(before.value), isActive: before.isActive, effectiveFrom: day(before.effectiveFrom), effectiveTo: day(before.effectiveTo), note: before.note },
+        { value: num(after.value), isActive: after.isActive, effectiveFrom: day(after.effectiveFrom), effectiveTo: day(after.effectiveTo), note: after.note },
+      );
+
+      if (changes.changed.length > 0) {
+        await recordAudit({
+          companyId: auth.companyId,
+          actorId: auth.userId,
+          action: 'payroll.allowance.update',
+          entityType: 'EmployeeSalaryComponent',
+          entityId: id,
+          summary: `${after.isActive === before.isActive ? 'Changed' : after.isActive ? 'Enabled' : 'Disabled'} "${before.component.name}" (${changes.changed.join(', ')})`,
+          before: { employeeId: before.employeeId, ...changes.before },
+          after: changes.after,
+          request,
+        });
+      }
+
+      return reply.send({ data: { id } });
+    },
+  );
 
   app.delete(
     '/:id',

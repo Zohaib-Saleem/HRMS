@@ -272,6 +272,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/settings/company': 'Company',
   '/settings/attendance': 'Attendance policy',
   '/settings/attendance-rules': 'Attendance rules',
+  '/payroll/salaries': 'Salary management',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',

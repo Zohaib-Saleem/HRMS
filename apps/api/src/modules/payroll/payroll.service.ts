@@ -134,6 +134,7 @@ export function effectiveConfig(
         ? null
         : toNumber(settings.overtimeHolidayMultiplier),
     fallbackScheduledMinutes: settings.fallbackScheduledMinutes,
+    prorationMethod: settings.prorationMethod,
   };
 }
 

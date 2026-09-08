@@ -55,6 +55,8 @@ export const PAYROLL_COMPONENT_CALCS = [
   'FIXED',
   'PERCENT_OF_BASIC',
   'PERCENT_OF_GROSS',
+  'PER_DAY',
+  'PER_HOUR',
 ] as const;
 export type PayrollComponentCalc = (typeof PAYROLL_COMPONENT_CALCS)[number];
 
@@ -62,6 +64,16 @@ export const PAYROLL_COMPONENT_CALC_LABELS: Record<PayrollComponentCalc, string>
   FIXED: 'A fixed amount',
   PERCENT_OF_BASIC: 'A percentage of basic pay',
   PERCENT_OF_GROSS: 'A percentage of gross pay',
+  PER_DAY: 'An amount per payable day',
+  PER_HOUR: 'An amount per hour worked',
+};
+
+export const PAYROLL_PRORATION_METHODS = ['CALENDAR_DAYS', 'WORKING_DAYS'] as const;
+export type PayrollProrationMethod = (typeof PAYROLL_PRORATION_METHODS)[number];
+
+export const PAYROLL_PRORATION_METHOD_LABELS: Record<PayrollProrationMethod, string> = {
+  CALENDAR_DAYS: 'By calendar days covered',
+  WORKING_DAYS: 'By scheduled working days covered',
 };
 
 export const PAYROLL_COMPONENT_FREQUENCIES = ['RECURRING', 'ONE_TIME'] as const;
@@ -156,6 +168,14 @@ export const payrollSettingsSchema = z.object({
 
   roundingDecimals: z.coerce.number().int().min(0).max(4).default(2),
   payslipPrefix: z.string().trim().min(1).max(12).default('PS-'),
+  prorationMethod: z.enum(PAYROLL_PRORATION_METHODS).default('CALENDAR_DAYS'),
+  payDay: z.coerce
+    .number()
+    .int('Use a whole day of the month.')
+    .min(1, 'The pay day must be between 1 and 31.')
+    .max(31, 'The pay day must be between 1 and 31.')
+    .nullable()
+    .optional(),
 });
 
 export type PayrollSettingsInput = z.infer<typeof payrollSettingsSchema>;
@@ -248,6 +268,8 @@ export const salaryComponentSchema = z.object({
   calc: z.enum(PAYROLL_COMPONENT_CALCS).default('FIXED'),
   isTaxable: z.boolean().default(true),
   isActive: z.boolean().default(true),
+  displayOrder: z.coerce.number().int().min(0).max(999).default(0),
+  effectiveFrom: DAY.nullable().optional(),
 });
 
 export type SalaryComponentInput = z.infer<typeof salaryComponentSchema>;
@@ -270,6 +292,41 @@ export const employeeComponentSchema = z.object({
 });
 
 export type EmployeeComponentInput = z.infer<typeof employeeComponentSchema>;
+
+/**
+ * Editing an existing per-employee component. Everything optional: the common
+ * case is flipping isActive, and requiring the rest re-sent would turn a
+ * toggle into a form.
+ */
+export const employeeComponentUpdateSchema = z.object({
+  value: money().optional(),
+  effectiveFrom: DAY.optional(),
+  effectiveTo: DAY.nullable().optional(),
+  isActive: z.boolean().optional(),
+  note: z.string().trim().max(300).nullable().optional(),
+});
+export type EmployeeComponentUpdateInput = z.infer<typeof employeeComponentUpdateSchema>;
+
+/**
+ * One row per employee for the salary management screen: what they are on now,
+ * and what recurs on top of it. Amounts are the component values as entered;
+ * percentage components carry their rate here and are priced by a run.
+ */
+export interface SalaryOverviewRow {
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  departmentName: string | null;
+  currentSalary: { amount: number; currency: string; salaryType: PayrollSalaryType; effectiveFrom: string } | null;
+  allowanceCount: number;
+  /** Sum of FIXED allowances only; percentage and per-unit ones are shown as counts. */
+  fixedAllowanceTotal: number;
+  deductionCount: number;
+  fixedDeductionTotal: number;
+  /** ISO date of the most recent salary record, current or not. */
+  lastRevisionAt: string | null;
+  status: 'ACTIVE' | 'NONE' | 'ENDED';
+}
 
 export interface EmployeeComponentRecord {
   id: string;

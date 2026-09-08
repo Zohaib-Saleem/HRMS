@@ -80,6 +80,8 @@ export interface EffectiveConfig {
   overtimeHolidayMultiplier: number | null;
   /** Scheduled minutes for a day with no shift assignment behind it. */
   fallbackScheduledMinutes: number;
+  /** How a monthly salary is split across the days a segment covers. */
+  prorationMethod: 'CALENDAR_DAYS' | 'WORKING_DAYS';
 }
 
 /** A salary in force over part of the period. */
@@ -96,7 +98,7 @@ export interface ComponentInput {
   code: string | null;
   label: string;
   kind: 'EARNING' | 'DEDUCTION';
-  calc: 'FIXED' | 'PERCENT_OF_BASIC' | 'PERCENT_OF_GROSS';
+  calc: 'FIXED' | 'PERCENT_OF_BASIC' | 'PERCENT_OF_GROSS' | 'PER_DAY' | 'PER_HOUR';
   value: number;
   isTaxable: boolean;
 }
@@ -141,7 +143,7 @@ export interface MoneyLine {
   code: string | null;
   label: string;
   kind: string;
-  calc: 'FIXED' | 'PERCENT_OF_BASIC' | 'PERCENT_OF_GROSS';
+  calc: 'FIXED' | 'PERCENT_OF_BASIC' | 'PERCENT_OF_GROSS' | 'PER_DAY' | 'PER_HOUR';
   rate: number | null;
   units: number | null;
   amount: number;
@@ -379,8 +381,20 @@ export function calculate(input: {
     // 16th pays half at each rate and a full period at one rate pays exactly
     // the salary - no basis arithmetic involved, because dividing and
     // re-multiplying by 30 would introduce an error the contract never had.
+    // Which days count is configuration. Calendar days is the conventional
+    // answer and what every existing figure was computed with; working days
+    // makes a raise on a Monday and a raise on a Saturday pay the same, which
+    // some contracts want.
+    const totalScheduled = tally.scheduledDays;
     for (const segment of segments) {
-      const share = periodDays > 0 ? segment.days.length / periodDays : 0;
+      const share =
+        config.prorationMethod === 'WORKING_DAYS'
+          ? totalScheduled > 0
+            ? tallyDays(segment.days, config).scheduledDays / totalScheduled
+            : 0
+          : periodDays > 0
+            ? segment.days.length / periodDays
+            : 0;
       basicAmount += segment.amount * share;
     }
   } else if (salaryType === 'DAILY') {
@@ -471,12 +485,31 @@ export function calculate(input: {
   // percent-of-gross is then read against. Without a fixed order, two
   // percentage components could each be computed on a total that included the
   // other, and the result would depend on iteration order.
+  /**
+   * Units a per-unit component is multiplied by. Per day is the days actually
+   * paid for, so an absence does not also earn a day's allowance; per hour is
+   * the hours actually worked.
+   */
+  const unitsFor = (calc: ComponentInput['calc']): number | null =>
+    calc === 'PER_DAY' ? payableDays : calc === 'PER_HOUR' ? tally.workedMinutes / 60 : null;
+
+  const priceComponent = (component: ComponentInput, base: number): number => {
+    switch (component.calc) {
+      case 'PERCENT_OF_BASIC':
+        return round((basicAmount * component.value) / 100);
+      case 'PERCENT_OF_GROSS':
+        return round((base * component.value) / 100);
+      case 'PER_DAY':
+        return round(component.value * payableDays);
+      case 'PER_HOUR':
+        return round((component.value * tally.workedMinutes) / 60);
+      default:
+        return round(component.value);
+    }
+  };
+
   for (const component of earningComponents) {
     if (component.calc === 'PERCENT_OF_GROSS') continue;
-    const amount =
-      component.calc === 'PERCENT_OF_BASIC'
-        ? round((basicAmount * component.value) / 100)
-        : round(component.value);
     earnings.push({
       componentId: component.componentId,
       code: component.code,
@@ -484,8 +517,8 @@ export function calculate(input: {
       kind: 'COMPONENT',
       calc: component.calc,
       rate: component.calc === 'FIXED' ? null : component.value,
-      units: null,
-      amount,
+      units: unitsFor(component.calc) === null ? null : roundTo(unitsFor(component.calc)!, 2),
+      amount: priceComponent(component, 0),
       isTaxable: component.isTaxable,
     });
   }
@@ -579,12 +612,6 @@ export function calculate(input: {
   const grossForDeductions = earnings.reduce((sum, line) => sum + line.amount, 0);
 
   for (const component of deductionComponents) {
-    const amount =
-      component.calc === 'PERCENT_OF_BASIC'
-        ? round((basicAmount * component.value) / 100)
-        : component.calc === 'PERCENT_OF_GROSS'
-          ? round((grossForDeductions * component.value) / 100)
-          : round(component.value);
     deductions.push({
       componentId: component.componentId,
       code: component.code,
@@ -592,8 +619,8 @@ export function calculate(input: {
       kind: 'COMPONENT',
       calc: component.calc,
       rate: component.calc === 'FIXED' ? null : component.value,
-      units: null,
-      amount,
+      units: unitsFor(component.calc) === null ? null : roundTo(unitsFor(component.calc)!, 2),
+      amount: priceComponent(component, grossForDeductions),
       isTaxable: false,
     });
   }

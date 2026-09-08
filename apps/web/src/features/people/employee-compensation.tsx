@@ -66,44 +66,76 @@ function componentValue(row: EmployeeComponentRecord, currency: string): string 
 
 // ------------------------------------------------------------------ salary form
 
-function SalaryDialog({
+/**
+ * Records a new salary, or edits one already on record.
+ *
+ * Editing is for correcting a record - a typo in the amount, the wrong start
+ * date. A raise is not an edit: it is a new record from a new date, so the
+ * period already paid keeps reading what it paid. The screen says so.
+ */
+export function SalaryDialog({
   employeeId,
   currency,
+  existing = null,
   open,
   onClose,
+  onSaved,
 }: {
   employeeId: string;
   currency: string;
+  /** When set, the dialog edits this record instead of creating one. */
+  existing?: EmployeeSalaryRecord | null;
   open: boolean;
   onClose: () => void;
+  onSaved?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const isEdit = existing !== null;
+
+  const blank = (): EmployeeSalaryInput => ({
+    employeeId,
+    salaryType: 'MONTHLY',
+    amount: 0,
+    currency,
+    effectiveFrom: new Date().toISOString().slice(0, 10),
+    effectiveTo: null,
+    note: null,
+  });
+
+  const fromExisting = (row: EmployeeSalaryRecord): EmployeeSalaryInput => ({
+    employeeId: row.employeeId,
+    salaryType: row.salaryType,
+    amount: row.amount,
+    currency: row.currency,
+    effectiveFrom: row.effectiveFrom,
+    effectiveTo: row.effectiveTo,
+    note: row.note,
+  });
 
   const form = useForm<EmployeeSalaryInput>({
     resolver: zodResolver(employeeSalarySchema),
-    defaultValues: {
-      employeeId,
-      salaryType: 'MONTHLY',
-      amount: 0,
-      currency,
-      effectiveFrom: new Date().toISOString().slice(0, 10),
-      effectiveTo: null,
-      note: null,
-    },
+    defaultValues: existing ? fromExisting(existing) : blank(),
   });
 
   React.useEffect(() => {
-    if (open) form.reset({ ...form.getValues(), employeeId, currency });
+    if (open) form.reset(existing ? fromExisting(existing) : blank());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, employeeId, currency]);
+  }, [open, employeeId, currency, existing?.id]);
 
   const save = useMutation({
-    mutationFn: (input: EmployeeSalaryInput) => api.post('/payroll/salaries', input),
+    mutationFn: (input: EmployeeSalaryInput) =>
+      isEdit
+        ? api.patch(`/payroll/salaries/${existing.id}`, input)
+        : api.post('/payroll/salaries', input),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['compensation', employeeId] });
-      toast.success('Salary recorded', {
-        description: 'Earlier records are untouched, so past payroll still reads what it paid.',
+      await queryClient.invalidateQueries({ queryKey: ['salary-overview'] });
+      toast.success(isEdit ? 'Salary record updated' : 'Salary recorded', {
+        description: isEdit
+          ? 'This corrected the record in place. For a raise, record a new salary from its start date instead.'
+          : 'Earlier records are untouched, so past payroll still reads what it paid.',
       });
+      onSaved?.();
       onClose();
     },
     onError: (error: unknown) => {
@@ -121,7 +153,7 @@ function SalaryDialog({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Record a salary</DialogTitle>
+          <DialogTitle>{isEdit ? 'Edit salary record' : 'Record a salary'}</DialogTitle>
         </DialogHeader>
         <form
           id="salary-form"
@@ -173,7 +205,12 @@ function SalaryDialog({
             <Input id="effectiveTo" type="date" {...form.register('effectiveTo')} />
           </FormField>
 
-          <FormField label="Note" htmlFor="note" className="sm:col-span-2">
+          <FormField
+            label="Reason for this revision"
+            htmlFor="note"
+            hint="Kept with the record and shown in the history - a promotion, an annual review, a correction."
+            className="sm:col-span-2"
+          >
             <Textarea id="note" rows={2} {...form.register('note')} />
           </FormField>
         </form>
@@ -182,7 +219,7 @@ function SalaryDialog({
             Cancel
           </Button>
           <Button type="submit" form="salary-form" disabled={save.isPending}>
-            {save.isPending ? 'Saving...' : 'Save salary'}
+            {save.isPending ? 'Saving...' : isEdit ? 'Save changes' : 'Save salary'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -341,7 +378,21 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
   const canManage = has(PERMISSIONS.PAYROLL_MANAGE);
 
   const [salaryOpen, setSalaryOpen] = React.useState(false);
+  const [editing, setEditing] = React.useState<EmployeeSalaryRecord | null>(null);
   const [componentKind, setComponentKind] = React.useState<PayrollComponentKind | null>(null);
+  const queryClient = useQueryClient();
+
+  // Enable or disable one allowance or deduction without leaving the page.
+  const toggle = useMutation({
+    mutationFn: (input: { id: string; isActive: boolean }) =>
+      api.patch(`/payroll/employee-components/${input.id}`, { isActive: input.isActive }),
+    onSuccess: async (_data, input) => {
+      await queryClient.invalidateQueries({ queryKey: ['compensation', employeeId] });
+      await queryClient.invalidateQueries({ queryKey: ['salary-overview'] });
+      toast.success(input.isActive ? 'Enabled' : 'Disabled');
+    },
+    onError: (error: unknown) => toast.error('Could not update', { description: errorMessage(error) }),
+  });
 
   const salaries = useQuery({
     queryKey: ['compensation', employeeId, 'salaries'],
@@ -427,9 +478,26 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
                   {row.effectiveTo ? day(row.effectiveTo) : '—'}
                 </TD>
                 <TD>
-                  <Badge variant={row.isActive ? 'success' : 'neutral'}>
-                    {row.isActive ? 'Active' : 'Inactive'}
-                  </Badge>
+                  {canManage ? (
+                    <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        role="switch"
+                        className="size-4 accent-primary"
+                        checked={row.isActive}
+                        disabled={toggle.isPending}
+                        onChange={(event) => toggle.mutate({ id: row.id, isActive: event.target.checked })}
+                        aria-label={`${row.isActive ? 'Disable' : 'Enable'} ${row.componentName}`}
+                      />
+                      <span className={row.isActive ? '' : 'text-muted-foreground'}>
+                        {row.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </label>
+                  ) : (
+                    <Badge variant={row.isActive ? 'success' : 'neutral'}>
+                      {row.isActive ? 'Active' : 'Inactive'}
+                    </Badge>
+                  )}
                 </TD>
               </TR>
             ))}
@@ -437,6 +505,19 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
         </Table>
       </TableWrapper>
     );
+
+  // Gross at rest: basic plus the allowances whose money is known now. A
+  // percentage or per-unit allowance is priced by a run, so it is counted
+  // rather than added, and the label says so.
+  const fixedAllowances = allowances.filter((a) => a.isActive && a.calc === 'FIXED');
+  const fixedDeductions = deductions.filter((d) => d.isActive && d.calc === 'FIXED');
+  const variableAllowances = allowances.filter((a) => a.isActive && a.calc !== 'FIXED').length;
+  const estimatedGross = current
+    ? current.amount + fixedAllowances.reduce((sum, a) => sum + a.value, 0)
+    : null;
+  const estimatedNet =
+    estimatedGross === null ? null : estimatedGross - fixedDeductions.reduce((sum, d) => sum + d.value, 0);
+  const lastRevision = history[0] ?? null;
 
   return (
     <div className="space-y-5">
@@ -446,14 +527,43 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
             <Banknote className="size-4" aria-hidden /> Compensation
           </CardTitle>
           {canManage ? (
-            <Button size="sm" onClick={() => setSalaryOpen(true)}>
-              <Plus className="size-4" aria-hidden /> Record salary
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {current ? (
+                <Button size="sm" variant="outline" onClick={() => setEditing(current)}>
+                  Edit
+                </Button>
+              ) : null}
+              <Button size="sm" onClick={() => setSalaryOpen(true)}>
+                <Plus className="size-4" aria-hidden /> Record salary
+              </Button>
+            </div>
           ) : null}
         </CardHeader>
         <CardContent>
           {current ? (
             <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="sm:col-span-2 lg:col-span-4 grid gap-4 sm:grid-cols-3 rounded-lg border border-border bg-surface-muted/40 p-3">
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-muted-foreground">Estimated gross</dt>
+                  <dd className="text-base font-semibold tabular-nums">{money(estimatedGross ?? 0, current.currency)}</dd>
+                  <dd className="text-[11px] text-muted-foreground">
+                    Basic + {fixedAllowances.length} fixed allowance{fixedAllowances.length === 1 ? '' : 's'}
+                    {variableAllowances > 0 ? ` (+${variableAllowances} priced at run time)` : ''}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-muted-foreground">Estimated net</dt>
+                  <dd className="text-base font-semibold tabular-nums">{money(estimatedNet ?? 0, current.currency)}</dd>
+                  <dd className="text-[11px] text-muted-foreground">
+                    After {fixedDeductions.length} fixed deduction{fixedDeductions.length === 1 ? '' : 's'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-muted-foreground">Last revision</dt>
+                  <dd className="text-sm font-medium">{lastRevision ? day(lastRevision.effectiveFrom) : '—'}</dd>
+                  <dd className="text-[11px] text-muted-foreground">{lastRevision?.note ?? 'No reason recorded'}</dd>
+                </div>
+              </div>
               <div>
                 <dt className="text-xs uppercase tracking-wide text-muted-foreground">Basic salary</dt>
                 <dd className="text-lg font-semibold tabular-nums">
@@ -536,7 +646,9 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
                     <TH>Effective to</TH>
                     <TH>Basic salary</TH>
                     <TH>Frequency</TH>
+                    <TH>Reason</TH>
                     <TH>Status</TH>
+                    {canManage ? <TH className="text-right">Actions</TH> : null}
                   </TR>
                 </THead>
                 <TBody>
@@ -548,11 +660,21 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
                       </TD>
                       <TD className="tabular-nums">{money(row.amount, row.currency)}</TD>
                       <TD>{PAYROLL_SALARY_TYPE_LABELS[row.salaryType]}</TD>
+                      <TD className="max-w-[18rem] truncate text-muted-foreground" title={row.note ?? ''}>
+                        {row.note ?? '—'}
+                      </TD>
                       <TD>
                         <Badge variant={row.isCurrent ? 'success' : 'neutral'}>
                           {row.isCurrent ? 'Current' : 'Superseded'}
                         </Badge>
                       </TD>
+                      {canManage ? (
+                        <TD className="text-right">
+                          <Button size="sm" variant="ghost" onClick={() => setEditing(row)}>
+                            Edit
+                          </Button>
+                        </TD>
+                      ) : null}
                     </TR>
                   ))}
                 </TBody>
@@ -569,6 +691,13 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
             currency={currency}
             open={salaryOpen}
             onClose={() => setSalaryOpen(false)}
+          />
+          <SalaryDialog
+            employeeId={employeeId}
+            currency={currency}
+            existing={editing}
+            open={editing !== null}
+            onClose={() => setEditing(null)}
           />
           <ComponentDialog
             employeeId={employeeId}

@@ -52,6 +52,7 @@ const CONFIG: EffectiveConfig = {
   overtimeWeekendMultiplier: null,
   overtimeHolidayMultiplier: null,
   fallbackScheduledMinutes: 480,
+  prorationMethod: 'CALENDAR_DAYS',
 };
 
 const SALARY = 120000;
@@ -559,6 +560,134 @@ describe('a complete payslip', () => {
     for (const invented of ['TAX', 'INCOME_TAX', 'EOBI', 'SOCIAL_SECURITY', 'PF', 'PROVIDENT']) {
       expect(codes).not.toContain(invented);
     }
+  });
+});
+
+// --------------------------------------------------- per-unit components
+
+describe('per-day and per-hour components', () => {
+  it('prices a per-day allowance by the days actually paid for', () => {
+    // 20 present + 2 absent: 20 payable days at 500. An absence does not also
+    // earn a day's allowance.
+    const month = [...days(20), ...days(2, { status: 'ABSENT', workedMinutes: null }), ...days(8, { status: 'WEEKEND' })];
+    const result = run({
+      segments: [segment(month)],
+      components: [allowance({ code: 'MEAL', label: 'Meal', calc: 'PER_DAY', value: 500 })],
+    });
+
+    expect(result.payableDays).toBe(20);
+    const line = result.earnings.find((l) => l.code === 'MEAL');
+    expect(line?.units).toBe(20);
+    expect(line?.amount).toBe(20 * 500);
+  });
+
+  it('prices a per-hour allowance by the hours actually worked', () => {
+    // 22 days x 540 minutes = 198 hours, at 50 an hour.
+    const result = run({
+      segments: [segment(standardMonth())],
+      components: [allowance({ code: 'SHIFT', label: 'Shift premium', calc: 'PER_HOUR', value: 50 })],
+    });
+
+    expect(result.tally.workedMinutes).toBe(22 * 540);
+    const line = result.earnings.find((l) => l.code === 'SHIFT');
+    expect(line?.units).toBe(198);
+    expect(line?.amount).toBe(198 * 50);
+  });
+
+  it('prices a per-day deduction the same way', () => {
+    const month = [...days(20), ...days(2, { status: 'ABSENT', workedMinutes: null }), ...days(8, { status: 'WEEKEND' })];
+    const result = run({
+      segments: [segment(month)],
+      components: [allowance({ kind: 'DEDUCTION', code: 'TRANSPORT_D', label: 'Transport', calc: 'PER_DAY', value: 100 })],
+    });
+
+    const line = result.deductions.find((l) => l.code === 'TRANSPORT_D');
+    expect(line?.amount).toBe(20 * 100);
+  });
+
+  it('pays nothing per hour on a period with no worked time', () => {
+    const month = [...days(22, { status: 'ABSENT', workedMinutes: null }), ...days(8, { status: 'WEEKEND' })];
+    const result = run({
+      segments: [segment(month)],
+      components: [allowance({ code: 'SHIFT', label: 'Shift', calc: 'PER_HOUR', value: 50 })],
+    });
+    expect(result.earnings.find((l) => l.code === 'SHIFT')?.amount).toBe(0);
+  });
+});
+
+// ------------------------------------------------------------- proration
+
+describe('proration method', () => {
+  // The stated case: 100,000 for the first half, 120,000 for the second.
+  const first = (n: number) => ({ salaryType: 'MONTHLY' as const, amount: 100000, currency: 'PKR', days: days(n) });
+  const second = (n: number) => ({ salaryType: 'MONTHLY' as const, amount: 120000, currency: 'PKR', days: days(n) });
+
+  it('by calendar days: 15 + 15 of a 30-day month is exactly 110,000', () => {
+    const result = run({ segments: [first(15), second(15)], periodDays: 30 });
+    expect(result.basicAmount).toBe(110000);
+  });
+
+  it('does not round the split incorrectly', () => {
+    // 10 + 21 of a 31-day month. 100,000 x 10/31 + 120,000 x 21/31, rounded
+    // once at the end, not once per segment.
+    const result = run({ segments: [first(10), second(21)], periodDays: 31 });
+    expect(result.basicAmount).toBe(roundTo((100000 * 10) / 31 + (120000 * 21) / 31, 2));
+    expect(result.basicAmount).toBe(113548.39);
+  });
+
+  it('by working days: only scheduled days decide the split', () => {
+    // First segment covers 10 scheduled days and 4 weekend days; second covers
+    // 12 scheduled and 4 weekend. By calendar days the split is 14/16; by
+    // working days it is 10/12 - the weekends stop counting.
+    const a = { ...first(0), days: [...days(10), ...days(4, { status: 'WEEKEND', workedMinutes: null })] };
+    const b = { ...second(0), days: [...days(12), ...days(4, { status: 'WEEKEND', workedMinutes: null })] };
+
+    const calendar = run({ segments: [a, b], periodDays: 30, config: { prorationMethod: 'CALENDAR_DAYS' } });
+    const working = run({ segments: [a, b], periodDays: 30, config: { prorationMethod: 'WORKING_DAYS' } });
+
+    expect(calendar.basicAmount).toBe(roundTo((100000 * 14) / 30 + (120000 * 16) / 30, 2));
+    expect(working.basicAmount).toBe(roundTo((100000 * 10) / 22 + (120000 * 12) / 22, 2));
+    expect(calendar.basicAmount).not.toBe(working.basicAmount);
+  });
+
+  it('a full period at one salary pays exactly that salary under either method', () => {
+    for (const prorationMethod of ['CALENDAR_DAYS', 'WORKING_DAYS'] as const) {
+      expect(run({ segments: [segment(standardMonth())], config: { prorationMethod } }).basicAmount).toBe(SALARY);
+    }
+  });
+});
+
+// -------------------------------------------------------- the 9-hour day
+
+describe('the standard day is configuration', () => {
+  it('9 hours per day is 540 minutes and prices the hourly rate from it', () => {
+    // If the company sets its payroll day to 9 hours - the 09:00-18:00
+    // office window with the break inside it - the hourly rate follows.
+    const nine = run({ segments: [segment(standardMonth())], config: { standardHoursPerDay: 9 } });
+    expect(9 * 60).toBe(540);
+    expect(nine.dailyRate).toBe(DAILY_RATE);
+    expect(nine.hourlyRate).toBe(roundTo(DAILY_RATE / 9, 2));
+  });
+
+  it('overtime is priced from whichever standard day is configured', () => {
+    // Two hours of overtime at 1.5x. At 8 hours/day the hourly rate is 500;
+    // at 9 it is 444.44. Neither number lives in the engine.
+    const month = [...days(21), ...days(1, { overtimeMinutes: 120 }), ...days(8, { status: 'WEEKEND' })];
+    const eight = run({ segments: [segment(month)], config: { standardHoursPerDay: 8 } });
+    const nine = run({ segments: [segment(month)], config: { standardHoursPerDay: 9 } });
+
+    expect(eight.overtimeAmount).toBe(roundTo(500 * 1.5 * 2, 2));
+    expect(nine.overtimeAmount).toBe(roundTo((DAILY_RATE / 9) * 1.5 * 2, 2));
+  });
+
+  it('the office window is not the payroll day: 540 worked minutes at 8 standard hours is still one full day', () => {
+    // A 09:00-18:00 day is 540 minutes of presence. Payroll prices it as one
+    // payable day, not as 8 hours plus an hour of something else.
+    const result = run({ segments: [segment(standardMonth())], config: { standardHoursPerDay: 8 } });
+    expect(result.tally.presentDays).toBe(22);
+    expect(result.payableDays).toBe(22);
+    expect(result.basicAmount).toBe(SALARY);
+    expect(result.overtimeAmount).toBe(0);
   });
 });
 

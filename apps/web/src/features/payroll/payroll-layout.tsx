@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { BarChart3, LayoutDashboard, Layers3, Receipt, Settings2, Wallet } from 'lucide-react';
+import { BarChart3, LayoutDashboard, Layers3, Receipt, Settings2, UserCog, Wallet } from 'lucide-react';
 import { PERMISSIONS, type Permission } from '@hrms/shared';
 import { usePermissions } from '@/features/auth/session-context';
 import { cn } from '@/lib/utils';
@@ -28,9 +28,15 @@ const TABS: Array<{
   },
   { to: '/payroll/runs', label: 'Pay runs', icon: Receipt, permission: PERMISSIONS.PAYROLL_READ },
   {
-    to: '/payroll/profiles',
-    label: 'Profiles and salaries',
+    to: '/payroll/salaries',
+    label: 'Salary management',
     icon: Wallet,
+    permission: PERMISSIONS.PAYROLL_READ,
+  },
+  {
+    to: '/payroll/profiles',
+    label: 'Payroll profiles',
+    icon: UserCog,
     permission: PERMISSIONS.PAYROLL_READ,
   },
   {

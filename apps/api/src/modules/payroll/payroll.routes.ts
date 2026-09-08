@@ -6,6 +6,7 @@ import {
   employeeSalarySchema,
   idParamSchema,
   paginationQuerySchema,
+  type SalaryOverviewRow,
   payrollAdjustmentSchema,
   payrollCancelSchema,
   payrollLineQuerySchema,
@@ -118,6 +119,8 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
       earlyLeaveGraceMinutes: settings.earlyLeaveGraceMinutes,
       roundingDecimals: settings.roundingDecimals,
       payslipPrefix: settings.payslipPrefix,
+      prorationMethod: settings.prorationMethod,
+      payDay: settings.payDay,
     };
 
     return reply.send({ data });
@@ -351,6 +354,107 @@ export const payrollSalaryRoutes: FastifyPluginAsync = async (app) => {
         (row.effectiveTo === null || day(row.effectiveTo)! >= today),
       createdAt: row.createdAt.toISOString(),
     }));
+
+    return reply.send({ data, meta: buildMeta(query.page, query.limit, total) });
+  });
+
+  /**
+   * One row per employee for the salary management screen.
+   *
+   * Reads the same three tables the per-employee screen does, but folded so
+   * the list says "on 120,000 with three allowances" without a request per
+   * row. Percentage and per-unit components are counted rather than summed:
+   * their money is only known once a run prices them.
+   */
+  app.get('/overview', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const query = parseOrThrow(paginationQuerySchema, request.query);
+
+    const scope = await employeeScopeFilter(auth);
+    if (scope === null) {
+      return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
+    }
+
+    const terms = query.q ? query.q.split(/\s+/).filter(Boolean) : [];
+    const where: Prisma.EmployeeWhereInput = {
+      AND: [
+        { companyId: auth.companyId, status: { not: 'TERMINATED' } },
+        scope,
+        ...terms.map((term) => ({
+          OR: [
+            { firstName: { contains: term, mode: 'insensitive' as const } },
+            { lastName: { contains: term, mode: 'insensitive' as const } },
+            { displayName: { contains: term, mode: 'insensitive' as const } },
+            { employeeNumber: { contains: term, mode: 'insensitive' as const } },
+          ],
+        })),
+      ],
+    };
+
+    const { skip, take } = toSkipTake(query.page, query.limit);
+    const [total, employees] = await Promise.all([
+      prisma.employee.count({ where }),
+      prisma.employee.findMany({
+        where,
+        skip,
+        take,
+        orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          displayName: true,
+          employeeNumber: true,
+          department: { select: { name: true } },
+        },
+      }),
+    ]);
+
+    const ids = employees.map((e) => e.id);
+    const todayIso = todayKey();
+    const [salaries, components] = await Promise.all([
+      prisma.employeeSalary.findMany({
+        where: { employeeId: { in: ids } },
+        orderBy: { effectiveFrom: 'desc' },
+      }),
+      prisma.employeeSalaryComponent.findMany({
+        where: { employeeId: { in: ids }, isActive: true },
+        include: { component: { select: { kind: true, calc: true } } },
+      }),
+    ]);
+
+    const data: SalaryOverviewRow[] = employees.map((e) => {
+      const mine = salaries.filter((s) => s.employeeId === e.id);
+      const current = mine.find(
+        (s) => day(s.effectiveFrom)! <= todayIso && (s.effectiveTo === null || day(s.effectiveTo)! >= todayIso),
+      );
+      const comps = components.filter((c) => c.employeeId === e.id);
+      const sumFixed = (kind: 'EARNING' | 'DEDUCTION') =>
+        comps
+          .filter((c) => c.component.kind === kind && c.component.calc === 'FIXED')
+          .reduce((sum, c) => sum + num(c.value), 0);
+
+      return {
+        employeeId: e.id,
+        employeeName: displayName(e),
+        employeeNumber: e.employeeNumber,
+        departmentName: e.department?.name ?? null,
+        currentSalary: current
+          ? {
+              amount: num(current.amount),
+              currency: current.currency,
+              salaryType: current.salaryType,
+              effectiveFrom: day(current.effectiveFrom)!,
+            }
+          : null,
+        allowanceCount: comps.filter((c) => c.component.kind === 'EARNING').length,
+        fixedAllowanceTotal: sumFixed('EARNING'),
+        deductionCount: comps.filter((c) => c.component.kind === 'DEDUCTION').length,
+        fixedDeductionTotal: sumFixed('DEDUCTION'),
+        lastRevisionAt: mine[0] ? day(mine[0].effectiveFrom) : null,
+        status: current ? 'ACTIVE' : mine.length > 0 ? 'ENDED' : 'NONE',
+      };
+    });
 
     return reply.send({ data, meta: buildMeta(query.page, query.limit, total) });
   });

@@ -7,6 +7,8 @@ import {
   PAYROLL_BASIS_LABELS,
   PAYROLL_FREQUENCIES,
   PAYROLL_FREQUENCY_LABELS,
+  PAYROLL_PRORATION_METHODS,
+  PAYROLL_PRORATION_METHOD_LABELS,
   PAYROLL_OVERTIME_MODES,
   PAYROLL_OVERTIME_MODE_LABELS,
   PAYROLL_TIME_DEDUCTION_LABELS,
@@ -79,6 +81,7 @@ export function PayrollSettingsPage() {
   }
 
   const basis = watch('basis');
+  const standardHours = Number(watch('standardHoursPerDay')) || 0;
   const overtimeMode = watch('overtimeMode');
   const lateMode = watch('lateDeductionMode');
   const earlyMode = watch('earlyLeaveDeductionMode');
@@ -149,7 +152,7 @@ export function PayrollSettingsPage() {
               htmlFor="standardHoursPerDay"
               error={formState.errors.standardHoursPerDay?.message}
               required
-              hint="Turns a daily rate into an hourly one."
+              hint={`Turns a daily rate into an hourly one. ${standardHours > 0 ? `${standardHours} h = ${Math.round(standardHours * 60)} min.` : ''} The office window is 09:00–18:00 with the break inside it; this number prices the day, it does not move the window.`}
             >
               <Input
                 type="number"
@@ -157,6 +160,28 @@ export function PayrollSettingsPage() {
                 {...register('standardHoursPerDay')}
                 className="tabular"
               />
+            </FormField>
+            <FormField
+              label="Prorate a mid-period salary change by"
+              htmlFor="prorationMethod"
+              error={formState.errors.prorationMethod?.message}
+              hint="Calendar days: a raise on the 16th pays half at each rate. Working days: only scheduled days count towards the split."
+            >
+              <NativeSelect {...register('prorationMethod')}>
+                {PAYROLL_PRORATION_METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {PAYROLL_PRORATION_METHOD_LABELS[m]}
+                  </option>
+                ))}
+              </NativeSelect>
+            </FormField>
+            <FormField
+              label="Pay day of the month"
+              htmlFor="payDay"
+              error={formState.errors.payDay?.message}
+              hint="Used as the default pay date when a period is created. Leave empty to set it per period."
+            >
+              <Input type="number" min={1} max={31} {...register('payDay', { setValueAs: (v) => (v === '' ? null : Number(v)) })} className="tabular" />
             </FormField>
           </div>
         </Card>

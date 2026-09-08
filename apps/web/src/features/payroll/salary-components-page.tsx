@@ -210,6 +210,8 @@ function ComponentDialog({
           calc: component.calc,
           isTaxable: component.isTaxable,
           isActive: component.isActive,
+          displayOrder: component.displayOrder,
+          effectiveFrom: component.effectiveFrom,
         }
       : {
           name: '',
@@ -219,6 +221,8 @@ function ComponentDialog({
           calc: 'FIXED',
           isTaxable: true,
           isActive: true,
+          displayOrder: 0,
+          effectiveFrom: null,
         },
   });
 
@@ -292,7 +296,7 @@ function ComponentDialog({
               error={formState.errors.calc?.message}
               required
               className="sm:col-span-2"
-              hint="A percentage of gross is read against everything above it on the payslip."
+              hint="A percentage of gross is read against everything above it. Per day multiplies by the days paid for; per hour by the hours actually worked."
             >
               <NativeSelect {...register('calc')}>
                 {PAYROLL_COMPONENT_CALCS.map((c) => (
@@ -301,6 +305,22 @@ function ComponentDialog({
                   </option>
                 ))}
               </NativeSelect>
+            </FormField>
+            <FormField
+              label="Payslip order"
+              htmlFor="component-order"
+              error={formState.errors.displayOrder?.message}
+              hint="Lower numbers appear first. Ties fall back to name."
+            >
+              <Input type="number" min={0} max={999} {...register('displayOrder')} className="tabular" />
+            </FormField>
+            <FormField
+              label="Effective from"
+              htmlFor="component-effective"
+              error={formState.errors.effectiveFrom?.message}
+              hint="Not applied to any period ending before this. Leave empty for always."
+            >
+              <Input type="date" {...register('effectiveFrom')} />
             </FormField>
             <FormField
               label="Description"

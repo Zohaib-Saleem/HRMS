@@ -81,6 +81,10 @@ const PayrollProfilesPage = lazyPage(
   () => import('@/features/payroll/payroll-profiles-page'),
   'PayrollProfilesPage',
 );
+const SalaryManagementPage = lazyPage(
+  () => import('@/features/payroll/salary-management-page'),
+  'SalaryManagementPage',
+);
 const SalaryComponentsPage = lazyPage(
   () => import('@/features/payroll/salary-components-page'),
   'SalaryComponentsPage',
@@ -283,6 +287,7 @@ export function AppRoutes() {
           <Route path="payroll" element={<PayrollLayout />}>
             <Route index element={<PayrollDashboardPage />} />
             <Route path="runs" element={<PayrollRunsPage />} />
+            <Route path="salaries" element={<SalaryManagementPage />} />
             <Route path="profiles" element={<PayrollProfilesPage />} />
             <Route path="components" element={<SalaryComponentsPage />} />
             <Route path="reports" element={<PayrollReportsPage />} />
