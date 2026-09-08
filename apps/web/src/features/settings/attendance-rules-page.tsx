@@ -2,7 +2,7 @@ import { Controller, useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { AlertTriangle, Info, Save } from 'lucide-react';
+import { AlertTriangle, Info, RotateCcw, Save } from 'lucide-react';
 import {
   PERMISSIONS,
   WEEK_DAY_LABELS,
@@ -24,6 +24,7 @@ import {
 import { FormField, Input } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/feedback/states';
+import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { usePermissions } from '@/features/auth/session-context';
 import { cn } from '@/lib/utils';
 
@@ -105,73 +106,70 @@ function preview(rules: AttendanceRulesInput, inAt: string, outAt: string): Outc
   return { late, overtime, early, irregular };
 }
 
-const EXAMPLES: Array<[string, string]> = [
-  ['09:00', '18:00'],
-  ['09:00', '18:30'],
-  ['09:15', '18:30'],
-  ['08:43', '18:00'],
-  ['09:00', '17:30'],
-  ['14:00', '21:00'],
+const EXAMPLES: Array<{ label: string; in: string; out: string }> = [
+  { label: 'Normal day', in: '09:00', out: '18:00' },
+  { label: 'Stayed late', in: '09:00', out: '18:30' },
+  { label: 'Late + overtime', in: '09:15', out: '18:30' },
+  { label: 'Early arrival', in: '08:43', out: '18:00' },
+  { label: 'Early departure', in: '09:00', out: '17:30' },
+  { label: 'Irregular', in: '14:00', out: '21:00' },
 ];
 
 function Examples({ rules }: { rules: AttendanceRulesInput }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">What these rules produce</CardTitle>
+        <CardTitle className="text-base">How attendance is calculated</CardTitle>
         <CardDescription>
           Recalculated as you edit, against the default window. An employee with their own shift is
           measured against that instead.
         </CardDescription>
       </CardHeader>
-      <CardContent className="p-0">
-        <div className="w-full overflow-x-auto">
-          <table className="w-full text-sm tabular-nums">
-            <thead className="border-y border-border bg-surface-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="px-4 py-2 text-left font-semibold">Day</th>
-                <th className="px-4 py-2 text-right font-semibold">Late</th>
-                <th className="px-4 py-2 text-right font-semibold">Early out</th>
-                <th className="px-4 py-2 text-right font-semibold">Overtime</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {EXAMPLES.map(([inAt, outAt]) => {
-                const o = preview(rules, inAt, outAt);
-                const cell = (v: number | null) =>
-                  v === null ? <span className="text-muted-foreground">&mdash;</span> : `${v}m`;
-                return (
-                  <tr key={`${inAt}-${outAt}`}>
-                    <td className="whitespace-nowrap px-4 py-2 font-medium">
-                      {inAt} &rarr; {outAt}
-                      {o.irregular ? (
-                        <span className="ml-2 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
-                          irregular
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-2 text-right">{cell(o.late)}</td>
-                    <td className="px-4 py-2 text-right">{cell(o.early)}</td>
-                    <td
-                      className={cn(
-                        'px-4 py-2 text-right font-semibold',
-                        o.overtime ? 'text-foreground' : 'text-muted-foreground',
-                      )}
-                    >
-                      {cell(o.overtime)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      <CardContent className="space-y-2 p-4 pt-0">
+        {EXAMPLES.map((example) => {
+          const o = preview(rules, example.in, example.out);
+          const parts: string[] = [];
+          if (o.late) parts.push(`${o.late} min late`);
+          if (o.early) parts.push(`${o.early} min early departure`);
+          if (o.overtime === null) parts.push('no overtime derived');
+          else parts.push(`${o.overtime} min overtime`);
+
+          return (
+            <div
+              key={example.label}
+              className="rounded-lg border border-border p-3"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {example.label}
+                </span>
+                <span className="font-mono text-sm tabular-nums">
+                  {example.in} &rarr; {example.out}
+                </span>
+              </div>
+              <p className="mt-1 text-sm">
+                {o.irregular ? (
+                  <span className="mr-2 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning">
+                    requires review
+                  </span>
+                ) : null}
+                {parts.join(' \u00b7 ')}
+              </p>
+            </div>
+          );
+        })}
       </CardContent>
     </Card>
   );
 }
 
-/** A labelled on/off control. Native checkbox, so it is keyboard-reachable. */
+/**
+ * On/off control.
+ *
+ * A real checkbox underneath, visually a switch: the native input keeps the
+ * keyboard and screen-reader behaviour that a div with a click handler throws
+ * away.
+ */
 function Toggle({
   label,
   hint,
@@ -188,17 +186,34 @@ function Toggle({
   return (
     <label
       className={cn(
-        'flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 transition-colors',
-        disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-accent/40',
+        'flex items-start gap-3 rounded-lg border border-border p-3 transition-colors',
+        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-accent/40',
       )}
     >
-      <input
-        type="checkbox"
-        className="mt-0.5 size-4 shrink-0 accent-primary"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
-      />
+      <span className="relative mt-0.5 inline-flex shrink-0">
+        <input
+          type="checkbox"
+          role="switch"
+          className="peer sr-only"
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span
+          aria-hidden
+          className={cn(
+            'block h-5 w-9 rounded-full bg-muted transition-colors',
+            'peer-checked:bg-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2',
+          )}
+        />
+        <span
+          aria-hidden
+          className={cn(
+            'pointer-events-none absolute left-0.5 top-0.5 size-4 rounded-full bg-surface shadow transition-transform',
+            checked && 'translate-x-4',
+          )}
+        />
+      </span>
       <span className="min-w-0">
         <span className="block text-sm font-medium">{label}</span>
         {hint ? <span className="block text-xs text-muted-foreground">{hint}</span> : null}
@@ -207,9 +222,44 @@ function Toggle({
   );
 }
 
+/** Human labels for the confirmation diff, so it does not read as field names. */
+const FIELD_LABELS: Record<keyof AttendanceRulesInput, string> = {
+  defaultShiftStart: 'Default start',
+  defaultShiftEnd: 'Default end',
+  overtimeEnabled: 'Track overtime',
+  overtimeFromShiftEnd: 'Overtime starts after shift end',
+  overtimeCountsEarlyArrival: 'Early arrival counts as overtime',
+  overtimeReducedByLateArrival: 'Late arrival reduces overtime',
+  overtimeDailyCapMinutes: 'Daily overtime maximum',
+  lateTrackingEnabled: 'Track late arrival',
+  graceMinutes: 'Late grace',
+  earlyDepartureTrackingEnabled: 'Track early departure',
+  earlyLeaveGraceMinutes: 'Early departure grace',
+  irregularCheckInEnabled: 'Flag irregular check-ins',
+  irregularCheckInCutoff: 'Check-in cutoff',
+};
+
+const shown = (v: unknown): string =>
+  typeof v === 'boolean' ? (v ? 'On' : 'Off') : String(v);
+
+/** The fields that actually differ, for the save confirmation. */
+function changedFields(
+  before: AttendanceRulesInput,
+  after: AttendanceRulesInput,
+): Array<{ label: string; from: string; to: string }> {
+  return (Object.keys(FIELD_LABELS) as Array<keyof AttendanceRulesInput>)
+    .filter((key) => before[key] !== after[key])
+    .map((key) => ({
+      label: FIELD_LABELS[key],
+      from: shown(before[key]),
+      to: shown(after[key]),
+    }));
+}
+
 export function AttendanceRulesPage() {
   const { has } = usePermissions();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
 
   const query = useQuery({
     queryKey: ['company', 'attendance-rules'],
@@ -249,7 +299,9 @@ export function AttendanceRulesPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['company'] });
       toast.success('Attendance rules saved', {
-        description: 'They apply to attendance processed from now on. Nothing was recalculated.',
+        description:
+          'Attendance rule changes apply to future attendance processing. Existing attendance records are not recalculated automatically.',
+        duration: 8000,
       });
     },
     onError: (error: unknown) => {
@@ -277,6 +329,22 @@ export function AttendanceRulesPage() {
   }
 
   const rules = query.data;
+  // The persisted values, as the baseline the confirmation diffs against.
+  const saved: AttendanceRulesInput = {
+    defaultShiftStart: rules.defaultShiftStart,
+    defaultShiftEnd: rules.defaultShiftEnd,
+    overtimeEnabled: rules.overtimeEnabled,
+    overtimeFromShiftEnd: rules.overtimeFromShiftEnd,
+    overtimeCountsEarlyArrival: rules.overtimeCountsEarlyArrival,
+    overtimeReducedByLateArrival: rules.overtimeReducedByLateArrival,
+    overtimeDailyCapMinutes: rules.overtimeDailyCapMinutes,
+    lateTrackingEnabled: rules.lateTrackingEnabled,
+    graceMinutes: rules.graceMinutes,
+    earlyDepartureTrackingEnabled: rules.earlyDepartureTrackingEnabled,
+    earlyLeaveGraceMinutes: rules.earlyLeaveGraceMinutes,
+    irregularCheckInEnabled: rules.irregularCheckInEnabled,
+    irregularCheckInCutoff: rules.irregularCheckInCutoff,
+  };
   const window =
     (toMinutes(live?.defaultShiftEnd ?? rules.defaultShiftEnd) ?? 0) -
     (toMinutes(live?.defaultShiftStart ?? rules.defaultShiftStart) ?? 0);
@@ -284,7 +352,48 @@ export function AttendanceRulesPage() {
 
   return (
     <form
-      onSubmit={form.handleSubmit((values) => save.mutate(values))}
+      onSubmit={form.handleSubmit(async (values) => {
+        // Show exactly what is about to change, old value to new, before it is
+        // written. A settings screen that saves silently is how a rule gets
+        // changed by accident and noticed a payroll later.
+        const changes = changedFields(saved, values);
+        if (changes.length === 0) return;
+
+        const ok = await confirm({
+          title: 'Save attendance rules?',
+          confirmLabel: 'Save rules',
+          description: (
+            <div className="space-y-3">
+              <div className="overflow-hidden rounded-lg border border-border">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-surface-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Setting</th>
+                      <th className="px-3 py-2 font-semibold">Current</th>
+                      <th className="px-3 py-2 font-semibold">New</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {changes.map((c) => (
+                      <tr key={c.label}>
+                        <td className="px-3 py-2">{c.label}</td>
+                        <td className="px-3 py-2 text-muted-foreground">{c.from}</td>
+                        <td className="px-3 py-2 font-semibold">{c.to}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                These apply to attendance processed from now on. Existing attendance records are not
+                recalculated.
+              </p>
+            </div>
+          ),
+        });
+
+        if (ok) save.mutate(values);
+      })}
       className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px] xl:items-start"
     >
       <div className="space-y-5">
@@ -317,6 +426,7 @@ export function AttendanceRulesPage() {
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Timezone</p>
               <p className="text-sm font-medium">{rules.timezone}</p>
+              <p className="text-xs text-muted-foreground">Edited on the Company screen.</p>
             </div>
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Working week</p>
@@ -363,11 +473,41 @@ export function AttendanceRulesPage() {
                 {...form.register('defaultShiftEnd')}
               />
             </FormField>
-            <p className="text-xs text-muted-foreground sm:col-span-2">
-              Scheduled window: <strong>{fmt(windowMinutes)}</strong> ({windowMinutes} minutes). The
-              break sits inside this window and is never subtracted from it when overtime is
-              calculated. Payroll&rsquo;s net working hours are configured separately.
-            </p>
+            <div className="space-y-3 rounded-lg border border-border bg-surface-muted/40 p-3 text-xs text-muted-foreground sm:col-span-2">
+              <p>
+                Scheduled presence window: <strong className="text-foreground">{fmt(windowMinutes)}</strong>{' '}
+                ({windowMinutes} minutes). The break sits inside this window and is never subtracted
+                from it when overtime is calculated.
+              </p>
+              <div>
+                <p className="mb-1 font-semibold text-foreground">Which shift applies</p>
+                <p>
+                  These times are the default. An employee&rsquo;s own shift assignment takes
+                  precedence whenever they have one &mdash; so an employee assigned 10:00&ndash;19:00
+                  starts earning overtime after <strong className="text-foreground">19:00</strong>,
+                  not after {live?.defaultShiftEnd ?? rules.defaultShiftEnd}. There is no blanket
+                  rule.
+                </p>
+              </div>
+              <div>
+                <p className="mb-1 font-semibold text-foreground">Three separate numbers</p>
+                <ul className="list-disc space-y-0.5 pl-4">
+                  <li>
+                    <strong className="text-foreground">{windowMinutes} minutes</strong> &mdash;
+                    scheduled office presence, start to end. Overtime is measured from the end of it.
+                  </li>
+                  <li>
+                    <strong className="text-foreground">{rules.fullDayMinutes} minutes</strong> &mdash;
+                    the full-day threshold, measured on elapsed time, deciding present vs half day.
+                  </li>
+                  <li>
+                    <strong className="text-foreground">8 hours</strong> &mdash; payroll&rsquo;s
+                    standard hours per day, used to price a day. Configured in payroll settings and
+                    not changed here.
+                  </li>
+                </ul>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -572,7 +712,16 @@ export function AttendanceRulesPage() {
         {live ? <Examples rules={live} /> : null}
         {canManage ? (
           <Card>
-            <CardFooter className="flex justify-end py-4">
+            <CardFooter className="flex flex-wrap justify-end gap-2 py-4">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={save.isPending || !form.formState.isDirty}
+                onClick={() => form.reset(saved)}
+              >
+                <RotateCcw className="size-4" aria-hidden />
+                Reset
+              </Button>
               <Button type="submit" disabled={save.isPending || !form.formState.isDirty}>
                 <Save className="size-4" aria-hidden />
                 {save.isPending ? 'Saving...' : 'Save rules'}
