@@ -581,12 +581,120 @@ function summaryReport(input: ReportInput): Pick<AttendanceReport, 'columns' | '
   };
 }
 
+/**
+ * Monthly working hours, one row per employee.
+ *
+ * The question this answers is "what did this person's month actually consist
+ * of?", and it is deliberately answered in one row rather than as a total to
+ * be assembled by the reader from three other reports.
+ *
+ * Hours are split three ways and never double counted:
+ *
+ *   scheduled = the rostered length of the working days in the range
+ *   actual    = what the punches, believed, add up to
+ *   normal    = actual minus overtime
+ *   overtime  = the engine's figure, under the policy in force for that person
+ *
+ * `actual` is not `scheduled` adjusted by exceptions, and it is not capped: a
+ * day whose punches cannot be believed contributes no hours at all and is
+ * counted under Missing/irregular instead, which is the honest answer and the
+ * one that makes the two columns disagree visibly rather than silently.
+ */
+function workingHoursReport(
+  input: ReportInput,
+): Pick<AttendanceReport, 'columns' | 'rows' | 'totals'> {
+  const columns: AttendanceReportColumn[] = [
+    ...IDENTITY_COLUMNS,
+    col('designationName', 'Designation'),
+    col('scheduledHours', 'Scheduled hours', 'number'),
+    col('actualHours', 'Actual hours', 'number'),
+    col('normalHours', 'Normal hours', 'number'),
+    col('overtimeHours', 'Overtime hours', 'number'),
+    col('lateMinutes', 'Late minutes', 'minutes'),
+    col('earlyLeaveMinutes', 'Early departure', 'minutes'),
+    col('presentDays', 'Present', 'number'),
+    col('halfDays', 'Half day', 'number'),
+    col('absentDays', 'Absent', 'number'),
+    col('leaveDays', 'Leave', 'number'),
+    col('holidayDays', 'Holiday', 'number'),
+    col('weekendDays', 'Weekend', 'number'),
+    col('irregularDays', 'Missing/irregular', 'number'),
+  ];
+
+  /** The three hour columns, from one bucket, so they cannot disagree. */
+  const hourSplit = (bucket: Counted) => ({
+    scheduledHours: hours(bucket.expectedMinutes),
+    actualHours: hours(bucket.workedMinutes),
+    // Overtime is a label on part of worked time, so normal is the remainder.
+    // Clamped at zero rather than allowed to go negative: the engine already
+    // guarantees overtime <= worked, and a negative here would be a lie about
+    // a guarantee rather than a useful signal.
+    normalHours: hours(Math.max(0, bucket.workedMinutes - bucket.overtimeMinutes)),
+    overtimeHours: hours(bucket.overtimeMinutes),
+  });
+
+  const rows: AttendanceReport['rows'] = [];
+  const grand = emptyCount();
+
+  for (const employee of input.employees) {
+    const bucket = emptyCount();
+    for (const day of input.days.get(employee.id) ?? []) {
+      countInto(bucket, day);
+      countInto(grand, day);
+    }
+
+    rows.push({
+      employeeId: employee.id,
+      employeeNumber: employee.employeeNumber,
+      employeeName: employee.name,
+      departmentName: employee.departmentName,
+      teamName: employee.teamName,
+      designationName: employee.designationName,
+      ...hourSplit(bucket),
+      lateMinutes: bucket.lateMinutes,
+      earlyLeaveMinutes: bucket.earlyLeaveMinutes,
+      presentDays: bucket.presentDays,
+      halfDays: bucket.halfDays,
+      absentDays: bucket.absentDays,
+      leaveDays: bucket.leaveDays,
+      holidayDays: bucket.holidayDays,
+      weekendDays: bucket.weekendDays + bucket.offDays,
+      /**
+       * One count for both, because to a reader they are the same problem: the
+       * day's punches do not support an hours figure. A day can carry both
+       * flags and is still one day that needs looking at.
+       */
+      irregularDays: bucket.irregularDays + bucket.missingPunchDays,
+    });
+  }
+
+  return {
+    columns,
+    rows,
+    totals: {
+      employeeName: `${rows.length} employee(s)`,
+      ...hourSplit(grand),
+      lateMinutes: grand.lateMinutes,
+      earlyLeaveMinutes: grand.earlyLeaveMinutes,
+      presentDays: grand.presentDays,
+      halfDays: grand.halfDays,
+      absentDays: grand.absentDays,
+      leaveDays: grand.leaveDays,
+      holidayDays: grand.holidayDays,
+      weekendDays: grand.weekendDays + grand.offDays,
+      irregularDays: grand.irregularDays + grand.missingPunchDays,
+    },
+  };
+}
+
 /** Builds one report. The single switch; every type resolves to a table. */
 export function buildAttendanceReport(input: ReportInput): AttendanceReport {
   const body = ((): Pick<AttendanceReport, 'columns' | 'rows' | 'totals'> => {
     switch (input.type) {
       case 'daily':
         return dailyReport(input);
+      case 'working-hours':
+        return workingHoursReport(input);
       case 'employee':
       case 'monthly':
         return input.type === 'employee' ? dailyReport(input) : monthlyReport(input);

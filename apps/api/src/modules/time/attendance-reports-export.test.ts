@@ -23,6 +23,7 @@ const db = vi.hoisted(() => ({
   leaveRequest: { findMany: vi.fn() },
   holiday: { findMany: vi.fn() },
   auditLog: { create: vi.fn() },
+  attendancePolicyAssignment: { findMany: vi.fn() },
 }));
 
 vi.mock('../../core/db.js', () => ({ prisma: db }));
@@ -33,6 +34,9 @@ const { registerErrorHandler } = await import('../../core/error-handler.js');
 const VIEWER: Permission[] = [PERMISSIONS.ATTENDANCE_READ];
 
 const COMPANY = {
+  duplicatePunchWindowSeconds: 60,
+  maxPlausibleSpanMinutes: 960,
+  allowImplausibleSpans: false,
   timezone: 'Asia/Karachi',
   weekendDays: ['SATURDAY', 'SUNDAY'],
   graceMinutes: 10,
@@ -136,6 +140,8 @@ let app: FastifyInstance | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // No policy overrides: every day resolves to the company baseline above.
+  db.attendancePolicyAssignment.findMany.mockResolvedValue([]);
   db.employee.findFirst.mockResolvedValue({ id: 'emp-1', departmentId: 'dep-1' });
   db.employee.findUnique.mockResolvedValue({ departmentId: 'dep-1', teamId: null });
   db.employee.findMany.mockResolvedValue([

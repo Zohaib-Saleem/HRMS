@@ -209,6 +209,30 @@ model Company {
   missingCheckOutStatus AttendanceMissingPunchRule @default(PRESENT)
   missingCheckInStatus  AttendanceMissingPunchRule @default(ABSENT)
 
+  // --- punch integrity ----------------------------------------------------
+  // What makes a day's punches trustworthy enough to derive hours from. These
+  // exist because a terminal reports events, not intent: it will happily
+  // record the same badge twice in a second, or a single stray evening swipe
+  // that turns an ordinary day into fourteen hours. Both are configuration
+  // rather than constants, because "how long is an implausible day?" is a
+  // question about how this company works and has no universal answer.
+
+  /// Two punches closer together than this are the same event seen twice, and
+  /// the later one is ignored when pairing. Zero switches the collapsing off
+  /// and takes every punch at face value.
+  duplicatePunchWindowSeconds Int @default(60)
+
+  /// The longest span between the first and last punch that is still believed.
+  /// Beyond it the day is reported as irregular with no hours rather than
+  /// crediting a figure nobody worked; the punches are untouched and the day
+  /// stays visible for correction. Zero switches the check off.
+  maxPlausibleSpanMinutes Int @default(960)
+
+  /// Whether a day whose span exceeds the bound is scored on its punches
+  /// anyway. Off by default: fabricating hours is the failure this prevents.
+  /// On, it restores the previous behaviour for a company that wants it.
+  allowImplausibleSpans Boolean @default(false)
+
   // --- attendance module (step 1) ----------------------------------------
   // Flags and non-working-day behaviour. Defaults reproduce what the engine
   // did before these existed, so nothing derived changes until Super Admin
@@ -1467,6 +1491,9 @@ model AttendancePolicy {
   irregularCheckInCutoff          String?
   lateTrackingEnabled             Boolean?
   earlyDepartureTrackingEnabled   Boolean?
+  duplicatePunchWindowSeconds     Int?
+  maxPlausibleSpanMinutes         Int?
+  allowImplausibleSpans           Boolean?
 
   isActive Boolean @default(true)
 

@@ -31,6 +31,7 @@ function day(over: Partial<DerivedDay> = {}): DerivedDay {
     earlyLeaveMinutes: 0,
     overtimeMinutes: 0,
     irregular: false,
+    integrity: 'COMPLETE',
     mode: null,
     shiftId: null,
     shiftName: 'General',
@@ -139,17 +140,22 @@ describe('daily attendance aggregation', () => {
       expect(row.workedMinutes).toBe(600);
     });
 
-    it('never lets overtime exceed the worked time it is a label on', () => {
-      // Defensive: a stored figure this shape would be a bug elsewhere, but it
-      // must not draw a segment taller than the column that contains it.
+    it('adds the overtime it was given, without a clamp of its own', () => {
+      /**
+       * The engine guarantees overtime never exceeds worked minutes, so this
+       * file does not re-check it. It used to, and that was the bug: the row
+       * clamped, the summary beside it did not, and neither did the CSV - so
+       * the chart and its own export could disagree about the same day.
+       *
+       * A figure this shape can no longer be derived. If one ever is, it shows
+       * up identically everywhere instead of being quietly reshaped here.
+       */
       const result = one([day({ workedMinutes: 100, overtimeMinutes: 500 })]);
       const row = result.days[0]!;
 
-      expect(row.overtimeMinutes).toBe(100);
+      expect(row.overtimeMinutes).toBe(500);
+      expect(row.overtimeMinutes).toBe(result.summary.overtimeMinutes);
       expect(row.onTimeMinutes).toBe(0);
-      expect(row.onTimeMinutes + row.lateWorkedMinutes + row.overtimeMinutes).toBe(
-        row.workedMinutes,
-      );
     });
   });
 

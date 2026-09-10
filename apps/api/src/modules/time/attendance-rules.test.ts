@@ -64,6 +64,9 @@ const DEFAULTS: AttendancePolicy = {
   earlyLeaveThresholdMinutes: 0,
   weekendWorkRule: 'AS_WORKING_DAY',
   holidayWorkRule: 'AS_WORKING_DAY',
+  duplicatePunchWindowSeconds: 60,
+  maxPlausibleSpanMinutes: 960,
+  allowImplausibleSpans: false,
 };
 
 /** Scores one day. `shift` null means "no assignment, use the company window". */

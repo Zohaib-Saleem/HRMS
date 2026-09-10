@@ -33,6 +33,7 @@ const db = vi.hoisted(() => ({
   attendanceRecord: { findMany: vi.fn() },
   leaveRequest: { findMany: vi.fn() },
   holiday: { findMany: vi.fn() },
+  attendancePolicyAssignment: { findMany: vi.fn() },
 }));
 
 vi.mock('../../core/db.js', () => ({ prisma: db }));
@@ -47,6 +48,9 @@ const TO = d('2026-06-30');
 
 const COMPANY = {
   currency: 'PKR',
+  duplicatePunchWindowSeconds: 60,
+  maxPlausibleSpanMinutes: 960,
+  allowImplausibleSpans: false,
   timezone: 'Asia/Karachi',
   weekendDays: ['SATURDAY', 'SUNDAY'],
   graceMinutes: 10,
@@ -156,6 +160,8 @@ function presentRecords(): unknown[] {
 beforeEach(() => {
   vi.clearAllMocks();
 
+  // No policy overrides: every day resolves to the company baseline above.
+  db.attendancePolicyAssignment.findMany.mockResolvedValue([]);
   db.company.findUniqueOrThrow.mockResolvedValue({ ...COMPANY });
   db.payrollSettings.findUnique.mockResolvedValue({ ...SETTINGS });
   db.employee.findMany.mockResolvedValue([EMPLOYEE]);

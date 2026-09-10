@@ -166,15 +166,20 @@ export function aggregateDailyTotals(input: AggregateInput): AggregateResult {
        * Worked time, split three ways and never double counted.
        *
        * Overtime comes out of worked time because that is what it is - a label
-       * on part of it. Clamped at zero so a day whose overtime somehow exceeds
-       * its worked minutes cannot push a negative segment into the stack and
-       * make the column shorter than the truth.
+       * on part of it. `regular` is clamped at zero so a column can never be
+       * drawn shorter than the truth.
+       *
+       * The overtime figure itself is NOT clamped, and that is the point: it
+       * used to be `Math.min(overtime, worked)` here while the summary beside
+       * it, and every report and CSV, added the raw value. The chart and its
+       * own export could therefore disagree about the same day. One figure,
+       * added the same way everywhere, is worth more than a tidier bar.
        */
       const regular = Math.max(0, worked - overtime);
       const isLate = day.flags.includes('LATE');
       if (isLate) row.lateWorkedMinutes += regular;
       else row.onTimeMinutes += regular;
-      row.overtimeMinutes += Math.min(overtime, worked);
+      row.overtimeMinutes += overtime;
 
       row.workedMinutes += worked;
       row.expectedMinutes += day.expectedMinutes ?? 0;

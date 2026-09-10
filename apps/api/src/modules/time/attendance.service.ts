@@ -14,8 +14,10 @@ import {
   isShiftWorkingDay,
   isWeekendFor,
   nonWorkingDayOvertime,
+  policyResolverFor,
   resolveAttendancePolicy,
   resolvePolicyFor,
+  type AttendanceIntegrity,
   type AttendancePolicy,
   type ShiftWindow,
 } from './attendance-policy.js';
@@ -56,6 +58,12 @@ export interface DerivedDay {
   earlyLeaveMinutes: number | null;
   overtimeMinutes: number | null;
   irregular: boolean;
+  /**
+   * How far the day's own times can be trusted. Carried so a caller can tell
+   * "no hours because the punches do not add up" from "no hours because
+   * nobody came", which the status alone cannot express.
+   */
+  integrity: AttendanceIntegrity;
   mode: string | null;
   shiftId: string | null;
   shiftName: string | null;
@@ -179,8 +187,9 @@ export async function deriveRangeForEmployees(
 
   const employeeIds = employees.map((e) => e.id);
 
-  const [policy, records, leave, holidayRows, assignments] = await Promise.all([
+  const [policy, policyFor, records, leave, holidayRows, assignments] = await Promise.all([
     resolveAttendancePolicy(companyId),
+    policyResolverFor(companyId, employeeIds, from, to),
     prisma.attendanceRecord.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: from, lte: to } },
       include: { shift: { select: { name: true } } },
@@ -272,24 +281,72 @@ export async function deriveRangeForEmployees(
       else status = 'ABSENT';
 
       /**
-       * Overtime on a day nobody was rostered for follows the company rule,
-       * read at derivation so a change of rule needs no recalculation. A
-       * working day reports exactly what the engine stored.
+       * The figures, RECOMPUTED rather than read back.
+       *
+       * This is the single source of truth for what a day is worth. The stored
+       * columns are a write-time cache of the same calculation, and a cache is
+       * exactly what goes stale: every one of them was written under whatever
+       * policy happened to be in force that night, so reading them back meant
+       * a company could change its overtime rule and watch nothing change.
+       *
+       * The policy used is the one resolved for THIS employee on THIS date -
+       * employee over team over department over company, effective-dated - so
+       * an override no longer silently disagrees with the figure the import
+       * stored under it.
+       *
+       * A record an administrator corrected is the exception and keeps its
+       * stored figures. Those numbers are a human decision about what the day
+       * was worth, and re-deriving them would quietly overrule the person who
+       * made it.
+       */
+      const dayPolicy = policyFor(employee.id, d);
+      const admin = record?.source === 'ADMIN';
+
+      const computed =
+        record && !admin
+          ? computeAttendance({
+              day: key,
+              checkInAt: record.checkInAt,
+              checkOutAt: record.checkOutAt,
+              shift: assigned ? effectiveShift(assigned, dayPolicy) : null,
+              policy: dayPolicy,
+            })
+          : null;
+
+      const workedMinutes = computed ? computed.workedMinutes : (record?.workedMinutes ?? null);
+      const lateMinutes = computed ? computed.lateMinutes : (record?.lateMinutes ?? null);
+      const earlyLeaveMinutes = computed
+        ? computed.earlyLeaveMinutes
+        : (record?.earlyLeaveMinutes ?? null);
+      const irregular = computed ? computed.irregular : (record?.irregular ?? false);
+      const integrity: AttendanceIntegrity = computed
+        ? computed.integrity
+        : record
+          ? record.checkInAt && record.checkOutAt
+            ? 'COMPLETE'
+            : record.checkInAt
+              ? 'OPEN'
+              : 'NONE'
+          : 'NONE';
+
+      /**
+       * Overtime on a day nobody was rostered for follows the company rule;
+       * an ordinary working day takes the recomputed figure.
        */
       const stored = {
-        workedMinutes: record?.workedMinutes ?? null,
-        overtimeMinutes: record?.overtimeMinutes ?? null,
+        workedMinutes,
+        overtimeMinutes: computed ? computed.overtimeMinutes : (record?.overtimeMinutes ?? null),
       };
       const overtimeMinutes = !record
         ? null
         : status === 'HOLIDAY'
-          ? nonWorkingDayOvertime(policy.holidayWorkRule, stored, policy)
+          ? nonWorkingDayOvertime(dayPolicy.holidayWorkRule, stored, dayPolicy)
           : status === 'WEEKEND' || status === 'OFF_DAY'
-            ? nonWorkingDayOvertime(policy.weekendWorkRule, stored, policy)
+            ? nonWorkingDayOvertime(dayPolicy.weekendWorkRule, stored, dayPolicy)
             : stored.overtimeMinutes;
 
       const expectedMinutes = working
-        ? expectedMinutesFor(effectiveShift(assigned, policy), policy)
+        ? expectedMinutesFor(effectiveShift(assigned, dayPolicy), dayPolicy)
         : null;
 
       const base = {
@@ -297,12 +354,13 @@ export async function deriveRangeForEmployees(
         status,
         checkInAt: record?.checkInAt?.toISOString() ?? null,
         checkOutAt: record?.checkOutAt?.toISOString() ?? null,
-        workedMinutes: record?.workedMinutes ?? null,
+        workedMinutes,
         expectedMinutes,
-        lateMinutes: record?.lateMinutes ?? null,
-        earlyLeaveMinutes: record?.earlyLeaveMinutes ?? null,
+        lateMinutes,
+        earlyLeaveMinutes,
         overtimeMinutes,
-        irregular: record?.irregular ?? false,
+        irregular,
+        integrity,
         mode: record?.mode ?? null,
         shiftId: record?.shiftId ?? assigned?.id ?? null,
         shiftName: record?.shift?.name ?? assigned?.name ?? null,
@@ -316,7 +374,7 @@ export async function deriveRangeForEmployees(
         hasRecord: record !== undefined,
       };
 
-      days.push({ ...base, flags: attendanceFlags(base, policy) });
+      days.push({ ...base, flags: attendanceFlags(base, dayPolicy) });
     }
 
     result.set(employee.id, days);

@@ -228,6 +228,24 @@ export const attendanceRulesSchema = z
     missingCheckInStatus: z.enum(MISSING_PUNCH_RULES),
 
     /**
+     * Punch integrity. Optional for the same reason as the fields below: an
+     * older client that does not send them keeps whatever is stored.
+     */
+    duplicatePunchWindowSeconds: z.coerce
+      .number()
+      .int('Use whole seconds.')
+      .min(0, 'The window cannot be negative.')
+      .max(3600, 'A window longer than an hour would swallow real punches.')
+      .optional(),
+    maxPlausibleSpanMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The bound cannot be negative.')
+      .max(1440, 'A day cannot be longer than a day.')
+      .optional(),
+    allowImplausibleSpans: z.boolean().optional(),
+
+    /**
      * Added with the attendance module. Optional so a client sending the
      * older payload keeps whatever is stored, and the server merges them over
      * the current values before validating the whole.
@@ -420,6 +438,9 @@ export const ATTENDANCE_RULE_DEFAULTS: AttendanceRuleValues = {
   earlyLeaveThresholdMinutes: 0,
   missingCheckOutStatus: 'PRESENT',
   missingCheckInStatus: 'ABSENT',
+  duplicatePunchWindowSeconds: 60,
+  maxPlausibleSpanMinutes: 960,
+  allowImplausibleSpans: false,
   overtimeEnabled: true,
   overtimeFromShiftEnd: true,
   overtimeCountsEarlyArrival: false,
@@ -438,6 +459,8 @@ export type AttendanceRuleKey = keyof AttendanceRuleValues;
 export type AttendanceRuleFieldKind =
   | 'time'
   | 'minutes'
+  /** A duration too short to express in minutes, such as a duplicate window. */
+  | 'seconds'
   | 'boolean'
   | 'weekdays'
   | { enum: readonly string[]; labels: Record<string, string> };
@@ -696,8 +719,37 @@ export const ATTENDANCE_RULE_SECTIONS: readonly AttendanceRuleSection[] = [
     ],
   },
   {
+    key: 'integrity',
+    title: 'H. Punch integrity',
+    description:
+      'When a day\u2019s punches are trustworthy enough to derive hours from. A terminal records events, not intent: it will report the same badge twice, and it cannot tell a forgotten check-out from a fourteen-hour day. These decide what happens when the events do not add up.',
+    fields: [
+      {
+        key: 'duplicatePunchWindowSeconds',
+        label: 'Duplicate punch window',
+        description:
+          'Punches closer together than this, saying the same thing, are one event seen twice and the later ones are ignored when pairing. Zero takes every punch at face value. The raw punches are never altered.',
+        kind: 'seconds',
+      },
+      {
+        key: 'maxPlausibleSpanMinutes',
+        label: 'Longest believable day',
+        description:
+          'The longest first-to-last span still believed. Beyond it the day is reported as irregular with no hours, rather than crediting a figure nobody worked. Zero switches the check off.',
+        kind: 'minutes',
+      },
+      {
+        key: 'allowImplausibleSpans',
+        label: 'Score days past that bound anyway',
+        description:
+          'Off: a day longer than the bound contributes no hours and is listed for correction. On: it is scored on its punches, which is what happened before this setting existed.',
+        kind: 'boolean',
+      },
+    ],
+  },
+  {
     key: 'payroll',
-    title: 'H. Payroll integration',
+    title: 'I. Payroll integration',
     description:
       'Whether each attendance fact reaches a payslip. These switches live on Payroll settings, which is where they are edited; they are read here so the two screens always agree.',
     fields: [],

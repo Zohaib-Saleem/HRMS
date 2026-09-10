@@ -34,10 +34,16 @@ export interface RecalculationResult {
 export function pairPunches(
   punches: ReadonlyArray<{ punchedAt: Date; punchState: string | null }>,
   strategy: AttendancePunchPairing,
+  /**
+   * Punches closer together than this are the same event seen twice. Comes
+   * from the company's own configuration; zero takes every punch at face
+   * value, which is what this function did before the setting existed.
+   */
+  duplicateWindowSeconds = 0,
 ): { checkInAt: Date | null; checkOutAt: Date | null } {
   if (punches.length === 0) return { checkInAt: null, checkOutAt: null };
 
-  const ordered = [...punches].sort((a, b) => a.punchedAt.getTime() - b.punchedAt.getTime());
+  const ordered = collapseDuplicates(punches, duplicateWindowSeconds);
 
   if (strategy === 'DEVICE_STATE') {
     const ins = ordered.filter((p) => p.punchState === 'IN' || p.punchState === 'OVERTIME_IN');
@@ -60,6 +66,45 @@ export function pairPunches(
     // instant. Zero worked minutes would otherwise be reported as fact.
     checkOutAt: ordered.length > 1 ? last.punchedAt : null,
   };
+}
+
+/**
+ * Drops punches that are the same event reported twice.
+ *
+ * A terminal will happily record a badge twice in a second, and a site with
+ * two readers on one door reports the same arrival from both. Neither is a
+ * second event, and keeping them is how an ordinary morning acquires a
+ * spurious "departure" a few seconds after the arrival.
+ *
+ * Only consecutive punches are compared, and the FIRST of a cluster is kept:
+ * the earliest report of an event is the one that happened. The raw punches
+ * are never touched - this is a reading of them, not an edit.
+ */
+export function collapseDuplicates<T extends { punchedAt: Date; punchState: string | null }>(
+  punches: ReadonlyArray<T>,
+  windowSeconds: number,
+): T[] {
+  const ordered = [...punches].sort((a, b) => a.punchedAt.getTime() - b.punchedAt.getTime());
+  if (windowSeconds <= 0) return ordered;
+
+  const kept: T[] = [];
+  for (const punch of ordered) {
+    const previous = kept[kept.length - 1];
+    if (!previous) {
+      kept.push(punch);
+      continue;
+    }
+    const gapSeconds = (punch.punchedAt.getTime() - previous.punchedAt.getTime()) / 1000;
+    /**
+     * A punch inside the window is a duplicate only when it says the same
+     * thing. A reader that reports IN and then OUT four seconds apart is
+     * describing two different events badly, but they are still two events,
+     * and collapsing them would silently discard a departure.
+     */
+    if (gapSeconds < windowSeconds && punch.punchState === previous.punchState) continue;
+    kept.push(punch);
+  }
+  return kept;
 }
 
 /**
@@ -100,16 +145,20 @@ export async function recalculateFromPunches(input: {
     return { employeeId, dayKey, status: null, skipped: 'MANUAL_RECORD' };
   }
 
-  const { checkInAt, checkOutAt } = pairPunches(punches, pairing);
-  if (!checkInAt) {
-    await markProcessed(punches.map((p) => p.id));
-    return { employeeId, dayKey, status: null, skipped: 'NO_USABLE_PUNCH' };
-  }
-
   const [policy, shift] = await Promise.all([
     resolvePolicyFor(companyId, employeeId, date),
     shiftOnDate(employeeId, date),
   ]);
+
+  const { checkInAt, checkOutAt } = pairPunches(
+    punches,
+    pairing,
+    policy.duplicatePunchWindowSeconds,
+  );
+  if (!checkInAt) {
+    await markProcessed(punches.map((p) => p.id));
+    return { employeeId, dayKey, status: null, skipped: 'NO_USABLE_PUNCH' };
+  }
 
   const computed = computeAttendance({ day: dayKey, checkInAt, checkOutAt, shift, policy });
 

@@ -66,6 +66,9 @@ const COMPANY_A: AttendancePolicy = {
   earlyLeaveThresholdMinutes: 0,
   weekendWorkRule: 'AS_WORKING_DAY',
   holidayWorkRule: 'AS_WORKING_DAY',
+  duplicatePunchWindowSeconds: 60,
+  maxPlausibleSpanMinutes: 960,
+  allowImplausibleSpans: false,
 };
 
 /** Company B - a different company, agreeing with A about nothing. */

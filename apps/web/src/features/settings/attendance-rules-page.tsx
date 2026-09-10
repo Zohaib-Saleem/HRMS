@@ -287,6 +287,9 @@ const FIELD_LABELS: Record<keyof AttendanceRulesInput, string> = {
   earlyLeaveThresholdMinutes: 'Early-leave flag threshold',
   weekendWorkRule: 'Work on a weekend',
   holidayWorkRule: 'Work on a holiday',
+  duplicatePunchWindowSeconds: 'Duplicate punch window',
+  maxPlausibleSpanMinutes: 'Longest believable day',
+  allowImplausibleSpans: 'Score implausible days anyway',
 };
 
 const shown = (v: unknown): string => {
@@ -367,6 +370,9 @@ export function AttendanceRulesPage() {
           earlyLeaveThresholdMinutes: query.data.earlyLeaveThresholdMinutes,
           weekendWorkRule: query.data.weekendWorkRule,
           holidayWorkRule: query.data.holidayWorkRule,
+          duplicatePunchWindowSeconds: query.data.duplicatePunchWindowSeconds,
+          maxPlausibleSpanMinutes: query.data.maxPlausibleSpanMinutes,
+          allowImplausibleSpans: query.data.allowImplausibleSpans,
         }
       : undefined,
   });
@@ -449,6 +455,9 @@ export function AttendanceRulesPage() {
     earlyLeaveThresholdMinutes: rules.earlyLeaveThresholdMinutes,
     weekendWorkRule: rules.weekendWorkRule,
     holidayWorkRule: rules.holidayWorkRule,
+    duplicatePunchWindowSeconds: rules.duplicatePunchWindowSeconds,
+    maxPlausibleSpanMinutes: rules.maxPlausibleSpanMinutes,
+    allowImplausibleSpans: rules.allowImplausibleSpans,
   };
   const window =
     (toMinutes(live?.defaultShiftEnd ?? rules.defaultShiftEnd) ?? 0) -
@@ -993,6 +1002,64 @@ export function AttendanceRulesPage() {
                 </NativeSelect>
               </FormField>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* --- punch integrity ---------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Punch integrity</CardTitle>
+            <CardDescription>
+              A terminal records events, not intent: it will report the same badge twice, and it
+              cannot tell a forgotten check-out from a fourteen-hour day. These decide what happens
+              when the events do not add up. Raw punches are never altered by any of them.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                label="Duplicate punch window (seconds)"
+                htmlFor="duplicatePunchWindowSeconds"
+                hint="Punches this close together, saying the same thing, are one event seen twice. Zero takes every punch at face value."
+                error={form.formState.errors.duplicatePunchWindowSeconds?.message}
+              >
+                <Input
+                  id="duplicatePunchWindowSeconds"
+                  type="number"
+                  min={0}
+                  disabled={!canManage}
+                  {...form.register('duplicatePunchWindowSeconds')}
+                />
+              </FormField>
+              <FormField
+                label="Longest believable day (minutes)"
+                htmlFor="maxPlausibleSpanMinutes"
+                hint="Beyond this the day is reported as irregular with no hours, rather than crediting a figure nobody worked. Zero switches the check off."
+                error={form.formState.errors.maxPlausibleSpanMinutes?.message}
+              >
+                <Input
+                  id="maxPlausibleSpanMinutes"
+                  type="number"
+                  min={0}
+                  disabled={!canManage}
+                  {...form.register('maxPlausibleSpanMinutes')}
+                />
+              </FormField>
+            </div>
+
+            <Controller
+              control={form.control}
+              name="allowImplausibleSpans"
+              render={({ field }) => (
+                <Toggle
+                  label="Score days past that bound anyway"
+                  hint="Off: a day longer than the bound contributes no hours and is listed for correction. On: it is scored on its punches, which is what happened before this setting existed."
+                  checked={field.value ?? false}
+                  disabled={!canManage}
+                  onChange={field.onChange}
+                />
+              )}
+            />
           </CardContent>
         </Card>
 

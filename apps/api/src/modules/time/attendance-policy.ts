@@ -58,6 +58,14 @@ export interface AttendancePolicy {
   irregularCheckInMode: IrregularCutoffMode;
   irregularAfterShiftStartMinutes: number;
 
+  // --- punch integrity ----------------------------------------------------
+  /** Punches closer together than this are one event seen twice. Zero: off. */
+  duplicatePunchWindowSeconds: number;
+  /** The longest first-to-last span still believed. Zero: no bound. */
+  maxPlausibleSpanMinutes: number;
+  /** Score a day past the bound anyway, restoring the old behaviour. */
+  allowImplausibleSpans: boolean;
+
   // --- attendance module (step 1) -----------------------------------------
   /** Break assumed for the default window when no shift is assigned. */
   defaultBreakMinutes: number;
@@ -77,6 +85,39 @@ export type NonWorkingDayWorkRule = 'AS_WORKING_DAY' | 'ALL_OVERTIME' | 'IGNORE'
 
 /** What a day with a punch missing on one end is worth. */
 export type MissingPunchRule = 'PRESENT' | 'ABSENT' | 'THRESHOLD';
+
+/**
+ * How much the day's times can be trusted.
+ *
+ * Reported alongside the figures rather than folded into the status, because
+ * "we do not know" is a different answer from "they were absent" and payroll,
+ * the screens and the reports all need to tell them apart.
+ *
+ *   COMPLETE   - an arrival and a departure that make sense together
+ *   OPEN       - an arrival and no departure yet; the day is still running
+ *   MISSING    - a punch is absent on one end and the day is over
+ *   IMPLAUSIBLE- the span between the punches is longer than the company
+ *                believes a day can be, so no hours are derived from it
+ *   NONE       - nothing was recorded at all
+ */
+export type AttendanceIntegrity = 'COMPLETE' | 'OPEN' | 'MISSING' | 'IMPLAUSIBLE' | 'NONE';
+
+/**
+ * Whether a first-to-last span is long enough to disbelieve.
+ *
+ * The bound is configuration, never a constant: a company running twelve-hour
+ * shifts and one running seven-hour shifts do not agree on what "too long"
+ * means, and neither of them should have to change this code to say so.
+ */
+export function isImplausibleSpan(
+  spanMinutes: number | null,
+  policy: Pick<AttendancePolicy, 'maxPlausibleSpanMinutes' | 'allowImplausibleSpans'>,
+): boolean {
+  if (spanMinutes === null) return false;
+  if (policy.allowImplausibleSpans) return false;
+  if (policy.maxPlausibleSpanMinutes <= 0) return false;
+  return spanMinutes > policy.maxPlausibleSpanMinutes;
+}
 
 const POLICY_SELECT = {
   timezone: true,
@@ -116,6 +157,9 @@ const POLICY_SELECT = {
   earlyLeaveThresholdMinutes: true,
   weekendWorkRule: true,
   holidayWorkRule: true,
+  duplicatePunchWindowSeconds: true,
+  maxPlausibleSpanMinutes: true,
+  allowImplausibleSpans: true,
 } as const;
 
 /**
@@ -159,6 +203,9 @@ const OVERRIDABLE = [
   'irregularAfterShiftStartMinutes',
   'lateTrackingEnabled',
   'earlyDepartureTrackingEnabled',
+  'duplicatePunchWindowSeconds',
+  'maxPlausibleSpanMinutes',
+  'allowImplausibleSpans',
 ] as const;
 
 /** Most specific wins. Two assignments at the same level are broken by date. */
@@ -249,6 +296,97 @@ export async function resolvePolicyFor(
     policyId: winner.policy.id,
     policyName: winner.policy.name,
     scope: winner.scope,
+  };
+}
+
+/**
+ * The same resolution as `resolvePolicyFor`, for many employees over a range.
+ *
+ * Derivation needs the policy in force for every employee on every day of a
+ * month. Calling the single-employee resolver in that loop is two queries per
+ * person per day; this reads the candidates once and answers from memory.
+ *
+ * The answer is per DAY, not per range, because an override can start midway
+ * through a month and a report that spans the change has to show each half
+ * under the rules that actually applied to it.
+ */
+export async function policyResolverFor(
+  companyId: string,
+  employeeIds: readonly string[],
+  from: Date,
+  to: Date,
+): Promise<(employeeId: string, date: Date) => ResolvedPolicy> {
+  const [baseline, employees, candidates] = await Promise.all([
+    resolveAttendancePolicy(companyId),
+    prisma.employee.findMany({
+      where: { id: { in: [...employeeIds] } },
+      select: { id: true, departmentId: true, teamId: true },
+    }),
+    prisma.attendancePolicyAssignment.findMany({
+      where: {
+        companyId,
+        policy: { isActive: true },
+        effectiveFrom: { lte: to },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: from } }],
+      },
+      include: { policy: true },
+    }),
+  ]);
+
+  const unscoped: ResolvedPolicy = { ...baseline, policyId: null, policyName: null, scope: null };
+  const employeeById = new Map(employees.map((e) => [e.id, e]));
+
+  /** Merging is not free and a month asks for the same answer thirty times. */
+  const cache = new Map<string, ResolvedPolicy>();
+
+  return (employeeId: string, date: Date): ResolvedPolicy => {
+    const employee = employeeById.get(employeeId);
+    if (!employee) return unscoped;
+
+    const dayKey = date.toISOString().slice(0, 10);
+    const cacheKey = `${employeeId}:${dayKey}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return cached;
+
+    const applicable = candidates.filter((candidate) => {
+      if (candidate.effectiveFrom > date) return false;
+      if (candidate.effectiveTo !== null && candidate.effectiveTo < date) return false;
+      switch (candidate.scope) {
+        case 'EMPLOYEE':
+          return candidate.targetId === employeeId;
+        case 'TEAM':
+          return employee.teamId !== null && candidate.targetId === employee.teamId;
+        case 'DEPARTMENT':
+          return employee.departmentId !== null && candidate.targetId === employee.departmentId;
+        default:
+          return candidate.targetId === null;
+      }
+    });
+
+    if (applicable.length === 0) {
+      cache.set(cacheKey, unscoped);
+      return unscoped;
+    }
+
+    const winner = applicable.reduce((best, current) => {
+      const byScope = SCOPE_PRECEDENCE[current.scope] - SCOPE_PRECEDENCE[best.scope];
+      if (byScope !== 0) return byScope > 0 ? current : best;
+      return current.effectiveFrom > best.effectiveFrom ? current : best;
+    });
+
+    const overrides = Object.fromEntries(
+      OVERRIDABLE.map((key) => [key, winner.policy[key]]).filter(([, value]) => value !== null),
+    ) as Partial<Pick<AttendancePolicy, (typeof OVERRIDABLE)[number]>>;
+
+    const resolved: ResolvedPolicy = {
+      ...baseline,
+      ...overrides,
+      policyId: winner.policy.id,
+      policyName: winner.policy.name,
+      scope: winner.scope,
+    };
+    cache.set(cacheKey, resolved);
+    return resolved;
   };
 }
 
@@ -675,6 +813,14 @@ export interface AttendanceComputation {
   scheduledMinutes: number | null;
   /** The rostered length of the day the record was measured against. */
   expectedMinutes: number;
+  /**
+   * How much the day's own times can be trusted. IMPLAUSIBLE is the one that
+   * suppresses figures: the day is reported with no hours rather than with
+   * hours nobody worked.
+   */
+  integrity: AttendanceIntegrity;
+  /** First-to-last elapsed minutes, before the break. Null when unpaired. */
+  spanMinutes: number | null;
 }
 
 /**
@@ -712,7 +858,7 @@ export function computeAttendance(input: {
   // merged policy.
   const shift = effectiveShift(input.shift, input.policy);
   const policy = withShiftRules(input.policy, input.shift);
-  const irregular = isIrregularArrival(checkInAt, policy, dayKey, shift);
+  const irregularArrival = isIrregularArrival(checkInAt, policy, dayKey, shift);
 
   /**
    * Worked minutes, with the break handled the way the company says it is.
@@ -727,26 +873,79 @@ export function computeAttendance(input: {
       ? Math.max(0, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / 60_000))
       : null;
 
+  /**
+   * A span the company does not believe produces no figures at all.
+   *
+   * This is the difference between reporting a fact and inventing one. A
+   * forgotten check-out, a stray evening swipe or a duplicate from a second
+   * terminal all present as one enormous day, and there is no honest way to
+   * tell which hours inside it were worked. So none are claimed: the times
+   * stay on the record, the day is marked irregular, and somebody corrects it.
+   *
+   * Deliberately NOT a cap. Capping would still assert a number, and the
+   * number would still be wrong - it would just be wrong by less.
+   */
+  const implausible = isImplausibleSpan(rawMinutes, policy);
+
+  const integrity: AttendanceIntegrity = implausible
+    ? 'IMPLAUSIBLE'
+    : !checkInAt && !checkOutAt
+      ? 'NONE'
+      : checkInAt && checkOutAt
+        ? 'COMPLETE'
+        : checkInAt
+          ? 'OPEN'
+          : 'MISSING';
+
   const breakMinutes = policy.breakIncludedInWindow ? 0 : Math.max(0, shift.breakMinutes ?? 0);
 
-  const workedMinutes = rawMinutes === null ? null : Math.max(0, rawMinutes - breakMinutes);
+  const workedMinutes =
+    rawMinutes === null || implausible ? null : Math.max(0, rawMinutes - breakMinutes);
 
+  /**
+   * A day whose span is disbelieved is irregular by that fact alone, on top of
+   * whatever the arrival time said. Both reasons land on the same flag because
+   * they have the same consequence: no overtime is derived from the day.
+   */
+  const irregular = irregularArrival || implausible;
+
+  // The arrival is a real punch and lateness is measured from it alone, so it
+  // survives even when the departure is not believed.
   const lateMinutes =
     checkInAt && policy.lateTrackingEnabled
       ? lateMinutesFor(checkInAt, shift, policy, dayKey)
       : null;
 
+  // The departure is the half in doubt, so nothing is derived from it.
   const earlyLeaveMinutes =
-    checkOutAt && policy.earlyDepartureTrackingEnabled
+    checkOutAt && policy.earlyDepartureTrackingEnabled && !implausible
       ? earlyLeaveMinutesFor(checkOutAt, shift, policy, dayKey)
       : null;
 
   // Two models, chosen by configuration. The duration model is kept because it
   // is what every existing record was scored with; switching back has to remain
   // possible without a code change.
-  const overtimeMinutes = policy.overtimeFromShiftEnd
+  const rawOvertime = policy.overtimeFromShiftEnd
     ? overtimeAfterShiftEnd({ checkInAt, checkOutAt, shift, policy, dayKey, irregular })
     : overtimeMinutesFor(workedMinutes, policy);
+
+  /**
+   * Overtime can never exceed the worked time it is a label on.
+   *
+   * Enforced here, once, rather than by each consumer clamping defensively -
+   * which is what used to happen, and inconsistently: the chart clamped, the
+   * summary beside it did not, and the CSV did not either, so one day could be
+   * reported three ways. A guarantee made at the source needs no defending
+   * downstream.
+   *
+   * Reachable when the break is deducted from the day (breakIncludedInWindow
+   * false) while early arrival also counts toward overtime: both push the two
+   * figures apart, and neither is wrong on its own.
+   */
+  const overtimeMinutes =
+    rawOvertime === null || workedMinutes === null
+      ? rawOvertime
+      : Math.min(rawOvertime, workedMinutes);
 
   /**
    * What the day is worth, measured against the shift rather than the clock.
@@ -762,6 +961,7 @@ export function computeAttendance(input: {
   const scheduledMinutes = irregular
     ? null
     : scheduledMinutesCovered({ checkOutAt, shift, timeZone: policy.timeZone, dayKey });
+
 
   const dayWorth = scheduledMinutes ?? workedMinutes;
 
@@ -799,7 +999,10 @@ export function computeAttendance(input: {
   let status: AttendanceComputation['status'];
   if (!checkInAt && !checkOutAt) status = missing(policy.missingCheckInStatus, null);
   else if (!checkInAt) status = missing(policy.missingCheckInStatus, dayWorth);
-  else if (!checkOutAt) status = missing(policy.missingCheckOutStatus, dayWorth);
+  // A disbelieved departure is, for scoring purposes, a departure nobody
+  // recorded - so it follows the company's own missing-check-out rule rather
+  // than a second policy invented here.
+  else if (!checkOutAt || implausible) status = missing(policy.missingCheckOutStatus, dayWorth);
   else status = byThreshold(dayWorth);
 
   return {
@@ -811,6 +1014,8 @@ export function computeAttendance(input: {
     irregular,
     scheduledMinutes,
     expectedMinutes: expectedMinutesFor(shift, policy),
+    integrity,
+    spanMinutes: rawMinutes,
   };
 }
 

@@ -955,6 +955,7 @@ export const ATTENDANCE_REPORT_TYPES = [
   'missing-punch',
   'leave-vs-attendance',
   'summary',
+  'working-hours',
 ] as const;
 export type AttendanceReportType = (typeof ATTENDANCE_REPORT_TYPES)[number];
 
@@ -971,6 +972,7 @@ export const ATTENDANCE_REPORT_LABELS: Record<AttendanceReportType, string> = {
   'missing-punch': 'Missing punch report',
   'leave-vs-attendance': 'Leave vs attendance',
   summary: 'Attendance summary',
+  'working-hours': 'Monthly working hours',
 };
 
 export const attendanceReportQuerySchema = z.object({

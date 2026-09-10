@@ -36,6 +36,7 @@ function day(over: Partial<DerivedDay> = {}): DerivedDay {
     earlyLeaveMinutes: 0,
     overtimeMinutes: 0,
     irregular: false,
+    integrity: 'COMPLETE',
     mode: null,
     shiftId: null,
     shiftName: 'General',
