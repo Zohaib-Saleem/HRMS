@@ -36,3 +36,6 @@ apps/connector/connector.state.json
 # misc
 .cache/
 coverage/
+
+# Database dumps taken before imports/migrations. Contain employee PII.
+backups/
