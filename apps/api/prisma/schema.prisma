@@ -495,6 +495,10 @@ model Employee {
   resignationDate       DateTime?      @db.Date
   sourceOfHire          String?
   linkedinUrl           String?
+  /// When the next salary increment falls due, as the payroll roster tracks it.
+  /// Forward-looking, which is what keeps it off SalaryRevision: that model
+  /// records increments that happened, this records one that is owed.
+  nextIncrementDueDate  DateTime?      @db.Date
   /// Prior experience in whole months, kept as a number so it can be summed.
   priorExperienceMonths Int?
 
@@ -583,6 +587,7 @@ model Employee {
   user             User?                         @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   workExperience EmployeeWorkExperience[]
+  education      EmployeeEducation[]
 
   headOfDepartment Department? @relation("DepartmentHead")
   leadOfTeam       Team?       @relation("TeamLead")
@@ -644,6 +649,33 @@ model EmployeeWorkExperience {
 
   @@index([employeeId])
   @@map("employee_work_experience")
+}
+
+/// Repeating sub-record: a qualification the employee holds.
+///
+/// Separate rows rather than columns on Employee because a person may hold any
+/// number of qualifications, and the roster this was imported from already
+/// carries two tiers with room for more.
+model EmployeeEducation {
+  id         String @id @default(cuid())
+  employeeId String
+
+  /// "Bachelors", "Masters" and so on, as the source records it. Free text
+  /// rather than an enum: qualification systems differ by country and an enum
+  /// would force the import to discard anything it did not anticipate.
+  level         String
+  degree        String?
+  institution   String?
+  /// Year of completion. An Int, not a date: the roster records only the year.
+  yearCompleted Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("employee_education")
 }
 
 // ---------------------------------------------------------------- auth & rbac
