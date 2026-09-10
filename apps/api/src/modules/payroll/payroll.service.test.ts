@@ -31,6 +31,7 @@ const {
   calculateRun,
   daysInRange,
   effectiveConfig,
+  employmentExit,
   finalizeRun,
   overlappingSalaries,
   salaryOn,
@@ -390,5 +391,43 @@ describe('a finalized run cannot be recalculated', () => {
     expect(db.payrollPeriod.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: 'CLOSED' } }),
     );
+  });
+});
+
+describe('the day an employment ended', () => {
+  /**
+   * Rule 9. A resigned employee has a null terminationDate, and null used to
+   * mean "still here": they were carried into every later run, marked ABSENT
+   * for every day after they left, and deducted for it.
+   */
+  it('is null while somebody is still employed', () => {
+    expect(employmentExit({ terminationDate: null, resignationDate: null })).toBeNull();
+  });
+
+  it('is the termination date when the company ended it', () => {
+    expect(employmentExit({ terminationDate: d('2026-03-20'), resignationDate: null })).toEqual(
+      d('2026-03-20'),
+    );
+  });
+
+  it('is the resignation date when the employee ended it', () => {
+    expect(employmentExit({ terminationDate: null, resignationDate: d('2026-03-20') })).toEqual(
+      d('2026-03-20'),
+    );
+  });
+
+  it('is the earlier one when both are set', () => {
+    expect(
+      employmentExit({ terminationDate: d('2026-04-30'), resignationDate: d('2026-03-20') }),
+    ).toEqual(d('2026-03-20'));
+    expect(
+      employmentExit({ terminationDate: d('2026-03-20'), resignationDate: d('2026-04-30') }),
+    ).toEqual(d('2026-03-20'));
+  });
+
+  it('does not reorder the employee record it was handed', () => {
+    const employee = { terminationDate: d('2026-04-30'), resignationDate: d('2026-03-20') };
+    employmentExit(employee);
+    expect(employee.terminationDate).toEqual(d('2026-04-30'));
   });
 });

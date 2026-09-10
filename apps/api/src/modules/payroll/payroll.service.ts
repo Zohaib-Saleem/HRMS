@@ -183,6 +183,28 @@ export function overlappingSalaries(rows: readonly SalaryRow[]): Array<[string, 
 }
 
 /**
+ * The day an employment ended, or null while it has not.
+ *
+ * Two separate dates can end one, and they are not interchangeable: a
+ * termination is the company's, a resignation is the employee's. Reading only
+ * `terminationDate` read a resigned employee - whose termination date is null,
+ * and null means "still here" - as current forever, so every later run carried
+ * them, scored them ABSENT for every day after their last one, and deducted
+ * for it. Where both dates exist the earlier wins: the employment is over on
+ * the first of them, and nothing after it belongs to any period.
+ */
+export function employmentExit(employee: {
+  terminationDate: Date | null;
+  resignationDate: Date | null;
+}): Date | null {
+  const ends = [employee.terminationDate, employee.resignationDate].filter(
+    (date): date is Date => date != null,
+  );
+  if (ends.length === 0) return null;
+  return ends.reduce((earliest, date) => (date < earliest ? date : earliest));
+}
+
+/**
  * The salary in force on a given day.
  *
  * Latest start that has begun and has not ended. This is what makes a raise in
@@ -758,14 +780,8 @@ export async function computePayroll(input: {
      * Days outside employment are not this period's business: someone who
      * joined on the 15th is not absent for the first fortnight, and someone
      * who left on the 20th is not absent for the rest of the month.
-     *
-     * The exit is the earlier of the two dates that can end an employment.
-     * Clamping on only one of them left a resigned employee scored ABSENT for
-     * every day after their last one, and then deducted for it.
      */
-    const exitDate = [employee.terminationDate, employee.resignationDate]
-      .filter((d): d is Date => d !== null)
-      .sort((a, b) => a.getTime() - b.getTime())[0];
+    const exitDate = employmentExit(employee);
 
     const employedDays = allDays.filter((day) => {
       if (employee.hireDate && day.date < dateKey(employee.hireDate)) return false;
