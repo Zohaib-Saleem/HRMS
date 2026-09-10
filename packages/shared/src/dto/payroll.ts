@@ -39,6 +39,16 @@ export const PAYROLL_OVERTIME_MODE_LABELS: Record<PayrollOvertimeMode, string> =
   FIXED_RATE: 'A flat rate per hour',
 };
 
+/** How a day worked short of its roster is charged. */
+export const PAYROLL_SHORT_HOURS_MODES = ['NONE', 'PER_MINUTE', 'PRO_RATA'] as const;
+export type PayrollShortHoursMode = (typeof PAYROLL_SHORT_HOURS_MODES)[number];
+
+export const PAYROLL_SHORT_HOURS_MODE_LABELS: Record<PayrollShortHoursMode, string> = {
+  NONE: 'Do not charge for short hours',
+  PER_MINUTE: 'A flat rate for every minute short',
+  PRO_RATA: "The employee's own hourly rate",
+};
+
 export const PAYROLL_TIME_DEDUCTION_MODES = ['NONE', 'PER_MINUTE', 'PER_OCCURRENCE'] as const;
 export type PayrollTimeDeductionMode = (typeof PAYROLL_TIME_DEDUCTION_MODES)[number];
 
@@ -193,6 +203,17 @@ export const payrollSettingsSchema = z.object({
   earlyLeaveDeductionMode: z.enum(PAYROLL_TIME_DEDUCTION_MODES).default('NONE'),
   earlyLeaveDeductionRate: money().default(0),
   earlyLeaveGraceMinutes: z.coerce.number().int().min(0).max(600).default(0),
+
+  /**
+   * What a day attended but worked short of its roster costs.
+   *
+   * Distinct from the two rules above, which charge the ENDS of a day. This
+   * charges the middle: someone on time at both ends who was away for three
+   * hours is neither late nor early, and only this notices.
+   */
+  shortHoursDeductionMode: z.enum(PAYROLL_SHORT_HOURS_MODES).default('NONE'),
+  shortHoursDeductionRate: z.coerce.number().min(0).default(0),
+  shortHoursGraceMinutes: z.coerce.number().int().min(0).max(600).default(0),
 
   roundingDecimals: z.coerce.number().int().min(0).max(4).default(2),
   payslipPrefix: z.string().trim().min(1).max(12).default('PS-'),
@@ -857,6 +878,10 @@ export interface PayrollPreviewRow {
   lateDeduction: number;
   earlyLeaveDeduction: number;
   absenceDeduction: number;
+  /** Time attended but not worked, where the company charges for it. */
+  shortHoursDeduction: number;
+  /** Repayments collected this period, from approved active loans only. */
+  loanDeduction: number;
   otherDeductions: number;
   deductionsTotal: number;
   adjustmentTotal: number;

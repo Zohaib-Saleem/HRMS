@@ -229,13 +229,18 @@ export function PayrollPreviewPage() {
                   <THead>
                     <TR>
                       <TH>Employee</TH>
-                      <TH className="text-right">Basic salary</TH>
+                      <TH className="text-right">Salary</TH>
+                      <TH className="text-right">Working days</TH>
                       <TH className="text-right">Paid days</TH>
-                      <TH className="text-right">Absent</TH>
+                      <TH className="text-right">Paid leave</TH>
                       <TH className="text-right">Unpaid leave</TH>
+                      <TH className="text-right">Absence</TH>
                       <TH className="text-right">Allowances</TH>
                       <TH className="text-right">OT hours</TH>
                       <TH className="text-right">OT amount</TH>
+                      <TH className="text-right">Hours ded.</TH>
+                      <TH className="text-right">Loan</TH>
+                      <TH className="text-right">Other ded.</TH>
                       <TH className="text-right">Deductions</TH>
                       <TH className="text-right">Gross</TH>
                       <TH className="text-right">Net</TH>
@@ -265,13 +270,24 @@ export function PayrollPreviewPage() {
                             </div>
                           ) : null}
                         </TD>
+                        <TD className="text-right tabular-nums">{row.scheduledDays}</TD>
                         <TD className="text-right tabular-nums">{row.paidDays}</TD>
-                        <TD className="text-right tabular-nums">{row.absentDays}</TD>
+                        <TD className="text-right tabular-nums">{row.paidLeaveDays}</TD>
                         <TD className="text-right tabular-nums">{row.unpaidLeaveDays}</TD>
+                        <TD className="text-right tabular-nums">{row.absentDays}</TD>
                         <TD className="text-right tabular-nums">{money(row.allowances, row.currency)}</TD>
                         <TD className="text-right tabular-nums">{row.overtimeHours}</TD>
                         <TD className="text-right tabular-nums">
                           {money(row.overtimeAmount, row.currency)}
+                        </TD>
+                        <TD className="text-right tabular-nums">
+                          {money(row.shortHoursDeduction, row.currency)}
+                        </TD>
+                        <TD className="text-right tabular-nums">
+                          {money(row.loanDeduction, row.currency)}
+                        </TD>
+                        <TD className="text-right tabular-nums">
+                          {money(row.otherDeductions, row.currency)}
                         </TD>
                         <TD className="text-right tabular-nums">
                           {money(row.deductionsTotal, row.currency)}
@@ -295,6 +311,8 @@ export function PayrollPreviewPage() {
                       <TD />
                       <TD />
                       <TD />
+                      <TD />
+                      <TD />
                       <TD className="text-right tabular-nums">
                         {money(preview.totals.allowances, currency)}
                       </TD>
@@ -302,6 +320,9 @@ export function PayrollPreviewPage() {
                       <TD className="text-right tabular-nums">
                         {money(preview.totals.overtimeAmount, currency)}
                       </TD>
+                      <TD />
+                      <TD />
+                      <TD />
                       <TD className="text-right tabular-nums">
                         {money(preview.totals.deductionsTotal, currency)}
                       </TD>

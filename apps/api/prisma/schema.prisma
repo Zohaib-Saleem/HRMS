@@ -1363,6 +1363,16 @@ model LeaveType {
 
   /// Unpaid leave still consumes a balance but is flagged for payroll later.
   isPaid   Boolean @default(true)
+
+  /// Whether payroll deducts this leave even though it is paid.
+  ///
+  /// Off for every leave type, and deliberately so: approved paid leave is
+  /// leave the company agreed to pay for, and deducting it by default would
+  /// make "paid" meaningless. A company that runs a type which accrues,
+  /// approves and still costs the employee a day - some sick or compassionate
+  /// arrangements do - turns this on for that type alone.
+  isDeductible Boolean @default(false)
+
   isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
@@ -1975,6 +1985,16 @@ enum PayrollTimeDeductionMode {
   PER_OCCURRENCE
 }
 
+/// How a day worked short of its roster is charged.
+enum PayrollShortHoursMode {
+  NONE
+  /// A flat rate for every minute short, past the grace period.
+  PER_MINUTE
+  /// The employee's own hourly rate, applied to the hours they were short.
+  /// The usual arrangement: an hour not worked costs an hour of pay.
+  PRO_RATA
+}
+
 enum PayrollComponentKind {
   EARNING
   DEDUCTION
@@ -2113,6 +2133,20 @@ model PayrollSettings {
   earlyLeaveDeductionRate Decimal                  @default(0) @db.Decimal(14, 4)
   earlyLeaveGraceMinutes  Int                      @default(0)
 
+  // --- short hours ----------------------------------------------------------
+  /// What a day attended but worked short of its roster costs.
+  ///
+  /// Distinct from the late and early-leave deductions, which charge the two
+  /// ENDS of a day. This charges the middle: someone who arrives on time,
+  /// leaves on time and was absent for three hours in between is neither late
+  /// nor early, and only this notices. Off by default, so no existing figure
+  /// moves until a company turns it on.
+  shortHoursDeductionMode PayrollShortHoursMode @default(NONE)
+  /// Only consulted when the mode is PER_MINUTE.
+  shortHoursDeductionRate Decimal               @default(0) @db.Decimal(14, 4)
+  /// Minutes short that are forgiven before anything is charged.
+  shortHoursGraceMinutes  Int                   @default(0)
+
   /// Whether a tax module is in play. Off, and nothing computes tax: the flag
   /// exists so components can be marked taxable now and a tax module written
   /// later without backfilling. No rate is stored here, because a rate that is
@@ -2159,6 +2193,11 @@ model PayrollProfile {
 
   deductUnpaidAbsence Boolean?
   deductUnpaidLeave   Boolean?
+
+  /// Null inherits the company setting, like every other override here.
+  shortHoursDeductionMode PayrollShortHoursMode?
+  shortHoursDeductionRate Decimal?              @db.Decimal(14, 4)
+  shortHoursGraceMinutes  Int?
 
   /// Free text: bank, cash, cheque. Not a payment integration, just a note on
   /// how this person is paid, so a payslip can say so.

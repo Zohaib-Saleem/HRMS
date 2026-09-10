@@ -119,6 +119,9 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
       earlyLeaveDeductionMode: settings.earlyLeaveDeductionMode,
       earlyLeaveDeductionRate: num(settings.earlyLeaveDeductionRate),
       earlyLeaveGraceMinutes: settings.earlyLeaveGraceMinutes,
+      shortHoursDeductionMode: settings.shortHoursDeductionMode,
+      shortHoursDeductionRate: num(settings.shortHoursDeductionRate),
+      shortHoursGraceMinutes: settings.shortHoursGraceMinutes,
       roundingDecimals: settings.roundingDecimals,
       payslipPrefix: settings.payslipPrefix,
       prorationMethod: settings.prorationMethod,
@@ -156,6 +159,13 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
         earlyLeaveDeductionMode: before.earlyLeaveDeductionMode,
         earlyLeaveDeductionRate: num(before.earlyLeaveDeductionRate),
         earlyLeaveGraceMinutes: before.earlyLeaveGraceMinutes,
+        // Left undefined when the stored row predates the column, so the
+        // schema's own default applies rather than `num(undefined)` reaching
+        // zod as NaN and failing a save that changed something else entirely.
+        shortHoursDeductionMode: before.shortHoursDeductionMode ?? undefined,
+        shortHoursDeductionRate:
+          before.shortHoursDeductionRate == null ? undefined : num(before.shortHoursDeductionRate),
+        shortHoursGraceMinutes: before.shortHoursGraceMinutes ?? undefined,
         roundingDecimals: before.roundingDecimals,
         payslipPrefix: before.payslipPrefix,
         prorationMethod: before.prorationMethod,

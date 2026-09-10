@@ -181,10 +181,26 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
     const earlyLeaveDeduction = sumWhere(deductions, (l) => l.code === 'EARLY_LEAVE');
     const absenceDeduction = sumWhere(
       deductions,
-      (l) => l.code === 'ABSENCE' || l.code === 'UNPAID_LEAVE',
+      (l) => l.code === 'ABSENCE' || l.code === 'UNPAID_LEAVE' || l.code === 'PAID_LEAVE',
     );
+    const shortHoursDeduction = sumWhere(deductions, (l) => l.code === 'SHORT_HOURS');
+    /**
+     * Loan repayments, called what they are.
+     *
+     * They reach the calculation through the adjustment channel because a
+     * repayment is arithmetically an adjustment, but a reviewer reading a
+     * breakdown needs "Loan" rather than a share of "Other" - which is what
+     * they were, and why a payslip could not be reconciled against a loan
+     * schedule without opening both.
+     */
+    const loanDeduction = sumWhere(deductions, (l) => l.code === 'LOAN');
     const otherDeductions =
-      num(data.deductionsTotal) - lateDeduction - earlyLeaveDeduction - absenceDeduction;
+      num(data.deductionsTotal) -
+      lateDeduction -
+      earlyLeaveDeduction -
+      absenceDeduction -
+      shortHoursDeduction -
+      loanDeduction;
 
     return {
       employeeId: line.employeeId,
@@ -218,6 +234,8 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
       lateDeduction: round2(lateDeduction),
       earlyLeaveDeduction: round2(earlyLeaveDeduction),
       absenceDeduction: round2(absenceDeduction),
+      shortHoursDeduction: round2(shortHoursDeduction),
+      loanDeduction: round2(loanDeduction),
       otherDeductions: round2(otherDeductions),
       deductionsTotal: num(data.deductionsTotal),
       adjustmentTotal: num(data.adjustmentTotal),
@@ -283,6 +301,8 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
         lateDeduction: 0,
         earlyLeaveDeduction: 0,
         absenceDeduction: 0,
+        shortHoursDeduction: 0,
+        loanDeduction: 0,
         otherDeductions: 0,
         deductionsTotal: 0,
         adjustmentTotal: 0,

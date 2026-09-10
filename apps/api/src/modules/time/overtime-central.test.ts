@@ -123,6 +123,7 @@ function derived(
     notes: null,
     leaveTypeName: null,
     leaveIsPaid: null,
+    leaveIsDeductible: null,
     leaveDayPart: null,
     holidayName: null,
     source: 'DEVICE' as const,
@@ -291,6 +292,7 @@ describe('leave and holidays contribute no hours and no overtime', () => {
         status: 'ON_LEAVE',
         leaveTypeName: 'Annual',
         leaveIsPaid: true,
+        leaveIsDeductible: null,
         hasRecord: false,
       }),
     );

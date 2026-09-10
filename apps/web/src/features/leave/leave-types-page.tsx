@@ -187,7 +187,7 @@ export function LeaveTypesPage() {
                         </TD>
                         <TD>
                           <Badge variant={row.isPaid ? 'primary' : 'neutral'}>
-                            {row.isPaid ? 'Paid' : 'Unpaid'}
+                            {row.isPaid ? (row.isDeductible ? 'Paid, deducted' : 'Paid') : 'Unpaid'}
                           </Badge>
                         </TD>
                         <TD className="tabular text-right text-[13px]">{row.requestCount}</TD>
@@ -268,6 +268,7 @@ function LeaveTypeDrawer({
       carryForwardEnabled: leaveType?.carryForwardEnabled ?? false,
       carryForwardCapDays: leaveType?.carryForwardCapDays ?? null,
       isPaid: leaveType?.isPaid ?? true,
+      isDeductible: leaveType?.isDeductible ?? false,
       isActive: leaveType?.isActive ?? true,
     },
   });
@@ -344,6 +345,17 @@ function LeaveTypeDrawer({
             <label className="flex cursor-pointer items-center gap-2.5 text-[13px]">
               <input type="checkbox" className="size-4 rounded border-input accent-[var(--primary)]" {...register('isPaid')} />
               Paid leave
+            </label>
+            <label className="flex cursor-pointer items-start gap-2.5 text-[13px] sm:col-span-2">
+              <input type="checkbox" className="mt-0.5 size-4 rounded border-input accent-[var(--primary)]" {...register('isDeductible')} />
+              <span>
+                Deduct from pay anyway
+                <span className="block text-xs text-muted-foreground">
+                  Leave this off for ordinary paid leave. On, payroll deducts a day of this
+                  leave even though it is paid - an unusual arrangement, and only ever per
+                  leave type.
+                </span>
+              </span>
             </label>
             <label className="flex cursor-pointer items-center gap-2.5 text-[13px] sm:col-span-2">
               <input type="checkbox" className="size-4 rounded border-input accent-[var(--primary)]" {...register('isActive')} />

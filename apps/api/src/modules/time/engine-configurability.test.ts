@@ -254,6 +254,9 @@ const PAY_A: EffectiveConfig = {
   overtimeHolidayMultiplier: null,
   fallbackScheduledMinutes: 480,
   prorationMethod: 'CALENDAR_DAYS',
+  shortHoursDeductionMode: 'NONE',
+  shortHoursDeductionRate: 0,
+  shortHoursGraceMinutes: 0,
 };
 
 /** A different company: 26-day basis, 7-hour day, double time, holiday premium. */

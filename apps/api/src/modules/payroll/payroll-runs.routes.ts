@@ -501,21 +501,39 @@ function toRunRecord(row: {
   };
 }
 
-/** The preview columns, in the order the specification lists them. */
-const PREVIEW_COLUMNS: Array<[key: string, label: string, pick: (row: PayrollPreview['rows'][number]) => unknown]> = [
+/**
+ * The preview breakdown, in the order the specification lists it.
+ *
+ * ONE list, read by the screen and by the CSV. The export cannot drift from
+ * the table because there is no second definition of what a column is or where
+ * its value comes from - `pick` is the only accessor either of them uses.
+ *
+ * Every deduction the calculation can produce has a column here, and they sum
+ * to `deductionsTotal`. A breakdown where the parts do not add up to the whole
+ * is worse than no breakdown, because it invites the reader to believe both.
+ */
+export const PREVIEW_COLUMNS: Array<[key: string, label: string, pick: (row: PayrollPreview['rows'][number]) => unknown]> = [
   ['employeeNumber', 'Employee code', (r) => r.employeeNumber],
   ['employeeName', 'Employee', (r) => r.employeeName],
   ['departmentName', 'Department', (r) => r.departmentName],
-  ['basicSalary', 'Basic salary', (r) => r.basicSalary],
+  ['basicSalary', 'Salary', (r) => r.basicSalary],
+  ['scheduledDays', 'Working days', (r) => r.scheduledDays],
   ['paidDays', 'Paid days', (r) => r.paidDays],
-  ['absentDays', 'Absent days', (r) => r.absentDays],
+  ['paidLeaveDays', 'Paid leave', (r) => r.paidLeaveDays],
   ['unpaidLeaveDays', 'Unpaid leave', (r) => r.unpaidLeaveDays],
+  ['absentDays', 'Absence', (r) => r.absentDays],
   ['allowances', 'Allowances', (r) => r.allowances],
   ['overtimeHours', 'Overtime hours', (r) => r.overtimeHours],
   ['overtimeAmount', 'Overtime amount', (r) => r.overtimeAmount],
+  ['absenceDeduction', 'Absence deduction', (r) => r.absenceDeduction],
+  ['shortHoursDeduction', 'Working-hour deduction', (r) => r.shortHoursDeduction],
+  ['lateDeduction', 'Late deduction', (r) => r.lateDeduction],
+  ['earlyLeaveDeduction', 'Early-leave deduction', (r) => r.earlyLeaveDeduction],
+  ['loanDeduction', 'Loan deduction', (r) => r.loanDeduction],
+  ['otherDeductions', 'Other deductions', (r) => r.otherDeductions],
   ['deductionsTotal', 'Deductions', (r) => r.deductionsTotal],
   ['grossAmount', 'Gross', (r) => r.grossAmount],
-  ['netAmount', 'Net', (r) => r.netAmount],
+  ['netAmount', 'Net salary', (r) => r.netAmount],
   ['notes', 'Notes', (r) => r.notes.join(' | ')],
 ];
 

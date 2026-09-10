@@ -31,6 +31,7 @@ function toRecord(row: Row): LeaveTypeRecord {
     carryForwardEnabled: row.carryForwardEnabled,
     carryForwardCapDays: row.carryForwardCapDays === null ? null : toNumber(row.carryForwardCapDays),
     isPaid: row.isPaid,
+  isDeductible: row.isDeductible,
     isActive: row.isActive,
     requestCount: row._count.requests,
   };

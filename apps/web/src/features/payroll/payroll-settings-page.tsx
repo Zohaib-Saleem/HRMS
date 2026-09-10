@@ -12,6 +12,8 @@ import {
   PAYROLL_OVERTIME_MODES,
   PAYROLL_OVERTIME_MODE_LABELS,
   PAYROLL_TIME_DEDUCTION_LABELS,
+  PAYROLL_SHORT_HOURS_MODES,
+  PAYROLL_SHORT_HOURS_MODE_LABELS,
   PAYROLL_TIME_DEDUCTION_MODES,
   PERMISSIONS,
   payrollSettingsSchema,
@@ -86,6 +88,7 @@ export function PayrollSettingsPage() {
   const overtimeCap = Number(watch('overtimeCapMinutes')) || 0;
   const lateMode = watch('lateDeductionMode');
   const earlyMode = watch('earlyLeaveDeductionMode');
+  const shortMode = watch('shortHoursDeductionMode');
 
   return (
     <form onSubmit={handleSubmit((values) => mutation.mutate(values))}>
@@ -379,6 +382,57 @@ export function PayrollSettingsPage() {
                     <Input
                       type="number"
                       {...register('earlyLeaveGraceMinutes')}
+                      className="tabular"
+                    />
+                  </FormField>
+                </>
+              ) : null}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <FormField
+                label="Short hours"
+                htmlFor="shortHoursDeductionMode"
+                hint="Late and early leaving charge the two ends of a day. This charges the middle."
+                error={formState.errors.shortHoursDeductionMode?.message}
+              >
+                <NativeSelect {...register('shortHoursDeductionMode')}>
+                  {PAYROLL_SHORT_HOURS_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {PAYROLL_SHORT_HOURS_MODE_LABELS[m]}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </FormField>
+              {shortMode !== 'NONE' ? (
+                <>
+                  {shortMode === 'PER_MINUTE' ? (
+                    <FormField
+                      label="Rate per minute"
+                      htmlFor="shortHoursDeductionRate"
+                      error={formState.errors.shortHoursDeductionRate?.message}
+                    >
+                      <Input
+                        type="number"
+                        step="0.01"
+                        {...register('shortHoursDeductionRate')}
+                        className="tabular"
+                      />
+                    </FormField>
+                  ) : (
+                    <div className="self-end pb-2 text-[12.5px] text-muted-foreground">
+                      Charged at each employee&rsquo;s own hourly rate, derived from their
+                      salary and the basis above.
+                    </div>
+                  )}
+                  <FormField
+                    label="Grace (minutes)"
+                    htmlFor="shortHoursGraceMinutes"
+                    error={formState.errors.shortHoursGraceMinutes?.message}
+                  >
+                    <Input
+                      type="number"
+                      {...register('shortHoursGraceMinutes')}
                       className="tabular"
                     />
                   </FormField>

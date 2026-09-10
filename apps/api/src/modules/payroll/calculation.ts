@@ -15,7 +15,12 @@
  * reads days; it never reads punches, and it never re-scores a day.
  */
 
-import type { PayrollBasis, PayrollOvertimeMode, PayrollTimeDeductionMode } from '@prisma/client';
+import type {
+  PayrollBasis,
+  PayrollOvertimeMode,
+  PayrollShortHoursMode,
+  PayrollTimeDeductionMode,
+} from '@prisma/client';
 
 /** One day of the pay period, as the attendance engine reported it. */
 export interface DayFact {
@@ -24,6 +29,12 @@ export interface DayFact {
   status: string;
   /** Null when the day is not leave. Not `false` - the difference matters. */
   leaveIsPaid: boolean | null;
+  /**
+   * Whether the leave type is one the company deducts even though it is paid.
+   * Null when the day is not leave. Almost always false: a paid leave that is
+   * deducted is an unusual arrangement and has to be configured as one.
+   */
+  leaveIsDeductible: boolean | null;
   /** FULL_DAY | FIRST_HALF | SECOND_HALF, or null when the day is not leave. */
   leaveDayPart: string | null;
   workedMinutes: number | null;
@@ -75,6 +86,15 @@ export interface EffectiveConfig {
   earlyLeaveDeductionMode: PayrollTimeDeductionMode;
   earlyLeaveDeductionRate: number;
   earlyLeaveGraceMinutes: number;
+
+  /**
+   * What a day attended but worked short of its roster costs. The late and
+   * early-leave rules charge the two ends of a day; this charges the middle,
+   * which neither of them can see.
+   */
+  shortHoursDeductionMode: PayrollShortHoursMode;
+  shortHoursDeductionRate: number;
+  shortHoursGraceMinutes: number;
 
   hourlyRateOverride: number | null;
   roundingDecimals: number;
@@ -136,6 +156,8 @@ export interface AttendanceTally {
   halfDays: number;
   absentDays: number;
   paidLeaveDays: number;
+  /** Of those paid leave days, the ones a deductible leave type covered. */
+  deductiblePaidLeaveDays: number;
   unpaidLeaveDays: number;
   holidayDays: number;
   weekendDays: number;
@@ -144,6 +166,10 @@ export interface AttendanceTally {
   lateMinutes: number;
   earlyLeaveOccurrences: number;
   earlyLeaveMinutes: number;
+  /** Days attended that fell short of their roster, past the grace period. */
+  shortHoursOccurrences: number;
+  /** Minutes short across those days. Never negative. */
+  shortMinutes: number;
   overtimeMinutes: number;
   approvedOvertimeMinutes: number;
   /** Overtime worked on a non-working day, priced at its own multiplier. */
@@ -226,6 +252,7 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
     halfDays: 0,
     absentDays: 0,
     paidLeaveDays: 0,
+    deductiblePaidLeaveDays: 0,
     unpaidLeaveDays: 0,
     holidayDays: 0,
     weekendDays: 0,
@@ -234,6 +261,8 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
     lateMinutes: 0,
     earlyLeaveOccurrences: 0,
     earlyLeaveMinutes: 0,
+    shortHoursOccurrences: 0,
+    shortMinutes: 0,
     overtimeMinutes: 0,
     approvedOvertimeMinutes: 0,
     weekendOvertimeMinutes: 0,
@@ -276,8 +305,13 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
         // A leave type with no paid flag is treated as unpaid rather than
         // guessed at: paying for leave nobody configured as paid is the more
         // expensive mistake, and it shows up as an exception either way.
-        if (day.leaveIsPaid === true) tally.paidLeaveDays += weight;
-        else tally.unpaidLeaveDays += weight;
+        if (day.leaveIsPaid === true) {
+          tally.paidLeaveDays += weight;
+          // Counted separately rather than moved: it is still paid leave in
+          // every count that reports leave, and the deduction below is a
+          // second fact about it, not a reclassification.
+          if (day.leaveIsDeductible === true) tally.deductiblePaidLeaveDays += weight;
+        } else tally.unpaidLeaveDays += weight;
         // A half day of leave leaves half a day that was worked or was not;
         // whichever it was, the attendance record for the day carries it.
         if (weight < 1) tally.presentDays += 1 - weight;
@@ -300,6 +334,34 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
     if (early > 0) {
       tally.earlyLeaveOccurrences += 1;
       tally.earlyLeaveMinutes += early;
+    }
+
+    /**
+     * Hours short of the roster, on days that were actually attended.
+     *
+     * Only PRESENT and HALF_DAY days are measured. An absence is already
+     * charged as an absence and a day of leave was never going to be worked -
+     * charging either of them again here would take the same day twice.
+     *
+     * A day whose worked minutes are unknown - an open day, or one the
+     * attendance engine refused to believe - contributes nothing. Treating
+     * "we do not know" as "they worked none of it" would deduct a full day's
+     * pay for a forgotten check-out, which is exactly the fabrication the
+     * attendance engine declines to make.
+     */
+    if (
+      (day.status === 'PRESENT' || day.status === 'HALF_DAY') &&
+      day.workedMinutes !== null &&
+      day.scheduledMinutes > 0
+    ) {
+      const short = Math.max(
+        0,
+        day.scheduledMinutes - day.workedMinutes - config.shortHoursGraceMinutes,
+      );
+      if (short > 0) {
+        tally.shortHoursOccurrences += 1;
+        tally.shortMinutes += short;
+      }
     }
 
     const overtime = day.overtimeMinutes ?? 0;
@@ -431,7 +493,15 @@ export function calculate(input: {
     ? tally.absentDays + tally.halfDays * 0.5
     : 0;
   const unpaidLeaveCharged = config.deductUnpaidLeave ? tally.unpaidLeaveDays : 0;
-  const unpaidDays = unpaidAbsenceDays + unpaidLeaveCharged;
+  /**
+   * Paid leave the leave type itself marks deductible.
+   *
+   * Not gated on `deductUnpaidLeave`: that switch is about UNPAID leave, and
+   * borrowing it here would make one company-wide toggle silently govern two
+   * unrelated decisions.
+   */
+  const deductiblePaidLeaveCharged = tally.deductiblePaidLeaveDays;
+  const unpaidDays = unpaidAbsenceDays + unpaidLeaveCharged + deductiblePaidLeaveCharged;
   const payableDays = Math.max(0, tally.scheduledDays - unpaidDays);
 
   // --- basic ------------------------------------------------------------------
@@ -645,6 +715,28 @@ export function calculate(input: {
         isTaxable: false,
       });
     }
+
+    /**
+     * Paid leave that the company nonetheless deducts.
+     *
+     * Driven entirely by the leave type's own flag, which is off everywhere
+     * unless somebody turned it on for that type. Approved paid leave is not
+     * deducted, and there is no setting anywhere that makes it so wholesale -
+     * the decision is per leave type, which is where it belongs.
+     */
+    if (deductiblePaidLeaveCharged > 0) {
+      deductions.push({
+        componentId: null,
+        code: 'PAID_LEAVE',
+        label: 'Deductible paid leave',
+        kind: 'PAID_LEAVE',
+        calc: 'FIXED',
+        rate: round(dailyRate),
+        units: roundTo(deductiblePaidLeaveCharged, 2),
+        amount: round(dailyRate * deductiblePaidLeaveCharged),
+        isTaxable: false,
+      });
+    }
   }
 
   if (config.lateDeductionMode !== 'NONE' && tally.lateOccurrences > 0) {
@@ -677,6 +769,34 @@ export function calculate(input: {
       rate: config.earlyLeaveDeductionRate,
       units,
       amount: round(config.earlyLeaveDeductionRate * units),
+      isTaxable: false,
+    });
+  }
+
+  /**
+   * Time attended but not worked.
+   *
+   * PRO_RATA charges the employee's own hourly rate, so an hour not worked
+   * costs an hour of pay - the arrangement most contracts describe. PER_MINUTE
+   * charges a flat configured rate instead, for a company that penalises
+   * short hours at something other than the wage.
+   *
+   * The rate is never a constant: PRO_RATA reads `hourlyRate`, which is itself
+   * derived from the salary and the company's own basis and standard hours.
+   */
+  if (config.shortHoursDeductionMode !== 'NONE' && tally.shortMinutes > 0) {
+    const perMinute = config.shortHoursDeductionMode === 'PRO_RATA';
+    const units = perMinute ? roundTo(tally.shortMinutes / 60, 2) : tally.shortMinutes;
+    const rate = perMinute ? round(hourlyRate) : config.shortHoursDeductionRate;
+    deductions.push({
+      componentId: null,
+      code: 'SHORT_HOURS',
+      label: 'Short hours',
+      kind: 'SHORT_HOURS',
+      calc: 'FIXED',
+      rate,
+      units,
+      amount: round(rate * units),
       isTaxable: false,
     });
   }

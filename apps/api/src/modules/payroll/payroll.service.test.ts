@@ -56,6 +56,7 @@ function day(date: string): DayFact {
     date,
     status: 'PRESENT',
     leaveIsPaid: null,
+    leaveIsDeductible: null,
     leaveDayPart: null,
     workedMinutes: 540,
     lateMinutes: 0,

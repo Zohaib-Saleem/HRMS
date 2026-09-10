@@ -55,6 +55,9 @@ const CONFIG: EffectiveConfig = {
   overtimeHolidayMultiplier: null,
   fallbackScheduledMinutes: 480,
   prorationMethod: 'CALENDAR_DAYS',
+  shortHoursDeductionMode: 'NONE',
+  shortHoursDeductionRate: 0,
+  shortHoursGraceMinutes: 0,
 };
 
 const SALARY = 120000;
@@ -70,6 +73,7 @@ function day(over: Partial<DayFact> = {}): DayFact {
     date: '2026-06-01',
     status: 'PRESENT',
     leaveIsPaid: null,
+    leaveIsDeductible: null,
     leaveDayPart: null,
     workedMinutes: 540,
     lateMinutes: 0,
@@ -974,6 +978,7 @@ describe('the worked example', () => {
     ...days(2, {
       status: 'ON_LEAVE',
       leaveIsPaid: true,
+      leaveIsDeductible: null,
       leaveDayPart: 'FULL_DAY',
       workedMinutes: null,
     }),

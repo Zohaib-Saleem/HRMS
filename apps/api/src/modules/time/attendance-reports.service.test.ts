@@ -43,6 +43,7 @@ function day(over: Partial<DerivedDay> = {}): DerivedDay {
     notes: null,
     leaveTypeName: null,
     leaveIsPaid: null,
+    leaveIsDeductible: null,
     leaveDayPart: null,
     holidayName: null,
     source: 'DEVICE',

@@ -40,7 +40,7 @@ import {
 
 const INCLUDE = {
   employee: { select: { id: true, firstName: true, lastName: true, displayName: true } },
-  leaveType: { select: { id: true, name: true, isPaid: true } },
+  leaveType: { select: { id: true, name: true, isPaid: true, isDeductible: true } },
 } satisfies Prisma.LeaveRequestInclude;
 
 type Row = Prisma.LeaveRequestGetPayload<{ include: typeof INCLUDE }>;
@@ -56,6 +56,7 @@ function toRecord(row: Row, callerEmployeeId: string | null, isAdmin: boolean): 
     leaveTypeId: row.leaveTypeId,
     leaveTypeName: row.leaveType.name,
     isPaid: row.leaveType.isPaid,
+    isDeductible: row.leaveType.isDeductible,
     startDate: row.startDate.toISOString().slice(0, 10),
     endDate: row.endDate.toISOString().slice(0, 10),
     dayPart: row.dayPart as LeaveDayPart,

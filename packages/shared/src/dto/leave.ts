@@ -36,6 +36,14 @@ export const leaveTypeInputSchema = z
     carryForwardEnabled: z.boolean().default(false),
     carryForwardCapDays: z.coerce.number().min(0).max(365).nullish(),
     isPaid: z.boolean().default(true),
+    /**
+     * Whether payroll deducts this leave even though it is paid.
+     *
+     * Off unless a company deliberately turns it on for a type. Approved paid
+     * leave is leave the company agreed to pay for, and deducting it by
+     * default would make "paid" mean nothing.
+     */
+    isDeductible: z.boolean().default(false),
     isActive: z.boolean().default(true),
   })
   .refine(
@@ -66,6 +74,7 @@ export interface LeaveTypeRecord {
   carryForwardEnabled: boolean;
   carryForwardCapDays: number | null;
   isPaid: boolean;
+  isDeductible: boolean;
   isActive: boolean;
   requestCount: number;
 }
@@ -127,6 +136,7 @@ export interface LeaveRequestRecord {
   leaveTypeId: string;
   leaveTypeName: string;
   isPaid: boolean;
+  isDeductible: boolean;
   startDate: string;
   endDate: string;
   dayPart: LeaveDayPart;

@@ -108,6 +108,13 @@ export function effectiveConfig(
     overtimeMultiplier: toNumber(profile?.overtimeMultiplier ?? settings.overtimeMultiplier),
     overtimeFixedRate: toNumber(profile?.overtimeFixedRate ?? settings.overtimeFixedRate),
     requireApprovedOvertime: settings.requireApprovedOvertime,
+
+    shortHoursDeductionMode:
+      profile?.shortHoursDeductionMode ?? settings.shortHoursDeductionMode,
+    shortHoursDeductionRate: toNumber(
+      profile?.shortHoursDeductionRate ?? settings.shortHoursDeductionRate,
+    ),
+    shortHoursGraceMinutes: profile?.shortHoursGraceMinutes ?? settings.shortHoursGraceMinutes,
     overtimeCapMinutes: settings.overtimeCapMinutes,
 
     deductUnpaidAbsence: profile?.deductUnpaidAbsence ?? settings.deductUnpaidAbsence,
@@ -331,6 +338,7 @@ export async function gatherFacts(input: {
         date: day.date,
         status: day.status,
         leaveIsPaid: day.leaveIsPaid,
+        leaveIsDeductible: day.leaveIsDeductible,
         leaveDayPart: day.leaveDayPart,
         workedMinutes: day.workedMinutes,
         lateMinutes: day.lateMinutes,
@@ -535,13 +543,29 @@ export async function computePayroll(input: {
     }),
   ]);
 
-  // Everyone employed for any part of the period, including people who left
-  // during it - a final salary is still owed.
+  /**
+   * Everyone employed for any part of the period, including people who left
+   * during it - a final salary is still owed.
+   *
+   * An exit is either a termination or a resignation, and the two are separate
+   * dates. Reading only one of them paid a resigned employee for every month
+   * after they left, because their terminationDate was null and null means
+   * "still here". Whichever date is set has to put the same floor under the
+   * period, so both are checked and the EARLIER one wins where both exist.
+   *
+   * Nobody is ever removed from a run that already happened: this filter picks
+   * who a NEW calculation covers. Finalized runs, their lines and their
+   * payslips are never touched by it.
+   */
   const employees = await prisma.employee.findMany({
     where: {
       companyId,
-      OR: [{ terminationDate: null }, { terminationDate: { gte: from } }],
-      AND: [{ OR: [{ hireDate: null }, { hireDate: { lte: to } }] }, input.filter ?? {}],
+      AND: [
+        { OR: [{ terminationDate: null }, { terminationDate: { gte: from } }] },
+        { OR: [{ resignationDate: null }, { resignationDate: { gte: from } }] },
+        { OR: [{ hireDate: null }, { hireDate: { lte: to } }] },
+        input.filter ?? {},
+      ],
     },
     orderBy: [{ employeeNumber: 'asc' }],
     include: { department: { select: { name: true } } },
@@ -730,11 +754,22 @@ export async function computePayroll(input: {
     const config = effectiveConfig(settings, profile);
     const allDays = facts.get(employee.id)?.days ?? [];
 
-    // Days outside employment are not this period's business: someone who
-    // joined on the 15th is not absent for the first fortnight.
+    /**
+     * Days outside employment are not this period's business: someone who
+     * joined on the 15th is not absent for the first fortnight, and someone
+     * who left on the 20th is not absent for the rest of the month.
+     *
+     * The exit is the earlier of the two dates that can end an employment.
+     * Clamping on only one of them left a resigned employee scored ABSENT for
+     * every day after their last one, and then deducted for it.
+     */
+    const exitDate = [employee.terminationDate, employee.resignationDate]
+      .filter((d): d is Date => d !== null)
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+
     const employedDays = allDays.filter((day) => {
       if (employee.hireDate && day.date < dateKey(employee.hireDate)) return false;
-      if (employee.terminationDate && day.date > dateKey(employee.terminationDate)) return false;
+      if (exitDate && day.date > dateKey(exitDate)) return false;
       return true;
     });
 
