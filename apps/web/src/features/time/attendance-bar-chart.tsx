@@ -83,15 +83,24 @@ const STATE_SERIES = [
   color: string;
 }>;
 
-/** Ticks a reader can actually reach on the y-axis: whole hours. */
-function axisTicks(maxMinutes: number): number[] {
+/**
+ * Ticks a reader can actually reach on the y-axis: whole hours.
+ *
+ * The top tick must COVER the tallest bar. Walking up from zero until the
+ * maximum is passed does not guarantee that: eight and a half hours against a
+ * four-hour step stopped at eight, and the bar was then drawn at 106% of a plot
+ * it could not leave. Rounding the maximum up to a whole step first is what
+ * makes the axis a scale rather than a suggestion.
+ */
+export function axisTicks(maxMinutes: number): number[] {
   if (maxMinutes <= 0) return [0];
   const maxHours = maxMinutes / 60;
   // Four gridlines at most, on a step that is a round number of hours.
   const rawStep = maxHours / 4;
   const step = [1, 2, 4, 8, 12, 24, 48, 96, 168, 336, 720].find((s) => s >= rawStep) ?? 720;
+  const top = Math.max(step, Math.ceil(maxHours / step) * step);
   const ticks: number[] = [];
-  for (let h = 0; h <= maxHours + step / 2; h += step) ticks.push(h);
+  for (let h = 0; h <= top + 1e-9; h += step) ticks.push(h);
   return ticks;
 }
 

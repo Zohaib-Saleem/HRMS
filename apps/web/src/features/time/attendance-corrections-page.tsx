@@ -26,7 +26,7 @@ import { Button } from '@/components/ui/button';
 import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { ListToolbar } from '@/components/ui/list-toolbar';
 import { Pagination } from '@/components/ui/pagination';
-import { TableSkeleton } from '@/components/ui/skeleton';
+import { ListSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import {
   Dialog,
@@ -107,7 +107,10 @@ export function AttendanceCorrectionsPage() {
       { ...filters, q: debouncedQuery, employeeNumber: debouncedNumber, punchCode: debouncedPunch },
     ],
     queryFn: () =>
-      api.get<MonthlyResponse>('/attendance/monthly', {
+      // getEnvelope, not get: this endpoint answers with `meta`, `totals` and
+      // `range` beside `data`, and `get` would hand back the rows array alone.
+      // That is what took this page down - see the note on `api.get`.
+      api.getEnvelope<MonthlyResponse>('/attendance/monthly', {
         query: {
           page: filters.page,
           limit: filters.limit,
@@ -273,7 +276,7 @@ export function AttendanceCorrectionsPage() {
         {query.isError ? (
           <ErrorState error={query.error} onRetry={() => void query.refetch()} />
         ) : query.isLoading ? (
-          <TableSkeleton rows={8} />
+          <ListSkeleton rows={8} />
         ) : rows.length === 0 ? (
           <EmptyState
             icon={FileSearch}
@@ -354,7 +357,12 @@ export function AttendanceCorrectionsPage() {
           </TableWrapper>
         )}
 
-        {query.data ? (
+        {/*
+          Guarded on the meta itself, not on `query.data`. An empty result is an
+          empty ARRAY, which is truthy, so a `query.data ?` guard let a missing
+          meta through and Pagination destructured undefined.
+        */}
+        {query.data?.meta ? (
           <Pagination
             meta={query.data.meta}
             onPageChange={(page) => update({ page })}
@@ -516,7 +524,7 @@ function DayDrawer({
           {query.isError ? (
             <ErrorState error={query.error} onRetry={() => void query.refetch()} />
           ) : !day || !form ? (
-            <TableSkeleton rows={6} />
+            <ListSkeleton rows={6} />
           ) : (
             <>
               {/* --- what the day is measured against ------------------------- */}

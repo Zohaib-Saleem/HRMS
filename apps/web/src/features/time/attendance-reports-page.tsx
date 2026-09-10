@@ -331,7 +331,11 @@ function EmployeePicker({
   const query = useQuery({
     queryKey: ['employees', 'report-picker', debounced],
     queryFn: () =>
-      api.get<{ data: EmployeeListItem[] }>('/employees', {
+      // getPage, not get: /employees answers `{ data, meta }`, and `get`
+      // unwraps to the ROWS - `query.data.data` was then undefined and this
+      // picker silently offered nobody. Same envelope trap as the corrections
+      // page, quieter symptom.
+      api.getPage<EmployeeListItem>('/employees', {
         query: { q: debounced || undefined, limit: 15 },
       }),
   });

@@ -49,10 +49,6 @@ import { EmptyState, ErrorState } from '@/components/feedback/states';
  *     to and why.
  */
 
-interface EmployeePage {
-  data: EmployeeListItem[];
-}
-
 export function DeviceMappingPage() {
   const { has } = usePermissions();
   const queryClient = useQueryClient();
@@ -343,7 +339,10 @@ function MappingDrawer({
   const employees = useQuery({
     queryKey: ['employees', 'mapping-picker', debouncedEmployee],
     queryFn: () =>
-      api.get<EmployeePage>('/employees', {
+      // getPage, not get - see the note in the attendance reports picker.
+      // `get` hands back the rows array, so `employees.data?.data` was always
+      // undefined and this list was always empty.
+      api.getPage<EmployeeListItem>('/employees', {
         query: { q: debouncedEmployee || undefined, limit: 20, status: 'ACTIVE' },
       }),
     enabled: open && !isEdit,

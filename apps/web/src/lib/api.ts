@@ -106,12 +106,34 @@ async function unwrap<T>(path: string, options?: RequestOptions): Promise<T> {
 }
 
 export const api = {
+  /**
+   * Reads the `data` out of the envelope.
+   *
+   * Only for endpoints whose envelope is `{ data }` and nothing else. An
+   * endpoint that returns siblings of `data` - `meta`, `totals`, `range`,
+   * `truncated` - needs `getPage` or `getEnvelope`, because this hands back the
+   * INNER value and those siblings are lost. Nothing catches that mistake at
+   * compile time: the generic is whatever the caller claims it is, and an
+   * `undefined` picked up here surfaces much later as a crash somewhere that
+   * had no idea it was holding the wrong shape.
+   */
   get: <T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>) =>
     unwrap<T>(path, { ...options, method: 'GET' }),
 
   /** For list endpoints, which return data plus pagination meta. */
   getPage: <T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>) =>
     request<Paginated<T>>(path, { ...options, method: 'GET' }),
+
+  /**
+   * The whole envelope, unwrapped by nobody.
+   *
+   * For the endpoints that answer with `data` alongside `totals`, `range` or
+   * `truncated`. Named so that choosing it is a decision rather than an
+   * accident - `get` and this differ by one level of nesting, and the type
+   * system cannot tell them apart.
+   */
+  getEnvelope: <T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>) =>
+    request<T>(path, { ...options, method: 'GET' }),
 
   post: <T>(path: string, body?: unknown) => unwrap<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body?: unknown) => unwrap<T>(path, { method: 'PATCH', body }),
