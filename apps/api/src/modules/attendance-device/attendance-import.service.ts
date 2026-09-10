@@ -121,6 +121,7 @@ export async function recalculateFromPunches(input: {
     lateMinutes: computed.lateMinutes,
     earlyLeaveMinutes: computed.earlyLeaveMinutes,
     overtimeMinutes: computed.overtimeMinutes,
+    irregular: computed.irregular,
     shiftId: shift?.id ?? null,
     source: 'DEVICE' as const,
   };

@@ -215,21 +215,42 @@ export interface DeviceSyncRecord {
   errorDetails: SyncErrorDetail[];
 }
 
+/**
+ * Where a punch is in the pipeline.
+ *
+ *   UNMAPPED   no employee yet; attribute it by fixing the mapping
+ *   PENDING    attributed, not yet folded into an attendance record
+ *   PROCESSED  folded into an attendance record
+ */
+export const PUNCH_PROCESSING_STATUSES = ['UNMAPPED', 'PENDING', 'PROCESSED'] as const;
+export type PunchProcessingStatus = (typeof PUNCH_PROCESSING_STATUSES)[number];
+
+export const PUNCH_PROCESSING_STATUS_LABELS: Record<PunchProcessingStatus, string> = {
+  UNMAPPED: 'Unmapped',
+  PENDING: 'Awaiting processing',
+  PROCESSED: 'Processed',
+};
+
 export interface RawPunchRecord {
   id: string;
   deviceId: string;
   deviceName: string;
+  deviceSerial: string | null;
   deviceUserId: string;
   employeeId: string | null;
   employeeName: string | null;
+  employeeNumber: string | null;
   rawTimestamp: string;
   deviceTimeZone: string;
   punchedAt: string;
   localDayKey: string;
   punchState: string | null;
   verifyMode: string | null;
+  /** How the punch reached the server: the trigger of the sync that stored it. */
+  source: string | null;
   importedAt: string;
   processedAt: string | null;
+  processingStatus: PunchProcessingStatus;
 }
 
 export const punchQuerySchema = paginationQuerySchema.extend({
@@ -237,8 +258,11 @@ export const punchQuerySchema = paginationQuerySchema.extend({
   employeeId: z.string().trim().max(64).optional(),
   /** `true` restricts to punches with no employee mapping. */
   unmappedOnly: z.enum(['true', 'false']).optional(),
+  processing: z.enum(PUNCH_PROCESSING_STATUSES).optional(),
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
+  /** One local day, YYYY-MM-DD, in the company zone. */
+  day: z.string().trim().max(10).optional(),
 });
 
 /** A user held on the device, with its mapping if one exists. */
@@ -254,14 +278,120 @@ export interface DeviceUserRecord {
   mappingId: string | null;
 }
 
+const mappingDate = z.preprocess(
+  (v) => (v === '' ? null : v),
+  z
+    .string()
+    .trim()
+    .refine((v) => !Number.isNaN(Date.parse(v)), 'Enter a valid date.')
+    .nullable(),
+);
+
+/**
+ * Attributing a device user (PunchCode / PIN) to an employee.
+ *
+ * `effectiveFrom` is what makes a correction safe. Left blank, the mapping
+ * covers everything the PIN ever recorded. Given a date, punches before it
+ * stay exactly where they were and only later ones move - which is the right
+ * answer when a PIN passes from a leaver to a new joiner.
+ *
+ * `closeConflicting` is the explicit consent to end another employee's
+ * open-ended mapping of the same PIN the day before this one starts. Without
+ * it the conflict is refused and named, so nothing is taken over by accident.
+ */
 export const deviceMappingSchema = z.object({
   deviceUserId: z.string().trim().min(1, 'Enter the device user ID.').max(64),
   employeeId: z.string().trim().min(1, 'Choose an employee.').max(64),
   deviceUserName: z.string().trim().max(120).optional().nullable(),
   isActive: z.boolean().default(true),
+  effectiveFrom: mappingDate.optional(),
+  effectiveTo: mappingDate.optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
+  closeConflicting: z.boolean().default(false),
 });
 
 export type DeviceMappingInput = z.infer<typeof deviceMappingSchema>;
+
+/** The same, addressed by device rather than nested under one. */
+export const deviceMappingCreateSchema = deviceMappingSchema.extend({
+  deviceId: z.string().trim().min(1, 'Choose a device.').max(64),
+});
+
+export type DeviceMappingCreateInput = z.infer<typeof deviceMappingCreateSchema>;
+
+/** Editing an existing mapping. The PIN and the employee never change here: that is a new mapping. */
+export const deviceMappingUpdateSchema = z.object({
+  isActive: z.boolean().optional(),
+  effectiveFrom: mappingDate.optional(),
+  effectiveTo: mappingDate.optional(),
+  deviceUserName: z.string().trim().max(120).optional().nullable(),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+
+export type DeviceMappingUpdateInput = z.infer<typeof deviceMappingUpdateSchema>;
+
+export const deviceMappingQuerySchema = z.object({
+  employeeId: z.string().trim().max(64).optional(),
+  deviceId: z.string().trim().max(64).optional(),
+  deviceUserId: z.string().trim().max(64).optional(),
+  includeInactive: z.enum(['true', 'false']).optional(),
+});
+
+export interface DeviceMappingRecord {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  deviceSerial: string | null;
+  deviceUserId: string;
+  deviceUserName: string | null;
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  isActive: boolean;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  notes: string | null;
+  /** True when the mapping attributes punches today. */
+  isCurrent: boolean;
+  /** Punches this mapping's (device, PIN) recorded that are attributed to this employee. */
+  punchCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeviceMappingSetResult {
+  id: string;
+  /** Punches re-attributed to the employee, from the effective date onward. */
+  reattributedPunches: number;
+  /** Distinct employee-days those punches touch. Not recalculated here. */
+  affectedDays: number;
+  /** The other employee's mapping that was closed, if consent was given. */
+  closedMappingId: string | null;
+}
+
+/**
+ * One change to a PunchCode mapping, as the history panel shows it.
+ *
+ * Read from the audit log rather than a second table: mapping changes already
+ * go through `recordAudit`, and a private copy would be one more thing that
+ * can disagree with the trail everybody else reads.
+ */
+export interface DeviceMappingHistoryEntry {
+  id: string;
+  action: string;
+  summary: string | null;
+  actorName: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export const deviceMappingHistoryQuerySchema = z.object({
+  deviceId: z.string().trim().max(64).optional(),
+  deviceUserId: z.string().trim().max(64).optional(),
+  employeeId: z.string().trim().max(64).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
 
 export interface DeviceSyncOutcome {
   syncId: string;

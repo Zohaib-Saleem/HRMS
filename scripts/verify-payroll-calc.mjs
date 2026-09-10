@@ -772,7 +772,12 @@ try {
     check('a shift crossing midnight does not go negative', shiftLengthMinutes('22:00', '06:00', 60), 420);
     check('exactly eight hours overnight', shiftLengthMinutes('22:00', '06:00', 0), 480);
     check('a same-hour shift wraps a full day', shiftLengthMinutes('08:00', '08:00', 0), 1440);
-    check('an unreadable time falls back to eight hours', shiftLengthMinutes('nonsense', '18:00', 0), 480);
+    // Zero, not eight hours. "How long is a working day here?" is a question
+    // configuration answers - `fallbackScheduledMinutes` on payroll settings -
+    // and a shift string too malformed to parse is a data problem, not a
+    // licence for the engine to invent a day. Returning a plausible-looking
+    // 480 here would hide the broken shift behind a number that adds up.
+    check('an unreadable time yields nothing, and does not invent a day', shiftLengthMinutes('nonsense', '18:00', 0), 0);
     check('a break longer than the shift cannot go below zero', shiftLengthMinutes('09:00', '10:00', 300), 0);
   }
 

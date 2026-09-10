@@ -46,9 +46,11 @@ export function PayslipPage() {
   const line = slip.line;
   const currency = slip.currency;
 
-  const allowances = line.earnings.filter((e) => e.kind !== 'BASIC' && e.kind !== 'OVERTIME');
+  const allowances = line.earnings.filter((e) => e.kind === 'COMPONENT');
+  const bonuses = line.earnings.filter((e) => e.kind === 'ADJUSTMENT');
   const basic = line.earnings.find((e) => e.kind === 'BASIC');
   const overtime = line.earnings.find((e) => e.kind === 'OVERTIME');
+  const hasOvertime = line.overtimeMinutes > 0 || line.paidOvertimeMinutes > 0 || overtime !== undefined;
 
   return (
     <>
@@ -104,12 +106,35 @@ export function PayslipPage() {
             <Field label="Paid leave" value={days(line.paidLeaveDays)} />
             <Field label="Unpaid leave" value={days(line.unpaidLeaveDays)} />
             <Field label="Absence" value={days(line.absentDays)} />
-            <Field
-              label="Overtime hours"
-              value={hoursFromMinutes(line.approvedOvertimeMinutes)}
-            />
+            <Field label="Payable days" value={days(line.payableDays)} />
+            {line.lateOccurrences > 0 ? (
+              <Field label="Late arrivals" value={`${line.lateOccurrences} (${line.lateMinutes} min)`} />
+            ) : null}
+            {line.earlyLeaveOccurrences > 0 ? (
+              <Field
+                label="Early departures"
+                value={`${line.earlyLeaveOccurrences} (${line.earlyLeaveMinutes} min)`}
+              />
+            ) : null}
           </div>
         </section>
+
+        {hasOvertime ? (
+          <section className="border-b border-border py-5">
+            <h2 className="mb-3 text-[12.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Overtime
+            </h2>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+              <Field label="Recorded" value={hoursFromMinutes(line.overtimeMinutes)} />
+              <Field label="Approved" value={hoursFromMinutes(line.approvedOvertimeMinutes)} />
+              <Field label="Paid" value={hoursFromMinutes(line.paidOvertimeMinutes)} />
+              <Field
+                label="Rate per hour"
+                value={overtime?.rate !== null && overtime?.rate !== undefined ? money(overtime.rate, currency) : '--'}
+              />
+            </div>
+          </section>
+        ) : null}
 
         <section className="grid gap-6 border-b border-border py-5 sm:grid-cols-2">
           <div>
@@ -128,8 +153,20 @@ export function PayslipPage() {
                 />
               ))}
               {overtime ? (
-                <Amount label="Overtime" value={money(overtime.amount, currency)} />
+                <Amount
+                  label="Overtime"
+                  hint={overtime.units !== null && overtime.rate !== null ? `${overtime.units} h × ${money(overtime.rate, currency)}` : undefined}
+                  value={money(overtime.amount, currency)}
+                />
               ) : null}
+              {bonuses.map((item, index) => (
+                <Amount
+                  key={`bonus-${index}`}
+                  label={item.label}
+                  hint="Bonus or adjustment"
+                  value={money(item.amount, currency)}
+                />
+              ))}
               <Amount
                 label="Gross earnings"
                 value={money(line.grossAmount, currency)}

@@ -83,6 +83,7 @@ export function PayrollSettingsPage() {
   const basis = watch('basis');
   const standardHours = Number(watch('standardHoursPerDay')) || 0;
   const overtimeMode = watch('overtimeMode');
+  const overtimeCap = Number(watch('overtimeCapMinutes')) || 0;
   const lateMode = watch('lateDeductionMode');
   const earlyMode = watch('earlyLeaveDeductionMode');
 
@@ -152,12 +153,28 @@ export function PayrollSettingsPage() {
               htmlFor="standardHoursPerDay"
               error={formState.errors.standardHoursPerDay?.message}
               required
-              hint={`Turns a daily rate into an hourly one. ${standardHours > 0 ? `${standardHours} h = ${Math.round(standardHours * 60)} min.` : ''} The office window is 09:00–18:00 with the break inside it; this number prices the day, it does not move the window.`}
+              hint={`Turns a daily rate into an hourly one. ${standardHours > 0 ? `${standardHours} h = ${Math.round(standardHours * 60)} min.` : ''} The office window and its break come from the attendance policy; this number prices the day, it does not move the window.`}
             >
               <Input
                 type="number"
                 step="0.5"
                 {...register('standardHoursPerDay')}
+                className="tabular"
+              />
+            </FormField>
+            <FormField
+              label="Working minutes per day"
+              htmlFor="fallbackScheduledMinutes"
+              error={formState.errors.fallbackScheduledMinutes?.message}
+              required
+              hint="Used for a working day with no shift assigned. A 9-hour day is 540. An assigned shift always wins."
+            >
+              <Input
+                type="number"
+                min={60}
+                max={1440}
+                step={15}
+                {...register('fallbackScheduledMinutes')}
                 className="tabular"
               />
             </FormField>
@@ -237,6 +254,20 @@ export function PayrollSettingsPage() {
                 />
               </FormField>
             ) : null}
+            <FormField
+              label="Most overtime paid per period (minutes)"
+              htmlFor="overtimeCapMinutes"
+              error={formState.errors.overtimeCapMinutes?.message}
+              hint={`Leave empty for no ceiling. The attendance policy's daily, weekly and monthly caps still apply first.${overtimeCap ? ` ${overtimeCap} min = ${(overtimeCap / 60).toFixed(2)} h.` : ''}`}
+            >
+              <Input
+                type="number"
+                min={0}
+                step={30}
+                {...register('overtimeCapMinutes', { setValueAs: (v) => (v === '' || v === null ? null : Number(v)) })}
+                className="tabular"
+              />
+            </FormField>
             <label className="flex cursor-pointer items-center gap-2.5 text-[13.5px] sm:col-span-2">
               <input
                 type="checkbox"

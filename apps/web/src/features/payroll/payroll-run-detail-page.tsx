@@ -146,6 +146,17 @@ export function PayrollRunDetailPage() {
               </Link>
             </Button>
 
+            {/* The step before finalizing: the same calculation, written
+                nowhere, so the arithmetic can be checked without committing
+                to it. Available whatever the run's status - reading a
+                finalized run's preview is a perfectly reasonable audit. */}
+            <Button variant="ghost" size="sm" asChild>
+              <Link to={`/payroll/preview?runId=${data.id}`}>
+                <Calculator />
+                Preview
+              </Link>
+            </Button>
+
             {!finalized && !cancelled ? (
               <Can permission={PERMISSIONS.PAYROLL_MANAGE}>
                 {data.status === 'APPROVED' ? (
@@ -280,6 +291,7 @@ export function PayrollRunDetailPage() {
                     <TH className="w-32 text-right">Basic</TH>
                     <TH className="w-32 text-right">Allowances</TH>
                     <TH className="w-28 text-right">Overtime</TH>
+                    <TH className="w-28 text-right">Bonuses</TH>
                     <TH className="w-32 text-right">Gross</TH>
                     <TH className="w-32 text-right">Deductions</TH>
                     <TH className="w-32 text-right">Net</TH>
@@ -291,10 +303,10 @@ export function PayrollRunDetailPage() {
                 </THead>
                 <TBody>
                   {lines.isLoading ? (
-                    <TableSkeleton rows={6} columns={12} />
+                    <TableSkeleton rows={6} columns={13} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={12} className="p-0">
+                      <TD colSpan={13} className="p-0">
                         <EmptyState
                           icon={Users}
                           title={
@@ -314,10 +326,15 @@ export function PayrollRunDetailPage() {
                     </TR>
                   ) : (
                     rows.map((line) => {
-                      const allowances =
-                        line.earnings
-                          .filter((e) => e.kind !== 'BASIC' && e.kind !== 'OVERTIME')
-                          .reduce((sum, e) => sum + e.amount, 0) ?? 0;
+                      // Allowances are the recurring components; a bonus is a
+                      // one-off adjustment. Shown apart so a reviewer can see
+                      // which of the two moved a figure.
+                      const allowances = line.earnings
+                        .filter((e) => e.kind === 'COMPONENT')
+                        .reduce((sum, e) => sum + e.amount, 0);
+                      const bonuses = line.earnings
+                        .filter((e) => e.kind === 'ADJUSTMENT')
+                        .reduce((sum, e) => sum + e.amount, 0);
                       return (
                         <TR
                           key={line.id}
@@ -343,6 +360,9 @@ export function PayrollRunDetailPage() {
                             {money(line.overtimeAmount, line.currency)}
                           </TD>
                           <TD className="tabular text-right text-[13px]">
+                            {money(bonuses, line.currency)}
+                          </TD>
+                          <TD className="tabular text-right text-[13px]">
                             {money(line.grossAmount, line.currency)}
                           </TD>
                           <TD className="tabular text-right text-[13px]">
@@ -361,7 +381,7 @@ export function PayrollRunDetailPage() {
                             {days(line.unpaidLeaveDays)}
                           </TD>
                           <TD className="tabular text-right text-[13px]">
-                            {hoursFromMinutes(line.approvedOvertimeMinutes)}
+                            {hoursFromMinutes(line.paidOvertimeMinutes)}
                           </TD>
                         </TR>
                       );

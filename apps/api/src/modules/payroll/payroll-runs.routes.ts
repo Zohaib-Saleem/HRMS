@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import {
   PERMISSIONS,
@@ -10,6 +10,7 @@ import {
   payrollCancelSchema,
   payrollLineQuerySchema,
   payrollPeriodSchema,
+  payrollPreviewQuerySchema,
   payrollRunSchema,
   payslipQuerySchema,
   salaryComponentSchema,
@@ -20,6 +21,7 @@ import {
   type PayrollLineRecord,
   type PayrollMoneyLine,
   type PayrollPeriodRecord,
+  type PayrollPreview,
   type PayrollRunRecord,
   type PayslipRecord,
   type SalaryComponentRecord,
@@ -33,6 +35,7 @@ import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import { toDateOnly } from '../time/helpers.js';
 import { assertTransition, calculateRun, finalizeRun } from './payroll.service.js';
+import { buildPayrollPreview } from './payroll-preview.service.js';
 
 /**
  * Salary components, pay periods, runs, adjustments and payslips.
@@ -498,6 +501,45 @@ function toRunRecord(row: {
   };
 }
 
+/** The preview columns, in the order the specification lists them. */
+const PREVIEW_COLUMNS: Array<[key: string, label: string, pick: (row: PayrollPreview['rows'][number]) => unknown]> = [
+  ['employeeNumber', 'Employee code', (r) => r.employeeNumber],
+  ['employeeName', 'Employee', (r) => r.employeeName],
+  ['departmentName', 'Department', (r) => r.departmentName],
+  ['basicSalary', 'Basic salary', (r) => r.basicSalary],
+  ['paidDays', 'Paid days', (r) => r.paidDays],
+  ['absentDays', 'Absent days', (r) => r.absentDays],
+  ['unpaidLeaveDays', 'Unpaid leave', (r) => r.unpaidLeaveDays],
+  ['allowances', 'Allowances', (r) => r.allowances],
+  ['overtimeHours', 'Overtime hours', (r) => r.overtimeHours],
+  ['overtimeAmount', 'Overtime amount', (r) => r.overtimeAmount],
+  ['deductionsTotal', 'Deductions', (r) => r.deductionsTotal],
+  ['grossAmount', 'Gross', (r) => r.grossAmount],
+  ['netAmount', 'Net', (r) => r.netAmount],
+  ['notes', 'Notes', (r) => r.notes.join(' | ')],
+];
+
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function sendPreviewCsv(reply: FastifyReply, preview: PayrollPreview): FastifyReply {
+  const lines = [
+    PREVIEW_COLUMNS.map(([, label]) => label).join(','),
+    ...preview.rows.map((row) => PREVIEW_COLUMNS.map(([, , pick]) => csvCell(pick(row))).join(',')),
+  ];
+  return reply
+    .header('Content-Type', 'text/csv; charset=utf-8')
+    .header(
+      'Content-Disposition',
+      `attachment; filename="payroll-preview-${preview.from}-to-${preview.to}.csv"`,
+    )
+    // BOM so Excel opens UTF-8 names correctly, matching the other exports.
+    .send(`\ufeff${lines.join('\r\n')}\r\n`);
+}
+
 export const payrollRunRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requirePermission(PERMISSIONS.PAYROLL_READ));
 
@@ -523,6 +565,49 @@ export const payrollRunRoutes: FastifyPluginAsync = async (app) => {
       data: rows.map(toRunRecord),
       meta: buildMeta(query.page, query.limit, total),
     });
+  });
+
+  /**
+   * The calculation preview.
+   *
+   * Registered before `/:id` so "preview" is never read as a run id. It runs
+   * the same calculation a run runs and writes none of it - the screen HR
+   * opens to check the arithmetic before finalizing, and the one that can be
+   * opened for a period that has no run at all.
+   */
+  app.get('/preview', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const query = parseOrThrow(payrollPreviewQuerySchema, request.query);
+
+    const scopeFilter = await employeeScopeFilter(auth);
+    if (scopeFilter === null) throw new ForbiddenError('You do not have access to payroll data.');
+    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+
+    const preview = await buildPayrollPreview({
+      companyId: auth.companyId,
+      runId: query.runId,
+      periodId: query.periodId,
+      from: query.from,
+      to: query.to,
+      employeeId: query.employeeId,
+      departmentId: query.departmentId,
+      scopeFilter,
+    });
+
+    if (query.format === 'csv') {
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'payroll.preview.export',
+        entityType: 'PayrollRun',
+        entityId: preview.runId ?? preview.periodId ?? `${preview.from}..${preview.to}`,
+        summary: `Exported the payroll preview for ${preview.from} to ${preview.to} (${preview.rows.length} employee(s))`,
+        request,
+      });
+      return sendPreviewCsv(reply, preview);
+    }
+
+    return reply.send({ data: preview });
   });
 
   app.get('/:id', async (request, reply) => {
@@ -1055,6 +1140,7 @@ function toLineRecord(row: {
   earlyLeaveMinutes: number;
   overtimeMinutes: number;
   approvedOvertimeMinutes: number;
+  paidOvertimeMinutes: number;
   basicAmount: Prisma.Decimal;
   overtimeAmount: Prisma.Decimal;
   earningsTotal: Prisma.Decimal;
@@ -1107,6 +1193,7 @@ function toLineRecord(row: {
     earlyLeaveMinutes: row.earlyLeaveMinutes,
     overtimeMinutes: row.overtimeMinutes,
     approvedOvertimeMinutes: row.approvedOvertimeMinutes,
+    paidOvertimeMinutes: row.paidOvertimeMinutes,
 
     basicAmount: num(row.basicAmount),
     overtimeAmount: num(row.overtimeAmount),
@@ -1144,6 +1231,19 @@ const PAYSLIP_INCLUDE = {
   },
 } as const;
 
+/**
+ * Whether the caller sees payslips before they are released.
+ *
+ * A payslip exists from the moment a run is finalized, so an administrator can
+ * check it; it is released to the person it belongs to when the run is
+ * published. Anyone holding payroll.read is on the administering side of that
+ * line. Everyone else - which in practice means an employee reading their own
+ * - waits for publication.
+ */
+function payslipVisibility(auth: { permissions: Set<string> }): Prisma.PayslipWhereInput {
+  return auth.permissions.has(PERMISSIONS.PAYROLL_READ) ? {} : { publishedAt: { not: null } };
+}
+
 export const payslipRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requirePermission(PERMISSIONS.PAYSLIP_READ));
 
@@ -1159,6 +1259,7 @@ export const payslipRoutes: FastifyPluginAsync = async (app) => {
 
     const where: Prisma.PayslipWhereInput = {
       companyId: auth.companyId,
+      ...payslipVisibility(auth),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
       ...(query.runId ? { line: { runId: query.runId } } : {}),
       employee: { AND: [scope] },
@@ -1216,6 +1317,13 @@ export const payslipRoutes: FastifyPluginAsync = async (app) => {
     // Deliberately after the fetch and deliberately a 403, not a 404: the
     // caller is being told they may not see it, not that it does not exist.
     await assertEmployeeInScope(auth, row.employeeId);
+
+    // Their own, but not yet released. A 404 here, not a 403: from where the
+    // employee stands the payslip does not exist yet, and saying otherwise
+    // would announce a figure that is still being checked.
+    if (row.publishedAt === null && !auth.permissions.has(PERMISSIONS.PAYROLL_READ)) {
+      throw new NotFoundError('Payslip');
+    }
 
     const data: PayslipRecord = {
       id: row.id,

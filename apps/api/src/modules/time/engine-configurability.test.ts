@@ -59,6 +59,13 @@ const COMPANY_A: AttendancePolicy = {
   missingCheckInStatus: 'ABSENT',
   irregularCheckInMode: 'ABSOLUTE_TIME',
   irregularAfterShiftStartMinutes: 120,
+  // Added with the attendance module. The shipped values, which reproduce
+  // exactly what the engine did before these rules existed.
+  defaultBreakMinutes: 0,
+  lateThresholdMinutes: 0,
+  earlyLeaveThresholdMinutes: 0,
+  weekendWorkRule: 'AS_WORKING_DAY',
+  holidayWorkRule: 'AS_WORKING_DAY',
 };
 
 /** Company B - a different company, agreeing with A about nothing. */
@@ -229,6 +236,7 @@ const PAY_A: EffectiveConfig = {
   overtimeMultiplier: 1.5,
   overtimeFixedRate: 0,
   requireApprovedOvertime: false,
+  overtimeCapMinutes: null,
   deductUnpaidAbsence: true,
   deductUnpaidLeave: true,
   lateDeductionMode: 'NONE',

@@ -17,8 +17,11 @@ import {
   attendanceDeviceRoutes,
   attendancePunchRoutes,
 } from './attendance-device/devices.routes.js';
+import { deviceMappingRoutes } from './attendance-device/mappings.routes.js';
 import { attendancePolicyRoutes } from './time/attendance-policies.routes.js';
 import { attendanceRoutes } from './time/attendance.routes.js';
+import { attendanceAdminRoutes } from './time/attendance-admin.routes.js';
+import { attendanceReportRoutes } from './time/attendance-reports.routes.js';
 import { shiftRoutes } from './time/shifts.routes.js';
 import { timesheetRoutes } from './time/timesheets.routes.js';
 import { leaveTypeRoutes } from './leave/leave-types.routes.js';
@@ -75,6 +78,12 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/approvals', plugin: approvalRoutes },
   { prefix: '/notifications', plugin: notificationRoutes },
   { prefix: '/attendance', plugin: attendanceRoutes },
+  // The administrative side of the module: search, one-day detail, correction
+  // and the adjustment ledger. Same prefix, separate plugin, so the
+  // self-service routes stay readable.
+  { prefix: '/attendance', plugin: attendanceAdminRoutes },
+  { prefix: '/attendance/reports', plugin: attendanceReportRoutes },
+  { prefix: '/attendance/mappings', plugin: deviceMappingRoutes },
   { prefix: '/attendance-policies', plugin: attendancePolicyRoutes },
   { prefix: '/attendance/devices', plugin: attendanceDeviceRoutes },
   { prefix: '/attendance/punches', plugin: attendancePunchRoutes },

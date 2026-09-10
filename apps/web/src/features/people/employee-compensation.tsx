@@ -6,14 +6,11 @@ import { toast } from 'sonner';
 import { Banknote, Plus, TrendingDown, TrendingUp } from 'lucide-react';
 import {
   PAYROLL_COMPONENT_CALC_LABELS,
-  PAYROLL_SALARY_TYPES,
   PAYROLL_SALARY_TYPE_LABELS,
   PERMISSIONS,
   employeeComponentSchema,
-  employeeSalarySchema,
   type EmployeeComponentInput,
   type EmployeeComponentRecord,
-  type EmployeeSalaryInput,
   type EmployeeSalaryRecord,
   type PayrollComponentKind,
   type SalaryComponentRecord,
@@ -21,13 +18,23 @@ import {
 import { ApiError, api, errorMessage } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/feedback/states';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { usePermissions } from '@/features/auth/session-context';
+import { SalaryDialog, todayLocal } from './salary-dialog';
+
+export { SalaryDialog } from './salary-dialog';
 
 /**
  * Compensation, inside the employee profile.
@@ -64,169 +71,6 @@ function componentValue(row: EmployeeComponentRecord, currency: string): string 
   return `${row.value}% ${of}`;
 }
 
-// ------------------------------------------------------------------ salary form
-
-/**
- * Records a new salary, or edits one already on record.
- *
- * Editing is for correcting a record - a typo in the amount, the wrong start
- * date. A raise is not an edit: it is a new record from a new date, so the
- * period already paid keeps reading what it paid. The screen says so.
- */
-export function SalaryDialog({
-  employeeId,
-  currency,
-  existing = null,
-  open,
-  onClose,
-  onSaved,
-}: {
-  employeeId: string;
-  currency: string;
-  /** When set, the dialog edits this record instead of creating one. */
-  existing?: EmployeeSalaryRecord | null;
-  open: boolean;
-  onClose: () => void;
-  onSaved?: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const isEdit = existing !== null;
-
-  const blank = (): EmployeeSalaryInput => ({
-    employeeId,
-    salaryType: 'MONTHLY',
-    amount: 0,
-    currency,
-    effectiveFrom: new Date().toISOString().slice(0, 10),
-    effectiveTo: null,
-    note: null,
-  });
-
-  const fromExisting = (row: EmployeeSalaryRecord): EmployeeSalaryInput => ({
-    employeeId: row.employeeId,
-    salaryType: row.salaryType,
-    amount: row.amount,
-    currency: row.currency,
-    effectiveFrom: row.effectiveFrom,
-    effectiveTo: row.effectiveTo,
-    note: row.note,
-  });
-
-  const form = useForm<EmployeeSalaryInput>({
-    resolver: zodResolver(employeeSalarySchema),
-    defaultValues: existing ? fromExisting(existing) : blank(),
-  });
-
-  React.useEffect(() => {
-    if (open) form.reset(existing ? fromExisting(existing) : blank());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, employeeId, currency, existing?.id]);
-
-  const save = useMutation({
-    mutationFn: (input: EmployeeSalaryInput) =>
-      isEdit
-        ? api.patch(`/payroll/salaries/${existing.id}`, input)
-        : api.post('/payroll/salaries', input),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['compensation', employeeId] });
-      await queryClient.invalidateQueries({ queryKey: ['salary-overview'] });
-      toast.success(isEdit ? 'Salary record updated' : 'Salary recorded', {
-        description: isEdit
-          ? 'This corrected the record in place. For a raise, record a new salary from its start date instead.'
-          : 'Earlier records are untouched, so past payroll still reads what it paid.',
-      });
-      onSaved?.();
-      onClose();
-    },
-    onError: (error: unknown) => {
-      if (error instanceof ApiError && error.isValidation && error.details) {
-        for (const [field, messages] of Object.entries(error.details)) {
-          form.setError(field as keyof EmployeeSalaryInput, { message: messages[0] });
-        }
-        return;
-      }
-      toast.error('Could not save the salary', { description: errorMessage(error) });
-    },
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{isEdit ? 'Edit salary record' : 'Record a salary'}</DialogTitle>
-        </DialogHeader>
-        <form
-          id="salary-form"
-          onSubmit={form.handleSubmit((values) => save.mutate(values))}
-          className="grid gap-4 sm:grid-cols-2"
-        >
-          <FormField
-            label="Pay frequency"
-            htmlFor="salaryType"
-            error={form.formState.errors.salaryType?.message}
-          >
-            <NativeSelect id="salaryType" {...form.register('salaryType')}>
-              {PAYROLL_SALARY_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {PAYROLL_SALARY_TYPE_LABELS[type]}
-                </option>
-              ))}
-            </NativeSelect>
-          </FormField>
-
-          <FormField label="Currency" htmlFor="currency" error={form.formState.errors.currency?.message}>
-            <Input id="currency" maxLength={3} className="uppercase" {...form.register('currency')} />
-          </FormField>
-
-          <FormField
-            label="Basic salary"
-            htmlFor="amount"
-            error={form.formState.errors.amount?.message}
-            className="sm:col-span-2"
-          >
-            <Input id="amount" type="number" step="0.01" min={0} {...form.register('amount')} />
-          </FormField>
-
-          <FormField
-            label="Effective from"
-            htmlFor="effectiveFrom"
-            hint="Payroll for earlier periods keeps using the previous salary."
-            error={form.formState.errors.effectiveFrom?.message}
-          >
-            <Input id="effectiveFrom" type="date" {...form.register('effectiveFrom')} />
-          </FormField>
-
-          <FormField
-            label="Effective to"
-            htmlFor="effectiveTo"
-            hint="Leave empty while this is the current salary."
-            error={form.formState.errors.effectiveTo?.message}
-          >
-            <Input id="effectiveTo" type="date" {...form.register('effectiveTo')} />
-          </FormField>
-
-          <FormField
-            label="Reason for this revision"
-            htmlFor="note"
-            hint="Kept with the record and shown in the history - a promotion, an annual review, a correction."
-            className="sm:col-span-2"
-          >
-            <Textarea id="note" rows={2} {...form.register('note')} />
-          </FormField>
-        </form>
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" form="salary-form" disabled={save.isPending}>
-            {save.isPending ? 'Saving...' : isEdit ? 'Save changes' : 'Save salary'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // --------------------------------------------------------------- component form
 
 function ComponentDialog({
@@ -252,7 +96,7 @@ function ComponentDialog({
       componentId: '',
       value: 0,
       frequency: 'RECURRING',
-      effectiveFrom: new Date().toISOString().slice(0, 10),
+      effectiveFrom: todayLocal(),
       effectiveTo: null,
       isActive: true,
       note: null,
@@ -286,81 +130,86 @@ function ComponentDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>Add {label === 'allowance' ? 'an' : 'a'} {label}</DialogTitle>
         </DialogHeader>
 
         {choices.length === 0 ? (
-          <EmptyState
-            title={`No ${label} types defined`}
-            description={`${label === 'allowance' ? 'Allowances' : 'Deductions'} come from the salary component catalogue in Payroll. Add one there first.`}
-          />
+          <DialogBody>
+            <EmptyState
+              title={`No ${label} types defined`}
+              description={`${label === 'allowance' ? 'Allowances' : 'Deductions'} come from the salary component catalogue in Payroll. Add one there first.`}
+            />
+          </DialogBody>
         ) : (
           <>
-            <form
-              id="component-form"
-              onSubmit={form.handleSubmit((values) => save.mutate(values))}
-              className="grid gap-4 sm:grid-cols-2"
-            >
-              <FormField
-                label={label === 'allowance' ? 'Allowance' : 'Deduction'}
-                htmlFor="componentId"
-                error={form.formState.errors.componentId?.message}
-                className="sm:col-span-2"
+            <DialogBody>
+              <form
+                id="component-form"
+                onSubmit={form.handleSubmit((values) => save.mutate(values))}
+                className="grid gap-4 sm:grid-cols-2"
+                noValidate
               >
-                <NativeSelect id="componentId" {...form.register('componentId')}>
-                  {choices.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} &mdash; {PAYROLL_COMPONENT_CALC_LABELS[c.calc]}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </FormField>
+                <FormField
+                  label={label === 'allowance' ? 'Allowance' : 'Deduction'}
+                  htmlFor="componentId"
+                  error={form.formState.errors.componentId?.message}
+                  className="sm:col-span-2"
+                >
+                  <NativeSelect id="componentId" {...form.register('componentId')}>
+                    {choices.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} &mdash; {PAYROLL_COMPONENT_CALC_LABELS[c.calc]}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </FormField>
 
-              <FormField
-                label="Amount or percentage"
-                htmlFor="value"
-                hint="Read as money for a fixed component, and as a percentage for the others."
-                error={form.formState.errors.value?.message}
-              >
-                <Input id="value" type="number" step="0.01" min={0} {...form.register('value')} />
-              </FormField>
+                <FormField
+                  label="Amount or percentage"
+                  htmlFor="value"
+                  hint="Read as money for a fixed component, and as a percentage for the others."
+                  error={form.formState.errors.value?.message}
+                >
+                  <Input id="value" type="number" step="0.01" min={0} {...form.register('value')} />
+                </FormField>
 
-              <FormField label="Frequency" htmlFor="frequency">
-                <NativeSelect id="frequency" {...form.register('frequency')}>
-                  <option value="RECURRING">Every period</option>
-                  <option value="ONE_TIME">Once</option>
-                </NativeSelect>
-              </FormField>
+                <FormField label="Frequency" htmlFor="frequency">
+                  <NativeSelect id="frequency" {...form.register('frequency')}>
+                    <option value="RECURRING">Every period</option>
+                    <option value="ONE_TIME">Once</option>
+                  </NativeSelect>
+                </FormField>
 
-              <FormField
-                label="Start date"
-                htmlFor="componentFrom"
-                error={form.formState.errors.effectiveFrom?.message}
-              >
-                <Input id="componentFrom" type="date" {...form.register('effectiveFrom')} />
-              </FormField>
+                <FormField
+                  label="Start date"
+                  htmlFor="componentFrom"
+                  error={form.formState.errors.effectiveFrom?.message}
+                >
+                  <Input id="componentFrom" type="date" {...form.register('effectiveFrom')} />
+                </FormField>
 
-              <FormField
-                label="End date"
-                htmlFor="componentTo"
-                hint="Leave empty to continue indefinitely."
-                error={form.formState.errors.effectiveTo?.message}
-              >
-                <Input id="componentTo" type="date" {...form.register('effectiveTo')} />
-              </FormField>
+                <FormField
+                  label="End date"
+                  htmlFor="componentTo"
+                  hint="Leave empty to continue indefinitely."
+                  error={form.formState.errors.effectiveTo?.message}
+                >
+                  <Input id="componentTo" type="date" {...form.register('effectiveTo')} />
+                </FormField>
 
-              <FormField label="Note" htmlFor="componentNote" className="sm:col-span-2">
-                <Textarea id="componentNote" rows={2} {...form.register('note')} />
-              </FormField>
-            </form>
+                <FormField label="Note" htmlFor="componentNote" className="sm:col-span-2">
+                  <Textarea id="componentNote" rows={2} {...form.register('note')} />
+                </FormField>
+              </form>
+            </DialogBody>
             <DialogFooter>
-              <Button type="button" variant="ghost" onClick={onClose}>
+              <Button type="button" variant="ghost" onClick={onClose} disabled={save.isPending}>
                 Cancel
               </Button>
-              <Button type="submit" form="component-form" disabled={save.isPending}>
-                {save.isPending ? 'Saving...' : `Add ${label}`}
+              <Button type="submit" form="component-form" loading={save.isPending}>
+                {save.isPending ? 'Saving…' : `Add ${label}`}
               </Button>
             </DialogFooter>
           </>
@@ -372,7 +221,14 @@ function ComponentDialog({
 
 // -------------------------------------------------------------------- the panel
 
-export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
+export function EmployeeCompensation({
+  employeeId,
+  employeeName,
+}: {
+  employeeId: string;
+  /** For the salary dialog's Employee field; falls back to the salary records' own name. */
+  employeeName?: string;
+}) {
   const { has } = usePermissions();
   const canRead = has(PERMISSIONS.PAYROLL_READ);
   const canManage = has(PERMISSIONS.PAYROLL_MANAGE);
@@ -688,12 +544,14 @@ export function EmployeeCompensation({ employeeId }: { employeeId: string }) {
         <>
           <SalaryDialog
             employeeId={employeeId}
+            employeeName={employeeName ?? history[0]?.employeeName}
             currency={currency}
             open={salaryOpen}
             onClose={() => setSalaryOpen(false)}
           />
           <SalaryDialog
             employeeId={employeeId}
+            employeeName={employeeName ?? history[0]?.employeeName}
             currency={currency}
             existing={editing}
             open={editing !== null}

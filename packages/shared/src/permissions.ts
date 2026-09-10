@@ -47,6 +47,10 @@ export const PERMISSIONS = {
   // --- Time ---
   ATTENDANCE_READ: 'attendance.read',
   ATTENDANCE_MANAGE: 'attendance.manage',
+  /// Change the company attendance rules. Super Admin holds it through
+  /// settings.manage as well; this exists so HR Admin can be granted it on its
+  /// own, explicitly, without being handed every other system setting.
+  ATTENDANCE_RULES_MANAGE: 'attendance.rules.manage',
   SHIFT_READ: 'shift.read',
   SHIFT_MANAGE: 'shift.manage',
   TIMESHEET_READ: 'timesheet.read',
@@ -166,6 +170,11 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     permissions: [
       { value: PERMISSIONS.ATTENDANCE_READ, label: 'View attendance', description: 'See attendance records.' },
       { value: PERMISSIONS.ATTENDANCE_MANAGE, label: 'Manage attendance', description: 'Record and correct attendance.' },
+      {
+        value: PERMISSIONS.ATTENDANCE_RULES_MANAGE,
+        label: 'Manage attendance rules',
+        description: 'Change the company rules that decide what a day is worth. Super Admin only by default.',
+      },
       { value: PERMISSIONS.SHIFT_READ, label: 'View shifts', description: 'See shifts and assignments.' },
       { value: PERMISSIONS.SHIFT_MANAGE, label: 'Manage shifts', description: 'Create shifts and assign employees.' },
       { value: PERMISSIONS.TIMESHEET_READ, label: 'View timesheets', description: 'See timesheets.' },

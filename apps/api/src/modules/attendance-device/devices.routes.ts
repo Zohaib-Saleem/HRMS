@@ -28,6 +28,7 @@ import { isValidTimeZone } from '../../core/zoned-time.js';
 import { adapterFor, isPollable } from './registry.js';
 import { SyncInProgressError, connectionFor, syncDevice } from './sync.service.js';
 import { recalculateDays } from './attendance-import.service.js';
+import { mappingDate, setMapping } from './mapping.service.js';
 
 /**
  * Attendance terminal management.
@@ -587,7 +588,13 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ data, meta: { reachable, error } });
   });
 
-  /** Creates or updates one device-user mapping. */
+  /**
+   * Creates or corrects one device-user mapping, nested under its device.
+   *
+   * The same service the Device User Mapping screen uses, so the two paths
+   * cannot drift: effective-dated periods, no two employees on one PunchCode
+   * at once, and punches re-attributed only from the effective date onward.
+   */
   app.post(
     '/:id/mappings',
     { preHandler: requirePermission(PERMISSIONS.DEVICE_MANAGE) },
@@ -596,61 +603,50 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
       const { id } = parseOrThrow(idParamSchema, request.params);
       const input = parseOrThrow(deviceMappingSchema, request.body);
 
-      const [device, employee] = await Promise.all([
-        prisma.attendanceDevice.findFirst({
-          where: { id, companyId: auth.companyId },
-          select: { id: true, name: true },
-        }),
-        prisma.employee.findFirst({
-          where: { id: input.employeeId, companyId: auth.companyId },
-          select: { id: true, firstName: true, lastName: true, displayName: true },
-        }),
-      ]);
-      if (!device) throw new NotFoundError('Attendance device');
-      if (!employee) throw new ValidationError({ employeeId: ['That employee does not exist.'] });
-
-      const mapping = await prisma.attendanceDeviceUserMapping.upsert({
-        where: { deviceId_deviceUserId: { deviceId: id, deviceUserId: input.deviceUserId } },
-        create: {
-          companyId: auth.companyId,
-          deviceId: id,
-          deviceUserId: input.deviceUserId,
-          deviceUserName: input.deviceUserName ?? null,
-          employeeId: input.employeeId,
-          isActive: input.isActive,
-        },
-        update: {
-          employeeId: input.employeeId,
-          deviceUserName: input.deviceUserName ?? null,
-          isActive: input.isActive,
-        },
-      });
-
-      // Attribute anything already imported under this device user, so a
-      // mapping added after the fact rescues the punches rather than leaving
-      // them stranded.
-      const attributed = await prisma.attendanceRawPunch.updateMany({
-        where: { deviceId: id, deviceUserId: input.deviceUserId, employeeId: null },
-        data: { employeeId: input.employeeId },
+      const result = await setMapping({
+        companyId: auth.companyId,
+        deviceId: id,
+        deviceUserId: input.deviceUserId,
+        employeeId: input.employeeId,
+        deviceUserName: input.deviceUserName ?? null,
+        isActive: input.isActive,
+        effectiveFrom: mappingDate(input.effectiveFrom),
+        effectiveTo: mappingDate(input.effectiveTo),
+        notes: input.notes ?? null,
+        closeConflicting: input.closeConflicting,
       });
 
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
-        action: 'device.mapping.set',
+        action: result.before ? 'device.mapping.correct' : 'device.mapping.set',
         entityType: 'AttendanceDeviceUserMapping',
-        entityId: mapping.id,
-        summary: `Mapped device user ${input.deviceUserId} on "${device.name}" to ${displayName(employee)}${attributed.count ? `, attributing ${attributed.count} existing punch(es)` : ''}`,
-        after: { deviceUserId: input.deviceUserId, employeeId: input.employeeId },
+        entityId: result.id,
+        summary: result.summary,
+        before: result.before ?? undefined,
+        after: result.after,
         request,
       });
 
       return reply.status(201).send({
-        data: { id: mapping.id, attributedPunches: attributed.count },
+        data: {
+          id: result.id,
+          attributedPunches: result.reattributedPunches,
+          reattributedPunches: result.reattributedPunches,
+          affectedDays: result.affectedDays,
+          closedMappingId: result.closedMappingId,
+        },
       });
     },
   );
 
+  /**
+   * Retires a mapping.
+   *
+   * Deactivates rather than deletes. The punches it attributed keep their
+   * employee, and the row stays as the record of who held that PunchCode -
+   * deleting it would leave attributed punches with nothing behind them.
+   */
   app.delete(
     '/:id/mappings/:mappingId',
     { preHandler: requirePermission(PERMISSIONS.DEVICE_MANAGE) },
@@ -664,15 +660,20 @@ export const attendanceDeviceRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!mapping) throw new NotFoundError('Device user mapping');
 
-      await prisma.attendanceDeviceUserMapping.delete({ where: { id: mappingId } });
+      await prisma.attendanceDeviceUserMapping.update({
+        where: { id: mappingId },
+        data: { isActive: false },
+      });
 
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
-        action: 'device.mapping.remove',
+        action: 'device.mapping.disable',
         entityType: 'AttendanceDeviceUserMapping',
         entityId: mappingId,
         summary: `Unmapped device user ${mapping.deviceUserId}`,
+        before: { isActive: mapping.isActive },
+        after: { isActive: false },
         request,
       });
 
@@ -695,6 +696,14 @@ export const attendancePunchRoutes: FastifyPluginAsync = async (app) => {
         query.deviceId ? { deviceId: query.deviceId } : {},
         query.employeeId ? { employeeId: query.employeeId } : {},
         query.unmappedOnly === 'true' ? { employeeId: null } : {},
+        // Where the punch is in the pipeline. UNMAPPED has no employee at all;
+        // PENDING has one but has not been scored; PROCESSED has been.
+        query.processing === 'UNMAPPED' ? { employeeId: null } : {},
+        query.processing === 'PENDING' ? { employeeId: { not: null }, processedAt: null } : {},
+        query.processing === 'PROCESSED' ? { processedAt: { not: null } } : {},
+        // The company-local day the ingest assigned, not a UTC range: those
+        // are the same thing only for a company sitting on the meridian.
+        query.day ? { localDayKey: query.day } : {},
         query.from ? { punchedAt: { gte: new Date(query.from) } } : {},
         query.to ? { punchedAt: { lte: new Date(query.to) } } : {},
         query.q ? { deviceUserId: { contains: query.q, mode: 'insensitive' } } : {},
@@ -710,8 +719,16 @@ export const attendancePunchRoutes: FastifyPluginAsync = async (app) => {
         take,
         orderBy: { punchedAt: 'desc' },
         include: {
-          device: { select: { name: true } },
-          employee: { select: { firstName: true, lastName: true, displayName: true } },
+          device: { select: { name: true, serialNumber: true } },
+          employee: {
+            select: {
+              firstName: true,
+              lastName: true,
+              displayName: true,
+              employeeNumber: true,
+            },
+          },
+          sync: { select: { trigger: true } },
         },
       }),
     ]);
@@ -720,17 +737,22 @@ export const attendancePunchRoutes: FastifyPluginAsync = async (app) => {
       id: row.id,
       deviceId: row.deviceId,
       deviceName: row.device.name,
+      deviceSerial: row.device.serialNumber,
       deviceUserId: row.deviceUserId,
       employeeId: row.employeeId,
       employeeName: row.employee ? displayName(row.employee) : null,
+      employeeNumber: row.employee?.employeeNumber ?? null,
       rawTimestamp: row.rawTimestamp,
       deviceTimeZone: row.deviceTimeZone,
       punchedAt: row.punchedAt.toISOString(),
       localDayKey: row.localDayKey,
       punchState: row.punchState,
       verifyMode: row.verifyMode,
+      source: row.sync?.trigger ?? null,
       importedAt: row.importedAt.toISOString(),
       processedAt: row.processedAt?.toISOString() ?? null,
+      processingStatus:
+        row.employeeId === null ? 'UNMAPPED' : row.processedAt === null ? 'PENDING' : 'PROCESSED',
     }));
 
     return reply.send({ data, meta: buildMeta(query.page, query.limit, total) });

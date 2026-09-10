@@ -36,7 +36,7 @@ export interface AbsenceRunResult {
   };
 }
 
-const NON_WORKING = new Set(['WEEKEND', 'HOLIDAY']);
+const NON_WORKING = new Set(['WEEKEND', 'HOLIDAY', 'OFF_DAY']);
 
 /**
  * Marks absent every in-scope employee with no record for `date`.

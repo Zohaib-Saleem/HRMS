@@ -1,4 +1,5 @@
 import type { AttendancePolicyScope, WeekDay } from '@prisma/client';
+import type { AttendanceFlag } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { clockBoundary, dateColumnToDayKey, type DayKey } from '../../core/zoned-time.js';
 
@@ -56,10 +57,23 @@ export interface AttendancePolicy {
   missingCheckInStatus: MissingPunchRule;
   irregularCheckInMode: IrregularCutoffMode;
   irregularAfterShiftStartMinutes: number;
+
+  // --- attendance module (step 1) -----------------------------------------
+  /** Break assumed for the default window when no shift is assigned. */
+  defaultBreakMinutes: number;
+  /** Recorded lateness at or above this carries the LATE flag. Zero: any. */
+  lateThresholdMinutes: number;
+  /** Recorded early departure at or above this carries the EARLY_LEAVE flag. */
+  earlyLeaveThresholdMinutes: number;
+  weekendWorkRule: NonWorkingDayWorkRule;
+  holidayWorkRule: NonWorkingDayWorkRule;
 }
 
 /** How the irregular-arrival cutoff is expressed. */
 export type IrregularCutoffMode = 'ABSOLUTE_TIME' | 'AFTER_SHIFT_START';
+
+/** What time worked on a weekend or holiday is worth. */
+export type NonWorkingDayWorkRule = 'AS_WORKING_DAY' | 'ALL_OVERTIME' | 'IGNORE';
 
 /** What a day with a punch missing on one end is worth. */
 export type MissingPunchRule = 'PRESENT' | 'ABSENT' | 'THRESHOLD';
@@ -97,6 +111,11 @@ const POLICY_SELECT = {
   missingCheckInStatus: true,
   irregularCheckInMode: true,
   irregularAfterShiftStartMinutes: true,
+  defaultBreakMinutes: true,
+  lateThresholdMinutes: true,
+  earlyLeaveThresholdMinutes: true,
+  weekendWorkRule: true,
+  holidayWorkRule: true,
 } as const;
 
 /**
@@ -264,11 +283,106 @@ export async function weekendDaysFor(companyId: string): Promise<WeekDay[]> {
   return company.weekendDays;
 }
 
-export interface ShiftWindow {
+/**
+ * The rules a shift may override. Null inherits the company value, so a
+ * shift states only what is different about it and follows the baseline for
+ * everything else - exactly how the scoped policies already behave.
+ */
+export interface ShiftRules {
+  graceMinutes?: number | null;
+  earlyLeaveGraceMinutes?: number | null;
+  lateTrackingEnabled?: boolean | null;
+  earlyDepartureTrackingEnabled?: boolean | null;
+  overtimeEnabled?: boolean | null;
+  overtimeDailyCapMinutes?: number | null;
+  overtimeMinimumMinutes?: number | null;
+}
+
+export interface ShiftWindow extends ShiftRules {
   startTime: string;
   endTime: string;
   /** Only read when the company says the break sits outside the window. */
   breakMinutes?: number;
+  /** Rostered minutes. Null derives it from the window and the break. */
+  expectedMinutes?: number | null;
+  /** Empty means the company's working days. */
+  workingDays?: readonly WeekDay[];
+}
+
+const SHIFT_RULE_KEYS = [
+  'graceMinutes',
+  'earlyLeaveGraceMinutes',
+  'lateTrackingEnabled',
+  'earlyDepartureTrackingEnabled',
+  'overtimeEnabled',
+  'overtimeDailyCapMinutes',
+  'overtimeMinimumMinutes',
+] as const;
+
+export type ShiftRuleKey = (typeof SHIFT_RULE_KEYS)[number];
+
+/**
+ * The policy with the shift's own rules laid over it.
+ *
+ * The single merge point. Everything below that reads a grace period, a cap
+ * or a tracking switch reads the merged policy, so a shift with a twenty
+ * minute grace changes lateness, flags and overtime in step and nothing can
+ * read the company value by mistake.
+ */
+export function withShiftRules<P extends AttendancePolicy>(
+  policy: P,
+  shift: ShiftRules | null | undefined,
+): P & { shiftRuleKeys: ShiftRuleKey[] } {
+  const merged = { ...policy, shiftRuleKeys: [] as ShiftRuleKey[] };
+  if (!shift) return merged;
+  for (const key of SHIFT_RULE_KEYS) {
+    const value = shift[key];
+    if (value === null || value === undefined) continue;
+    (merged as unknown as Record<string, unknown>)[key] = value;
+    merged.shiftRuleKeys.push(key);
+  }
+  return merged;
+}
+
+/**
+ * The rostered length of a day, in minutes.
+ *
+ * The shift's own figure when it has one; otherwise the window, less the
+ * break when the company says the break sits outside it. An overnight window
+ * wraps past midnight rather than going negative.
+ */
+export function expectedMinutesFor(
+  shift: ShiftWindow,
+  policy: Pick<AttendancePolicy, 'breakIncludedInWindow'>,
+): number {
+  if (shift.expectedMinutes !== null && shift.expectedMinutes !== undefined) {
+    return Math.max(0, shift.expectedMinutes);
+  }
+  const start = minutesOfDay(shift.startTime);
+  const end = minutesOfDay(shift.endTime);
+  if (start === null || end === null) return 0;
+  const window = end > start ? end - start : 24 * 60 - start + end;
+  const deduction = policy.breakIncludedInWindow ? 0 : Math.max(0, shift.breakMinutes ?? 0);
+  return Math.max(0, window - deduction);
+}
+
+/**
+ * Whether a date is a working day for a shift.
+ *
+ * A shift with no working days listed follows the company: every day that is
+ * not a configured weekend day. A shift with a list works exactly those days,
+ * whatever the company weekend says - which is how a Sunday-to-Thursday team
+ * lives inside a Monday-to-Friday company.
+ */
+export function isShiftWorkingDay(
+  date: Date,
+  shift: Pick<ShiftWindow, 'workingDays'> | null,
+  weekendDays: readonly WeekDay[],
+): boolean {
+  const day = WEEKDAY_BY_INDEX[date.getUTCDay()];
+  if (day === undefined) return true;
+  if (shift?.workingDays && shift.workingDays.length > 0) return shift.workingDays.includes(day);
+  return !weekendDays.includes(day);
 }
 
 /** Minutes since midnight for an "HH:mm" string, or null if unparseable. */
@@ -378,9 +492,15 @@ export function overtimeMinutesFor(
  */
 export function effectiveShift(
   assigned: ShiftWindow | null,
-  policy: Pick<AttendancePolicy, 'defaultShiftStart' | 'defaultShiftEnd'>,
+  policy: Pick<AttendancePolicy, 'defaultShiftStart' | 'defaultShiftEnd' | 'defaultBreakMinutes'>,
 ): ShiftWindow {
-  return assigned ?? { startTime: policy.defaultShiftStart, endTime: policy.defaultShiftEnd };
+  return (
+    assigned ?? {
+      startTime: policy.defaultShiftStart,
+      endTime: policy.defaultShiftEnd,
+      breakMinutes: policy.defaultBreakMinutes,
+    }
+  );
 }
 
 /**
@@ -553,6 +673,8 @@ export interface AttendanceComputation {
    * was used instead - an irregular day, an overnight shift, or an open day.
    */
   scheduledMinutes: number | null;
+  /** The rostered length of the day the record was measured against. */
+  expectedMinutes: number;
 }
 
 /**
@@ -582,11 +704,14 @@ export function computeAttendance(input: {
   shift: ShiftWindow | null;
   policy: AttendancePolicy;
 }): AttendanceComputation {
-  const { checkInAt, checkOutAt, policy } = input;
+  const { checkInAt, checkOutAt } = input;
   const dayKey = typeof input.day === 'string' ? input.day : dateColumnToDayKey(input.day);
 
   // An assigned shift always wins; the company window is only the fallback.
-  const shift = effectiveShift(input.shift, policy);
+  // Its rule overrides are merged once, here, and everything below reads the
+  // merged policy.
+  const shift = effectiveShift(input.shift, input.policy);
+  const policy = withShiftRules(input.policy, input.shift);
   const irregular = isIrregularArrival(checkInAt, policy, dayKey, shift);
 
   /**
@@ -602,8 +727,7 @@ export function computeAttendance(input: {
       ? Math.max(0, Math.round((checkOutAt.getTime() - checkInAt.getTime()) / 60_000))
       : null;
 
-  const breakMinutes =
-    policy.breakIncludedInWindow || !input.shift ? 0 : Math.max(0, input.shift.breakMinutes ?? 0);
+  const breakMinutes = policy.breakIncludedInWindow ? 0 : Math.max(0, shift.breakMinutes ?? 0);
 
   const workedMinutes = rawMinutes === null ? null : Math.max(0, rawMinutes - breakMinutes);
 
@@ -686,7 +810,80 @@ export function computeAttendance(input: {
     status,
     irregular,
     scheduledMinutes,
+    expectedMinutes: expectedMinutesFor(shift, policy),
   };
+}
+
+/**
+ * What else was true about a day.
+ *
+ * Flags are derived, never stored: they are a reading of the figures under
+ * the thresholds in force, and a threshold can change. A late day is still
+ * PRESENT - the status says whether the day was worked, the flag says it was
+ * late. Nothing here downgrades a status.
+ */
+export function attendanceFlags(
+  day: {
+    status: string;
+    checkInAt: Date | string | null;
+    checkOutAt: Date | string | null;
+    lateMinutes: number | null;
+    earlyLeaveMinutes: number | null;
+    overtimeMinutes: number | null;
+    irregular: boolean;
+    source: string | null;
+    hasRecord: boolean;
+  },
+  policy: Pick<AttendancePolicy, 'lateThresholdMinutes' | 'earlyLeaveThresholdMinutes'>,
+): AttendanceFlag[] {
+  const flags: AttendanceFlag[] = [];
+  if (!day.hasRecord) return flags;
+
+  const late = day.lateMinutes ?? 0;
+  if (late > 0 && late >= policy.lateThresholdMinutes) flags.push('LATE');
+
+  const early = day.earlyLeaveMinutes ?? 0;
+  if (early > 0 && early >= policy.earlyLeaveThresholdMinutes) flags.push('EARLY_LEAVE');
+
+  if ((day.overtimeMinutes ?? 0) > 0) flags.push('OVERTIME');
+
+  // One punch without the other. A day with neither is absence, not a
+  // missing punch - there is nothing to pair.
+  const hasIn = day.checkInAt !== null;
+  const hasOut = day.checkOutAt !== null;
+  if (hasIn !== hasOut && (day.status === 'PRESENT' || day.status === 'HALF_DAY')) {
+    flags.push('MISSING_PUNCH');
+  }
+
+  if (day.irregular) flags.push('IRREGULAR');
+  if (day.source === 'ADMIN') flags.push('MANUAL');
+  return flags;
+}
+
+/**
+ * Overtime on a weekend or holiday, per the configured rule.
+ *
+ * Applied at derivation rather than at write time, so the day keeps the
+ * figures the engine stored and a company can change its mind without a
+ * recalculation. AS_WORKING_DAY - the default - returns the stored figure,
+ * which is what every existing day already reported.
+ */
+export function nonWorkingDayOvertime(
+  rule: NonWorkingDayWorkRule,
+  stored: { workedMinutes: number | null; overtimeMinutes: number | null },
+  policy: Pick<AttendancePolicy, 'overtimeEnabled' | 'overtimeDailyCapMinutes'>,
+): number | null {
+  switch (rule) {
+    case 'IGNORE':
+      return 0;
+    case 'ALL_OVERTIME': {
+      if (!policy.overtimeEnabled) return 0;
+      if (stored.workedMinutes === null) return null;
+      return Math.min(stored.workedMinutes, policy.overtimeDailyCapMinutes);
+    }
+    default:
+      return stored.overtimeMinutes;
+  }
 }
 
 // -------------------------------------------------------- network matching

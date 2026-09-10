@@ -179,6 +179,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     const workingDay =
       todayDay !== null &&
       todayDay.status !== 'WEEKEND' &&
+      todayDay.status !== 'OFF_DAY' &&
       todayDay.status !== 'HOLIDAY' &&
       todayDay.status !== 'ON_LEAVE';
 
@@ -191,7 +192,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
       else if (d.status === 'ABSENT') totals.absent += 1;
       else if (d.status === 'ON_LEAVE') totals.onLeave += 1;
       else if (d.status === 'HOLIDAY') totals.holiday += 1;
-      else if (d.status === 'WEEKEND') totals.weekend += 1;
+      else if (d.status === 'WEEKEND' || d.status === 'OFF_DAY') totals.weekend += 1;
       else if (d.status === 'UPCOMING') totals.upcoming += 1;
       if ((d.lateMinutes ?? 0) > 0) totals.lateDays += 1;
       totals.workedMinutes += d.workedMinutes ?? 0;

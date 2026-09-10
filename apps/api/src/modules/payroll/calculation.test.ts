@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculate,
+  capOvertime,
   resolveBasisDays,
   roundTo,
   tallyDays,
@@ -39,6 +40,7 @@ const CONFIG: EffectiveConfig = {
   // Off for most cases so overtime is exercised on its own; the approval gate
   // has its own tests below.
   requireApprovedOvertime: false,
+  overtimeCapMinutes: null,
   deductUnpaidAbsence: true,
   deductUnpaidLeave: true,
   lateDeductionMode: 'NONE',
@@ -206,6 +208,16 @@ describe('monthly salary', () => {
     expect(result.basisDays).toBe(30);
     expect(result.dailyRate).toBe(DAILY_RATE);
     expect(result.hourlyRate).toBe(HOURLY_RATE);
+  });
+
+  it('a fixed basis of 26 prices a day at 120,000 / 26, not / 30', () => {
+    // The basis is read from configuration, never assumed. An absence under
+    // a 26-day contract costs more than under a 30-day one, and should.
+    const month = [...days(21), ...days(1, { status: 'ABSENT', workedMinutes: null }), ...days(8, { status: 'WEEKEND' })];
+    const result = run({ segments: [segment(month)], config: { fixedBasisDays: 26 } });
+    expect(result.basisDays).toBe(26);
+    expect(result.dailyRate).toBe(roundTo(SALARY / 26, 2)); // 4,615.38
+    expect(result.deductions.find((d) => d.kind === 'ABSENCE')?.amount).toBe(roundTo(SALARY / 26, 2));
   });
 
   it('deducts an absence at the daily rate', () => {
@@ -473,6 +485,35 @@ describe('deductions', () => {
     });
     expect(charged.deductionsTotal).toBe(20 * 30 * 10);
   });
+
+  it('charges early leaving only when configured, after the payroll grace', () => {
+    // Three days leaving 25 minutes early, one leaving 5 minutes early.
+    const month = [
+      ...days(18),
+      ...days(3, { earlyLeaveMinutes: 25 }),
+      ...days(1, { earlyLeaveMinutes: 5 }),
+      ...days(8, { status: 'WEEKEND' }),
+    ];
+
+    expect(run({ segments: [segment(month)] }).deductionsTotal).toBe(0);
+
+    const perOccurrence = run({
+      segments: [segment(month)],
+      config: { earlyLeaveDeductionMode: 'PER_OCCURRENCE', earlyLeaveDeductionRate: 200, earlyLeaveGraceMinutes: 10 },
+    });
+    // The 5-minute day is inside the grace and does not count.
+    expect(perOccurrence.tally.earlyLeaveOccurrences).toBe(3);
+    expect(perOccurrence.deductions.find((d) => d.kind === 'EARLY_LEAVE')?.amount).toBe(3 * 200);
+
+    const perMinute = run({
+      segments: [segment(month)],
+      config: { earlyLeaveDeductionMode: 'PER_MINUTE', earlyLeaveDeductionRate: 10, earlyLeaveGraceMinutes: 10 },
+    });
+    // 25 - 10 grace = 15 chargeable minutes a day, three days.
+    expect(perMinute.tally.earlyLeaveMinutes).toBe(45);
+    expect(perMinute.deductions.find((d) => d.kind === 'EARLY_LEAVE')?.amount).toBe(45 * 10);
+    expect(perMinute.netAmount).toBe(SALARY - 450);
+  });
 });
 
 // --------------------------------------------------------------- adjustments
@@ -691,6 +732,174 @@ describe('the standard day is configuration', () => {
   });
 });
 
+// ---------------------------------------------------------------- overtime cap
+
+describe('overtime cap', () => {
+  const month = [...days(21), ...days(1, { overtimeMinutes: 240 }), ...days(8, { status: 'WEEKEND' })];
+
+  it('pays every minute when there is no cap', () => {
+    const result = run({ segments: [segment(month)], config: { overtimeCapMinutes: null } });
+    expect(result.paidOvertimeMinutes).toBe(240);
+    expect(result.cappedOvertimeMinutes).toBe(0);
+    expect(result.overtimeAmount).toBe(4 * HOURLY_RATE * 1.5);
+  });
+
+  it('pays up to the cap and reports the rest', () => {
+    // 4 hours worked, 2 allowed: 2 x 500 x 1.5 = 1,500, and 120 minutes go unpaid.
+    const result = run({ segments: [segment(month)], config: { overtimeCapMinutes: 120 } });
+    expect(result.paidOvertimeMinutes).toBe(120);
+    expect(result.cappedOvertimeMinutes).toBe(120);
+    expect(result.overtimeAmount).toBe(2 * HOURLY_RATE * 1.5);
+    expect(result.earnings.find((e) => e.kind === 'OVERTIME')?.units).toBe(2);
+  });
+
+  it('a cap of zero pays nothing and reports everything', () => {
+    const result = run({ segments: [segment(month)], config: { overtimeCapMinutes: 0 } });
+    expect(result.paidOvertimeMinutes).toBe(0);
+    expect(result.cappedOvertimeMinutes).toBe(240);
+    expect(result.overtimeAmount).toBe(0);
+    expect(result.grossAmount).toBe(SALARY);
+  });
+
+  it('a cap above what was worked changes nothing', () => {
+    const capped = run({ segments: [segment(month)], config: { overtimeCapMinutes: 600 } });
+    const open = run({ segments: [segment(month)], config: { overtimeCapMinutes: null } });
+    expect(capped.overtimeAmount).toBe(open.overtimeAmount);
+    expect(capped.cappedOvertimeMinutes).toBe(0);
+  });
+
+  it('caps the period total, not each day', () => {
+    // Three days of 60 minutes: 180 worked, 100 allowed. The cap is a ceiling
+    // on the period, so the third day is what falls outside it.
+    const spread = [...days(19), ...days(3, { overtimeMinutes: 60 }), ...days(8, { status: 'WEEKEND' })];
+    const result = run({ segments: [segment(spread)], config: { overtimeCapMinutes: 100 } });
+    expect(result.tally.overtimeMinutes).toBe(180);
+    expect(result.paidOvertimeMinutes).toBe(100);
+    expect(result.cappedOvertimeMinutes).toBe(80);
+    expect(result.overtimeAmount).toBe(roundTo((100 / 60) * HOURLY_RATE * 1.5, 2));
+  });
+
+  it('is applied after approval, so unapproved minutes never count against it', () => {
+    // 240 recorded, 60 approved, cap 120: the 60 approved are paid in full.
+    const mixed = [
+      ...days(20),
+      ...days(1, { overtimeMinutes: 180 }),
+      ...days(1, { overtimeMinutes: 60, overtimeApproved: true }),
+      ...days(8, { status: 'WEEKEND' }),
+    ];
+    const result = run({
+      segments: [segment(mixed)],
+      config: { requireApprovedOvertime: true, overtimeCapMinutes: 120 },
+    });
+    expect(result.tally.approvedOvertimeMinutes).toBe(60);
+    expect(result.paidOvertimeMinutes).toBe(60);
+    expect(result.cappedOvertimeMinutes).toBe(0);
+    expect(result.overtimeAmount).toBe(1 * HOURLY_RATE * 1.5);
+  });
+
+  it('spends the cap on ordinary overtime first, then weekend, then holiday', () => {
+    expect(capOvertime({ regular: 60, weekend: 60, holiday: 60 }, 90)).toEqual({
+      regular: 60,
+      weekend: 30,
+      holiday: 0,
+      capped: 90,
+    });
+    expect(capOvertime({ regular: 60, weekend: 60, holiday: 60 }, null)).toEqual({
+      regular: 60,
+      weekend: 60,
+      holiday: 60,
+      capped: 0,
+    });
+  });
+
+  it('the cap trims premium-rate weekend minutes before ordinary ones', () => {
+    // 120 ordinary at 1.5x and 120 weekend at 2x, cap 180: the ordinary
+    // 120 are paid in full and only 60 of the weekend minutes are.
+    const withWeekend = [
+      ...days(21),
+      ...days(1, { overtimeMinutes: 120 }),
+      ...days(7, { status: 'WEEKEND' }),
+      ...days(1, { status: 'WEEKEND', overtimeMinutes: 120 }),
+    ];
+    const result = run({
+      segments: [segment(withWeekend)],
+      config: { overtimeCapMinutes: 180, overtimeWeekendMultiplier: 2 },
+    });
+    expect(result.paidOvertimeMinutes).toBe(180);
+    expect(result.cappedOvertimeMinutes).toBe(60);
+    expect(result.overtimeAmount).toBe(roundTo(2 * HOURLY_RATE * 1.5 + 1 * HOURLY_RATE * 2, 2));
+  });
+});
+
+// ------------------------------------------------ the specification's example
+
+describe('the stated example: 120,000 a month, a 9-hour day', () => {
+  // 120,000 / 30 = 4,000 a day; 4,000 / 9 = 444.44 an hour. The multiplier
+  // is read from configuration each time, so 1.5x and 2x are both checked
+  // and neither is a constant in the engine.
+  const NINE: Partial<EffectiveConfig> = { standardHoursPerDay: 9 };
+  const month = [...days(21), ...days(1, { overtimeMinutes: 180, overtimeApproved: true }), ...days(8, { status: 'WEEKEND' })];
+
+  it('540 minutes is one working day and the rates follow the basis', () => {
+    const result = run({ segments: [segment(standardMonth())], config: NINE });
+    expect(9 * 60).toBe(540);
+    expect(result.dailyRate).toBe(4000);
+    expect(result.hourlyRate).toBe(roundTo(4000 / 9, 2));
+    expect(result.basicAmount).toBe(120000);
+  });
+
+  it('overtime pay = hourly rate x hours x multiplier, at 1.5x', () => {
+    const result = run({ segments: [segment(month)], config: { ...NINE, requireApprovedOvertime: true } });
+    expect(result.paidOvertimeMinutes).toBe(180);
+    expect(result.overtimeAmount).toBe(roundTo((4000 / 9) * 3 * 1.5, 2)); // 2,000.00
+    expect(result.grossAmount).toBe(120000 + 2000);
+  });
+
+  it('and at 2x, because the multiplier is configuration', () => {
+    const result = run({
+      segments: [segment(month)],
+      config: { ...NINE, requireApprovedOvertime: true, overtimeMultiplier: 2 },
+    });
+    expect(result.overtimeAmount).toBe(roundTo((4000 / 9) * 3 * 2, 2)); // 2,666.67
+  });
+
+  it('with overtime switched off, the same hours pay nothing', () => {
+    const result = run({ segments: [segment(month)], config: { ...NINE, overtimeMode: 'NONE' } });
+    expect(result.overtimeAmount).toBe(0);
+    expect(result.grossAmount).toBe(120000);
+  });
+
+  it('the whole formula: basic + allowance + overtime + bonus - deduction - unpaid leave - absence', () => {
+    // 21 present, 1 absent, 1 unpaid leave day... on a 9-hour day at 120,000.
+    const period = [
+      ...days(19),
+      ...days(1, { overtimeMinutes: 180, overtimeApproved: true }),
+      ...days(1, { status: 'ABSENT', workedMinutes: null }),
+      ...days(1, { status: 'ON_LEAVE', leaveIsPaid: false, leaveDayPart: 'FULL_DAY', workedMinutes: null }),
+      ...days(8, { status: 'WEEKEND', workedMinutes: null }),
+    ];
+    const result = run({
+      segments: [segment(period)],
+      config: { ...NINE, requireApprovedOvertime: true },
+      components: [
+        { componentId: 'c1', code: 'HRA', label: 'House rent', kind: 'EARNING', calc: 'FIXED', value: 10000, isTaxable: true },
+        { componentId: 'c2', code: 'PF', label: 'Provident fund', kind: 'DEDUCTION', calc: 'PERCENT_OF_BASIC', value: 5, isTaxable: false },
+      ],
+      adjustments: [{ id: 'a1', kind: 'EARNING', label: 'Performance bonus', amount: 5000 }],
+    });
+
+    const overtimePay = roundTo((4000 / 9) * 3 * 1.5, 2); // 2,000.00
+    expect(result.basicAmount).toBe(120000);
+    expect(result.overtimeAmount).toBe(overtimePay);
+    expect(result.grossAmount).toBe(120000 + 10000 + overtimePay + 5000); // 137,000
+    expect(result.deductions.find((d) => d.kind === 'ABSENCE')?.amount).toBe(4000);
+    expect(result.deductions.find((d) => d.kind === 'UNPAID_LEAVE')?.amount).toBe(4000);
+    expect(result.deductions.find((d) => d.code === 'PF')?.amount).toBe(6000); // 5% of 120,000
+    expect(result.deductionsTotal).toBe(4000 + 4000 + 6000);
+    expect(result.netAmount).toBe(137000 - 14000); // 123,000
+  });
+});
+
 // ------------------------------------------------------------------- lifecycle
 
 describe('run lifecycle', () => {
@@ -724,5 +933,106 @@ describe('run lifecycle', () => {
     for (const to of ['DRAFT', 'CALCULATING', 'REVIEW', 'APPROVED', 'FINALIZED']) {
       expect(canTransition('CANCELLED', to)).toBe(false);
     }
+  });
+});
+
+// -------------------------------------------------- the hand-checkable example
+
+/**
+ * The worked example, in full.
+ *
+ * Salary 120,000. A 30-day period: 20 days present, 2 days of paid leave,
+ * 3 days of unpaid absence, 5 weekend days. Two hours of approved overtime and
+ * a 10,000 allowance.
+ *
+ * The arithmetic, written out so it can be checked on paper:
+ *
+ *   daily rate     120,000 / 30 basis days              =   4,000.00
+ *   hourly rate      4,000 / 8 standard hours           =     500.00
+ *
+ *   basic          one salary, whole period             = 120,000.00
+ *   overtime       2 h x 500 x 1.5                      =   1,500.00
+ *   allowance      fixed                                =  10,000.00
+ *                                                        -----------
+ *   GROSS                                                 131,500.00
+ *
+ *   unpaid absence 3 days x 4,000                       =  12,000.00
+ *   paid leave     2 days, paid, nothing deducted       =       0.00
+ *                                                        -----------
+ *   DEDUCTIONS                                             12,000.00
+ *
+ *   NET            131,500 - 12,000                     = 119,500.00
+ *
+ * Scheduled days are 20 + 2 + 3 = 25; the 5 weekend days are nobody's
+ * expectation. Payable days are 25 - 3 = 22.
+ */
+describe('the worked example', () => {
+  const month = [
+    ...days(19),
+    // The two hours of approved overtime, on one of the twenty present days.
+    ...days(1, { overtimeMinutes: 120, overtimeApproved: true }),
+    ...days(2, {
+      status: 'ON_LEAVE',
+      leaveIsPaid: true,
+      leaveDayPart: 'FULL_DAY',
+      workedMinutes: null,
+    }),
+    ...days(3, { status: 'ABSENT', workedMinutes: null }),
+    ...days(5, { status: 'WEEKEND', workedMinutes: null }),
+  ];
+
+  const result = run({
+    segments: [segment(month)],
+    config: { requireApprovedOvertime: true },
+    components: [allowance({ value: 10000 })],
+  });
+
+  it('counts the period the way the example states it', () => {
+    expect(result.tally.scheduledDays).toBe(25);
+    expect(result.tally.presentDays).toBe(20);
+    expect(result.tally.paidLeaveDays).toBe(2);
+    expect(result.tally.absentDays).toBe(3);
+    expect(result.tally.weekendDays).toBe(5);
+    expect(result.payableDays).toBe(22);
+    expect(result.unpaidDays).toBe(3);
+  });
+
+  it('derives the rates from the basis, not from the calendar', () => {
+    expect(result.basisDays).toBe(30);
+    expect(result.dailyRate).toBe(4000);
+    expect(result.hourlyRate).toBe(500);
+  });
+
+  it('reaches 131,500 gross and 119,500 net, line by line', () => {
+    const line = (code: string) =>
+      [...result.earnings, ...result.deductions].find((l) => l.code === code);
+
+    expect(line('BASIC')?.amount).toBe(120000);
+    expect(line('OVERTIME')?.amount).toBe(1500);
+    expect(line('HOUSE')?.amount).toBe(10000);
+    expect(line('ABSENCE')?.amount).toBe(12000);
+    // Paid leave costs nothing: there is no line for it at all.
+    expect(line('UNPAID_LEAVE')).toBeUndefined();
+
+    expect(result.grossAmount).toBe(131500);
+    expect(result.deductionsTotal).toBe(12000);
+    expect(result.netAmount).toBe(119500);
+  });
+
+  it('pays no overtime at all when the approval is withheld', () => {
+    // The same period with the two hours unapproved: gross drops by exactly
+    // the overtime line and nothing else moves.
+    const unapproved = run({
+      segments: [
+        segment(
+          month.map((d) => (d.overtimeMinutes ? { ...d, overtimeApproved: false } : d)),
+        ),
+      ],
+      config: { requireApprovedOvertime: true },
+      components: [allowance({ value: 10000 })],
+    });
+
+    expect(unapproved.grossAmount).toBe(130000);
+    expect(unapproved.netAmount).toBe(118000);
   });
 });

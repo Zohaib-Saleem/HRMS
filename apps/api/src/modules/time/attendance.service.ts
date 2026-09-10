@@ -1,17 +1,23 @@
-import type { AttendanceStatus } from '@prisma/client';
-import type { DerivedAttendanceStatus } from '@hrms/shared';
+import type { AttendanceSource, WeekDay } from '@prisma/client';
+import type { AttendanceFlag, DerivedAttendanceStatus } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { ForbiddenError, ValidationError } from '../../core/errors.js';
 import { toDateOnly } from '../leave/leave.service.js';
 import { todayInZone } from '../../core/zoned-time.js';
 import {
+  attendanceFlags,
   computeAttendance,
+  effectiveShift,
+  expectedMinutesFor,
   haversineMeters,
   isIpAllowed,
+  isShiftWorkingDay,
   isWeekendFor,
+  nonWorkingDayOvertime,
   resolveAttendancePolicy,
   resolvePolicyFor,
   type AttendancePolicy,
+  type ShiftWindow,
 } from './attendance-policy.js';
 
 export { isWeekendFor } from './attendance-policy.js';
@@ -19,29 +25,39 @@ export { isWeekendFor } from './attendance-policy.js';
 /**
  * Daily attendance derivation.
  *
- * A day's status is not a free-text field someone types - it is decided by four
- * inputs, in this order of precedence:
+ * A day's status is not a free-text field someone types - it is decided by
+ * these inputs, in this order of precedence:
  *
- *   1. weekend   - from the company's configured weekendDays
- *   2. holiday   - from the employee's location calendar plus company-wide days
- *   3. on leave  - from approved leave covering the date
+ *   1. weekend / off day - from the company's weekendDays, or the working days
+ *                          of the shift in force when the shift lists any
+ *   2. holiday            - from the employee's location calendar plus company-wide days
+ *   3. on leave           - from approved leave covering the date
  *   4. the stored record, or ABSENT when there is none
  *
  * Weekend and holiday win over leave deliberately: booking leave across a
  * public holiday should not report the holiday as a day of leave, and the
  * working-day count in Phase 4 already excluded it from the balance.
+ *
+ * Flags are computed here from the stored figures and the rules in force, so
+ * a late day is reported PRESENT with a LATE flag rather than having its
+ * status replaced.
  */
 
 export interface DerivedDay {
   date: string;
   status: DerivedAttendanceStatus;
+  flags: AttendanceFlag[];
   checkInAt: string | null;
   checkOutAt: string | null;
   workedMinutes: number | null;
+  /** Rostered minutes on a working day; null on a day nobody was rostered for. */
+  expectedMinutes: number | null;
   lateMinutes: number | null;
   earlyLeaveMinutes: number | null;
   overtimeMinutes: number | null;
+  irregular: boolean;
   mode: string | null;
+  shiftId: string | null;
   shiftName: string | null;
   notes: string | null;
   /** Set when the day is covered by approved leave. */
@@ -59,11 +75,90 @@ export interface DerivedDay {
   leaveDayPart: string | null;
   /** Set when the day is a holiday that applies to this employee. */
   holidayName: string | null;
+  source: AttendanceSource | null;
+  recordId: string | null;
   /** True when a stored record exists; false when the status is inferred. */
   hasRecord: boolean;
 }
 
 const dateKey = (d: Date) => d.toISOString().slice(0, 10);
+
+/** The shift fields the engine and the screens read. */
+export const SHIFT_WINDOW_SELECT = {
+  id: true,
+  name: true,
+  startTime: true,
+  endTime: true,
+  breakMinutes: true,
+  expectedMinutes: true,
+  workingDays: true,
+  graceMinutes: true,
+  earlyLeaveGraceMinutes: true,
+  lateTrackingEnabled: true,
+  earlyDepartureTrackingEnabled: true,
+  overtimeEnabled: true,
+  overtimeDailyCapMinutes: true,
+  overtimeMinimumMinutes: true,
+} as const;
+
+export interface ResolvedShift extends ShiftWindow {
+  id: string;
+  name: string;
+  breakMinutes: number;
+  workingDays: WeekDay[];
+}
+
+/**
+ * Every shift assignment touching a range, grouped by employee and ordered so
+ * the latest-starting assignment comes first - the same tie-break
+ * `shiftOnDate` uses, so a range and a single day can never disagree.
+ */
+export async function shiftAssignmentsForRange(
+  employeeIds: readonly string[],
+  from: Date,
+  to: Date,
+): Promise<Map<string, Array<{ effectiveFrom: Date; effectiveTo: Date | null; shift: ResolvedShift }>>> {
+  const result = new Map<
+    string,
+    Array<{ effectiveFrom: Date; effectiveTo: Date | null; shift: ResolvedShift }>
+  >();
+  if (employeeIds.length === 0) return result;
+
+  const rows = await prisma.employeeShiftAssignment.findMany({
+    where: {
+      employeeId: { in: [...employeeIds] },
+      effectiveFrom: { lte: to },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: from } }],
+    },
+    select: {
+      employeeId: true,
+      effectiveFrom: true,
+      effectiveTo: true,
+      shift: { select: SHIFT_WINDOW_SELECT },
+    },
+    orderBy: { effectiveFrom: 'desc' },
+  });
+
+  for (const row of rows) {
+    const list = result.get(row.employeeId);
+    const entry = { effectiveFrom: row.effectiveFrom, effectiveTo: row.effectiveTo, shift: row.shift };
+    if (list) list.push(entry);
+    else result.set(row.employeeId, [entry]);
+  }
+  return result;
+}
+
+/** The assignment covering one day, from a list ordered latest-first. */
+export function assignmentOn<T extends { effectiveFrom: Date; effectiveTo: Date | null }>(
+  assignments: readonly T[],
+  key: string,
+): T | null {
+  return (
+    assignments.find(
+      (a) => dateKey(a.effectiveFrom) <= key && (a.effectiveTo === null || dateKey(a.effectiveTo) >= key),
+    ) ?? null
+  );
+}
 
 /**
  * Derivation for several employees at once.
@@ -84,7 +179,7 @@ export async function deriveRangeForEmployees(
 
   const employeeIds = employees.map((e) => e.id);
 
-  const [policy, records, leave, holidayRows] = await Promise.all([
+  const [policy, records, leave, holidayRows, assignments] = await Promise.all([
     resolveAttendancePolicy(companyId),
     prisma.attendanceRecord.findMany({
       where: { employeeId: { in: employeeIds }, date: { gte: from, lte: to } },
@@ -103,6 +198,7 @@ export async function deriveRangeForEmployees(
       where: { companyId, isActive: true, date: { gte: from, lte: to } },
       select: { date: true, name: true, locationId: true },
     }),
+    shiftAssignmentsForRange(employeeIds, from, to),
   ]);
 
   const recordsByEmployee = new Map<string, Map<string, (typeof records)[number]>>();
@@ -126,6 +222,7 @@ export async function deriveRangeForEmployees(
   for (const employee of employees) {
     const recordByDate = recordsByEmployee.get(employee.id) ?? new Map();
     const employeeLeave = leaveByEmployee.get(employee.id) ?? [];
+    const employeeShifts = assignments.get(employee.id) ?? [];
 
     // Only holidays that apply to this employee: their location plus company-wide.
     const holidayByDate = new Map<string, string>();
@@ -140,45 +237,86 @@ export async function deriveRangeForEmployees(
       const key = dateKey(d);
       const record = recordByDate.get(key);
       const holidayName = holidayByDate.get(key) ?? null;
+      const assigned = assignmentOn(employeeShifts, key)?.shift ?? null;
 
       const onLeave = employeeLeave.find(
         (l) => dateKey(l.startDate) <= key && dateKey(l.endDate) >= key,
       );
 
       /**
-       * Order matters. Weekend, holiday and approved leave describe the day
-       * itself and hold whether it is past or future. A stored record is fact.
-       * Only then does the absence of a record mean anything - and it means
-       * "absent" solely for a day that has already happened. A working day in
-       * the future is UPCOMING: nobody has failed to attend a day that has not
-       * arrived.
+       * Which calendar decides whether this is a working day.
+       *
+       * A shift that lists its working days decides for the people on it; a
+       * shift that lists none follows the company weekend. A day the shift
+       * does not work that is not a company weekend is an OFF_DAY: rostered
+       * off, not a weekend and not an absence.
+       */
+      const companyWeekend = isWeekendFor(d, policy.weekendDays);
+      const shiftDecides = (assigned?.workingDays.length ?? 0) > 0;
+      const working = isShiftWorkingDay(d, assigned, policy.weekendDays);
+
+      /**
+       * Order matters. Weekend, off day, holiday and approved leave describe
+       * the day itself and hold whether it is past or future. A stored record
+       * is fact. Only then does the absence of a record mean anything - and it
+       * means "absent" solely for a day that has already happened. A working
+       * day in the future is UPCOMING: nobody has failed to attend a day that
+       * has not arrived.
        */
       let status: DerivedAttendanceStatus;
-      if (isWeekendFor(d, policy.weekendDays)) status = 'WEEKEND';
+      if (!working) status = companyWeekend || !shiftDecides ? 'WEEKEND' : 'OFF_DAY';
       else if (holidayName) status = 'HOLIDAY';
       else if (onLeave) status = 'ON_LEAVE';
       else if (record) status = record.status;
       else if (key > todayKey) status = 'UPCOMING';
       else status = 'ABSENT';
 
-      days.push({
+      /**
+       * Overtime on a day nobody was rostered for follows the company rule,
+       * read at derivation so a change of rule needs no recalculation. A
+       * working day reports exactly what the engine stored.
+       */
+      const stored = {
+        workedMinutes: record?.workedMinutes ?? null,
+        overtimeMinutes: record?.overtimeMinutes ?? null,
+      };
+      const overtimeMinutes = !record
+        ? null
+        : status === 'HOLIDAY'
+          ? nonWorkingDayOvertime(policy.holidayWorkRule, stored, policy)
+          : status === 'WEEKEND' || status === 'OFF_DAY'
+            ? nonWorkingDayOvertime(policy.weekendWorkRule, stored, policy)
+            : stored.overtimeMinutes;
+
+      const expectedMinutes = working
+        ? expectedMinutesFor(effectiveShift(assigned, policy), policy)
+        : null;
+
+      const base = {
         date: key,
         status,
         checkInAt: record?.checkInAt?.toISOString() ?? null,
         checkOutAt: record?.checkOutAt?.toISOString() ?? null,
         workedMinutes: record?.workedMinutes ?? null,
+        expectedMinutes,
         lateMinutes: record?.lateMinutes ?? null,
         earlyLeaveMinutes: record?.earlyLeaveMinutes ?? null,
-        overtimeMinutes: record?.overtimeMinutes ?? null,
+        overtimeMinutes,
+        irregular: record?.irregular ?? false,
         mode: record?.mode ?? null,
-        shiftName: record?.shift?.name ?? null,
+        shiftId: record?.shiftId ?? assigned?.id ?? null,
+        shiftName: record?.shift?.name ?? assigned?.name ?? null,
         notes: record?.notes ?? null,
         leaveTypeName: onLeave?.leaveType.name ?? null,
         leaveIsPaid: onLeave ? onLeave.leaveType.isPaid : null,
         leaveDayPart: onLeave ? onLeave.dayPart : null,
         holidayName,
+        source: record?.source ?? null,
+        recordId: record?.id ?? null,
         hasRecord: record !== undefined,
-      });
+      };
+
+      days.push({ ...base, flags: attendanceFlags(base, policy) });
     }
 
     result.set(employee.id, days);
@@ -207,11 +345,14 @@ export async function deriveRange(
   return byEmployee.get(employeeId) ?? [];
 }
 
-/** The shift in force for an employee on a given date, if any. */
-export async function shiftOnDate(
-  employeeId: string,
-  date: Date,
-): Promise<{ id: string; name: string; startTime: string; endTime: string } | null> {
+/**
+ * The shift in force for an employee on a given date, if any.
+ *
+ * Returns the whole window including the shift's rule overrides, so the engine
+ * scores the day against the shift's own grace and caps and not only its
+ * times.
+ */
+export async function shiftOnDate(employeeId: string, date: Date): Promise<ResolvedShift | null> {
   const assignment = await prisma.employeeShiftAssignment.findFirst({
     where: {
       employeeId,
@@ -219,7 +360,7 @@ export async function shiftOnDate(
       OR: [{ effectiveTo: null }, { effectiveTo: { gte: date } }],
     },
     orderBy: { effectiveFrom: 'desc' },
-    include: { shift: { select: { id: true, name: true, startTime: true, endTime: true } } },
+    include: { shift: { select: SHIFT_WINDOW_SELECT } },
   });
 
   return assignment?.shift ?? null;
@@ -363,6 +504,7 @@ export async function applyRegularization(regularizationId: string): Promise<voi
     lateMinutes: computed.lateMinutes,
     earlyLeaveMinutes: computed.earlyLeaveMinutes,
     overtimeMinutes: computed.overtimeMinutes,
+    irregular: computed.irregular,
     shiftId: shift?.id ?? existing?.shiftId ?? null,
     notes: note,
     // The value came from an approval decision, not from the person.

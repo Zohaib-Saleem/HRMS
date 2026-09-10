@@ -57,6 +57,13 @@ export interface EffectiveConfig {
   overtimeMultiplier: number;
   overtimeFixedRate: number;
   requireApprovedOvertime: boolean;
+  /**
+   * Most overtime minutes paid in the period, or null for no ceiling. The
+   * attendance engine has already applied the attendance policy's daily,
+   * weekly and monthly caps to what it reported; this sits on top as a pay
+   * rule, so a company can pay at most, say, 40 hours a month regardless.
+   */
+  overtimeCapMinutes: number | null;
 
   deductUnpaidAbsence: boolean;
   deductUnpaidLeave: boolean;
@@ -159,6 +166,10 @@ export interface CalculationResult {
   unpaidDays: number;
   basicAmount: number;
   overtimeAmount: number;
+  /** Minutes the overtime line actually priced, after approval and the cap. */
+  paidOvertimeMinutes: number;
+  /** Minutes the payroll cap refused to pay. Zero when there is no cap. */
+  cappedOvertimeMinutes: number;
   earnings: MoneyLine[];
   deductions: MoneyLine[];
   earningsTotal: number;
@@ -224,7 +235,7 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
     // A non-working day is not a scheduled day and nobody is short for it -
     // but time worked on one is still time worked, and is priced at its own
     // multiplier below. Counted here before the day is skipped.
-    if (day.status === 'WEEKEND') {
+    if (day.status === 'WEEKEND' || day.status === 'OFF_DAY') {
       tally.weekendDays += 1;
       tally.weekendOvertimeMinutes += day.overtimeMinutes ?? 0;
       continue;
@@ -287,6 +298,44 @@ export function tallyDays(days: readonly DayFact[], config: EffectiveConfig): At
   }
 
   return tally;
+}
+
+/**
+ * Applies the payroll overtime ceiling.
+ *
+ * The cap is a total for the period. Ordinary overtime is paid first, then
+ * weekend, then holiday, so that when a ceiling bites it is the premium-rate
+ * minutes that go unpaid rather than the ordinary ones - the conservative
+ * reading, and the one a reviewer can check by adding three numbers. A null
+ * cap returns the input untouched, which is what every run before the cap
+ * existed did.
+ */
+export function capOvertime(
+  minutes: { regular: number; weekend: number; holiday: number },
+  capMinutes: number | null,
+): { regular: number; weekend: number; holiday: number; capped: number } {
+  const regular = Math.max(0, minutes.regular);
+  const weekend = Math.max(0, minutes.weekend);
+  const holiday = Math.max(0, minutes.holiday);
+  if (capMinutes === null || !Number.isFinite(capMinutes)) {
+    return { regular, weekend, holiday, capped: 0 };
+  }
+
+  let remaining = Math.max(0, capMinutes);
+  const take = (value: number): number => {
+    const paid = Math.min(value, remaining);
+    remaining -= paid;
+    return paid;
+  };
+  const paidRegular = take(regular);
+  const paidWeekend = take(weekend);
+  const paidHoliday = take(holiday);
+  return {
+    regular: paidRegular,
+    weekend: paidWeekend,
+    holiday: paidHoliday,
+    capped: regular + weekend + holiday - (paidRegular + paidWeekend + paidHoliday),
+  };
 }
 
 /**
@@ -422,16 +471,27 @@ export function calculate(input: {
   basicAmount = round(basicAmount);
 
   // --- overtime ---------------------------------------------------------------
-  const overtimeMinutes = config.requireApprovedOvertime
-    ? tally.approvedOvertimeMinutes
-    : tally.overtimeMinutes;
-  const overtimeHours = overtimeMinutes / 60;
+  // Minutes come from the attendance engine, which already applied the
+  // attendance policy's own caps. Payroll decides two further things and no
+  // more: whether unapproved minutes are paid, and whether a pay ceiling trims
+  // the total. It never re-derives a minute from a punch.
+  const eligible = capOvertime(
+    {
+      regular: config.requireApprovedOvertime
+        ? tally.approvedOvertimeMinutes
+        : tally.overtimeMinutes,
+      weekend: tally.weekendOvertimeMinutes,
+      holiday: tally.holidayOvertimeMinutes,
+    },
+    config.overtimeCapMinutes,
+  );
+  const overtimeHours = eligible.regular / 60;
 
   // Weekend and holiday overtime is priced at its own multiplier when one is
   // configured, and at the ordinary one when it is not - which is exactly the
   // behaviour before these settings existed.
-  const weekendHours = tally.weekendOvertimeMinutes / 60;
-  const holidayHours = tally.holidayOvertimeMinutes / 60;
+  const weekendHours = eligible.weekend / 60;
+  const holidayHours = eligible.holiday / 60;
 
   let overtimeAmount = 0;
   if (config.overtimeMode === 'MULTIPLIER') {
@@ -670,6 +730,8 @@ export function calculate(input: {
     unpaidDays: roundTo(unpaidDays, 2),
     basicAmount,
     overtimeAmount,
+    paidOvertimeMinutes: eligible.regular + eligible.weekend + eligible.holiday,
+    cappedOvertimeMinutes: eligible.capped,
     earnings,
     deductions,
     earningsTotal,

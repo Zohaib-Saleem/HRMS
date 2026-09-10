@@ -123,3 +123,32 @@ describe('what counts as unavailable', () => {
     expect(isUnreachable(notDeployed)).toBe(false);
   });
 });
+
+describe('device user mapping', () => {
+  it('is gated on the device permission, not on company.read', () => {
+    // The tab opens the endpoints that decide which employee a terminal
+    // PunchCode belongs to. Those check `device.read`, so the tab has to check
+    // the same thing - a tab that appears and then 403s is worse than absent.
+    const withoutDevices = visibleTabs(TABS, {
+      has: SUPER_ADMIN,
+      capabilities: { attendanceRules: 'available' },
+    });
+    expect(label(withoutDevices)).not.toContain('Device user mapping');
+
+    const withDevices = visibleTabs(TABS, {
+      has: holding(
+        PERMISSIONS.COMPANY_READ,
+        PERMISSIONS.DEVICE_READ,
+      ),
+      capabilities: { attendanceRules: 'available' },
+    });
+    expect(label(withDevices)).toContain('Device user mapping');
+  });
+
+  it('stays hidden from a manager and an employee', () => {
+    for (const has of [MANAGER, EMPLOYEE]) {
+      const tabs = visibleTabs(TABS, { has, capabilities: { attendanceRules: 'available' } });
+      expect(label(tabs)).not.toContain('Device user mapping');
+    }
+  });
+});

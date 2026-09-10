@@ -107,8 +107,13 @@ export const PAYROLL_EXCEPTION_CODES = [
   'UNAPPROVED_OVERTIME',
   'NON_POSITIVE_NET',
   'INCOMPLETE_EMPLOYEE',
+  'OVERTIME_CAPPED',
 ] as const;
 export type PayrollExceptionCode = (typeof PAYROLL_EXCEPTION_CODES)[number];
+
+/** BLOCKING stops finalization; WARNING is recorded and shown but does not. */
+export const PAYROLL_EXCEPTION_SEVERITIES = ['BLOCKING', 'WARNING'] as const;
+export type PayrollExceptionSeverity = (typeof PAYROLL_EXCEPTION_SEVERITIES)[number];
 
 export const PAYROLL_EXCEPTION_LABELS: Record<PayrollExceptionCode, string> = {
   MISSING_SALARY: 'No salary on record',
@@ -119,6 +124,7 @@ export const PAYROLL_EXCEPTION_LABELS: Record<PayrollExceptionCode, string> = {
   UNAPPROVED_OVERTIME: 'Overtime not approved',
   NON_POSITIVE_NET: 'Net pay is zero or negative',
   INCOMPLETE_EMPLOYEE: 'Employee record incomplete',
+  OVERTIME_CAPPED: 'Overtime above the payroll cap',
 };
 
 /** A calendar day, `YYYY-MM-DD`. */
@@ -154,6 +160,28 @@ export const payrollSettingsSchema = z.object({
   overtimeMultiplier: z.coerce.number().min(0).max(10).default(1.5),
   overtimeFixedRate: money().default(0),
   requireApprovedOvertime: z.boolean().default(true),
+  /**
+   * Most overtime minutes paid per employee per period. Null - the default -
+   * pays whatever the attendance engine reported after its own policy caps.
+   */
+  overtimeCapMinutes: z.coerce
+    .number()
+    .int('Use whole minutes.')
+    .min(0, 'The cap cannot be negative.')
+    .max(44_640, 'A cap cannot exceed a month of minutes.')
+    .nullable()
+    .optional(),
+  /**
+   * Scheduled minutes assumed for a working day with no shift assignment. A
+   * 9-hour day is 540. This is the fallback, not the roster: an assigned shift
+   * always wins.
+   */
+  fallbackScheduledMinutes: z.coerce
+    .number()
+    .int('Use whole minutes.')
+    .min(60, 'A working day is at least an hour.')
+    .max(1440, 'A day has 1440 minutes.')
+    .default(480),
 
   deductUnpaidAbsence: z.boolean().default(true),
   deductUnpaidLeave: z.boolean().default(true),
@@ -453,6 +481,8 @@ export interface PayrollLineRecord {
   earlyLeaveMinutes: number;
   overtimeMinutes: number;
   approvedOvertimeMinutes: number;
+  /** Minutes the overtime line priced, after approval and the payroll cap. */
+  paidOvertimeMinutes: number;
 
   basicAmount: number;
   overtimeAmount: number;
@@ -667,6 +697,7 @@ export interface PayrollReconciliation {
     weekendDays: number;
     overtimeMinutes: number;
     approvedOvertimeMinutes: number;
+    paidOvertimeMinutes: number;
     lateOccurrences: number;
     lateMinutes: number;
     earlyLeaveOccurrences: number;
@@ -689,4 +720,108 @@ export interface PayrollReconciliation {
   };
   earnings: PayrollMoneyLine[];
   deductions: PayrollMoneyLine[];
+}
+
+// ------------------------------------------------------------------ preview
+
+/**
+ * The payroll preview.
+ *
+ * The same calculation a run performs, computed and thrown away. Nothing is
+ * written: no lines, no exceptions, no adjustment is claimed, no run changes
+ * status. That is the whole point - it answers "what would this pay?" before
+ * anybody commits to it, and it can be asked of a period that has no run yet.
+ *
+ * Because it is the same code path, a preview and the run that follows it
+ * cannot disagree about anything except facts that changed in between.
+ */
+export const payrollPreviewQuerySchema = z.object({
+  /** An existing run. Its period and settings are used. */
+  runId: z.string().trim().max(64).optional(),
+  /** Or a period, for a preview before a run exists. */
+  periodId: z.string().trim().max(64).optional(),
+  /** Or an explicit range, for a what-if. */
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  employeeId: z.string().trim().max(64).optional(),
+  departmentId: z.string().trim().max(64).optional(),
+  format: z.enum(['json', 'csv']).default('json'),
+});
+
+export type PayrollPreviewQuery = z.infer<typeof payrollPreviewQuerySchema>;
+
+/** One employee's line of the preview, in the order the screen shows them. */
+export interface PayrollPreviewRow {
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  departmentName: string | null;
+  currency: string;
+  salaryType: PayrollSalaryType;
+  /** The salary in force at the end of the period. */
+  basicSalary: number;
+  /** More than one when the salary changed mid-period. */
+  salarySegments: number;
+  basis: PayrollBasis;
+  basisDays: number;
+  dailyRate: number;
+  hourlyRate: number;
+
+  scheduledDays: number;
+  paidDays: number;
+  presentDays: number;
+  absentDays: number;
+  unpaidLeaveDays: number;
+  paidLeaveDays: number;
+  holidayDays: number;
+  weekendDays: number;
+
+  allowances: number;
+  overtimeHours: number;
+  overtimeAmount: number;
+  lateDeduction: number;
+  earlyLeaveDeduction: number;
+  absenceDeduction: number;
+  otherDeductions: number;
+  deductionsTotal: number;
+  adjustmentTotal: number;
+
+  basicAmount: number;
+  grossAmount: number;
+  netAmount: number;
+
+  earnings: PayrollMoneyLine[];
+  deductions: PayrollMoneyLine[];
+  /** Exception messages that apply to this employee, worst first. */
+  notes: string[];
+  /** True when a blocking exception means no line would be produced. */
+  blocked: boolean;
+}
+
+export interface PayrollPreview {
+  from: string;
+  to: string;
+  periodId: string | null;
+  runId: string | null;
+  runStatus: string | null;
+  currency: string;
+  generatedAt: string;
+  rows: PayrollPreviewRow[];
+  totals: {
+    employees: number;
+    blocked: number;
+    basicAmount: number;
+    allowances: number;
+    overtimeAmount: number;
+    deductionsTotal: number;
+    grossAmount: number;
+    netAmount: number;
+  };
+  /** Every exception the calculation raised, blocking ones first. */
+  exceptions: Array<{
+    code: PayrollExceptionCode;
+    severity: PayrollExceptionSeverity;
+    message: string;
+    employeeId: string | null;
+  }>;
 }

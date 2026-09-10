@@ -1,6 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  ATTENDANCE_RULE_DEFAULTS,
   PERMISSIONS,
+  type AttendancePayrollIntegrationView,
+  type AttendanceRuleValues,
   type AttendanceRulesView,
   attendancePolicySchema,
   attendanceRulesSchema,
@@ -10,7 +13,11 @@ import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { diff, recordAudit } from '../../core/audit.js';
 import { ForbiddenError, ValidationError } from '../../core/errors.js';
-import { requireAuthContext, requirePermission } from '../../auth/guards.js';
+import {
+  requireAnyPermission,
+  requireAuthContext,
+  requirePermission,
+} from '../../auth/guards.js';
 import { hasFullScope } from '../../auth/scope.js';
 import type { AuthContext } from '../../auth/session.js';
 
@@ -162,12 +169,14 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
   // --- attendance rules ----------------------------------------------------
   //
   // The same Company row the attendance policy above writes to, behind a
-  // narrower gate. `settings.manage` is held by Super Admin alone, so HR Admin
-  // keeps the policy screen it already had and does not gain these.
+  // narrower gate. `settings.manage` is Super Admin's; `attendance.rules.manage`
+  // exists so HR Admin can be granted these explicitly, on their own, without
+  // being handed every other system setting.
 
   const RULE_FIELDS = {
     defaultShiftStart: true,
     defaultShiftEnd: true,
+    defaultBreakMinutes: true,
     overtimeEnabled: true,
     overtimeFromShiftEnd: true,
     overtimeCountsEarlyArrival: true,
@@ -175,8 +184,10 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     overtimeDailyCapMinutes: true,
     lateTrackingEnabled: true,
     graceMinutes: true,
+    lateThresholdMinutes: true,
     earlyDepartureTrackingEnabled: true,
     earlyLeaveGraceMinutes: true,
+    earlyLeaveThresholdMinutes: true,
     fullDayToleranceMinutes: true,
     irregularCheckInEnabled: true,
     irregularCheckInCutoff: true,
@@ -189,6 +200,8 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     overtimeMonthlyCapMinutes: true,
     missingCheckOutStatus: true,
     missingCheckInStatus: true,
+    weekendWorkRule: true,
+    holidayWorkRule: true,
     timezone: true,
     weekendDays: true,
     halfDayMinutes: true,
@@ -196,30 +209,88 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     overtimeAfterMinutes: true,
   } as const;
 
-  /** Readable by anyone who may read the company; only Super Admin may write. */
+  /** Whoever may change the rules: Super Admin, or HR granted them explicitly. */
+  const canManageRules = (auth: AuthContext): boolean =>
+    auth.permissions.has(PERMISSIONS.SETTINGS_MANAGE) ||
+    auth.permissions.has(PERMISSIONS.ATTENDANCE_RULES_MANAGE);
+
+  /**
+   * The pay-side switches shown beside the attendance rules they depend on.
+   *
+   * Read from payroll settings, never copied: "does lateness cost money?" is
+   * one fact, and two screens storing their own answer to it is how a company
+   * ends up deducting for something it switched off.
+   */
+  const payrollIntegrationFor = async (
+    companyId: string,
+  ): Promise<AttendancePayrollIntegrationView | null> => {
+    const settings = await prisma.payrollSettings.findUnique({
+      where: { companyId },
+      select: {
+        deductUnpaidAbsence: true,
+        deductUnpaidLeave: true,
+        lateDeductionMode: true,
+        earlyLeaveDeductionMode: true,
+        overtimeMode: true,
+        requireApprovedOvertime: true,
+        overtimeMultiplier: true,
+        overtimeCapMinutes: true,
+      },
+    });
+    if (!settings) return null;
+    return {
+      deductUnpaidAbsence: settings.deductUnpaidAbsence,
+      deductUnpaidLeave: settings.deductUnpaidLeave,
+      lateDeductionEnabled: settings.lateDeductionMode !== 'NONE',
+      earlyLeaveDeductionEnabled: settings.earlyLeaveDeductionMode !== 'NONE',
+      overtimePaid: settings.overtimeMode !== 'NONE',
+      requireApprovedOvertime: settings.requireApprovedOvertime,
+      overtimeMultiplier: Number(settings.overtimeMultiplier),
+      overtimeCapMinutes: settings.overtimeCapMinutes,
+    };
+  };
+
+  const ruleView = (
+    row: Record<string, unknown>,
+    canManage: boolean,
+    payrollIntegration: AttendancePayrollIntegrationView | null,
+  ): AttendanceRulesView =>
+    ({
+      ...row,
+      weekendDays: row.weekendDays as AttendanceRuleValues['weekendDays'],
+      // The shipped values, so "reset to default" on the screen offers the
+      // number a new company actually gets rather than one typed twice.
+      defaults: ATTENDANCE_RULE_DEFAULTS,
+      payrollIntegration,
+      canManage,
+    }) as AttendanceRulesView;
+
+  /** Readable by anyone who may read the company; writable behind the gate above. */
   app.get(
     '/attendance-rules',
     { preHandler: requirePermission(PERMISSIONS.COMPANY_READ) },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const row = await prisma.company.findUniqueOrThrow({
-        where: { id: auth.companyId },
-        select: RULE_FIELDS,
-      });
+      const [row, payrollIntegration] = await Promise.all([
+        prisma.company.findUniqueOrThrow({
+          where: { id: auth.companyId },
+          select: RULE_FIELDS,
+        }),
+        payrollIntegrationFor(auth.companyId),
+      ]);
 
-      const data: AttendanceRulesView = {
-        ...row,
-        weekendDays: row.weekendDays as AttendanceRulesView['weekendDays'],
-        canManage: auth.permissions.has(PERMISSIONS.SETTINGS_MANAGE),
-      };
-
-      return reply.send({ data });
+      return reply.send({ data: ruleView(row, canManageRules(auth), payrollIntegration) });
     },
   );
 
   app.patch(
     '/attendance-rules',
-    { preHandler: requirePermission(PERMISSIONS.SETTINGS_MANAGE) },
+    {
+      preHandler: requireAnyPermission(
+        PERMISSIONS.SETTINGS_MANAGE,
+        PERMISSIONS.ATTENDANCE_RULES_MANAGE,
+      ),
+    },
     async (request, reply) => {
       const auth = requireAuthContext(request);
       const input = parseOrThrow(attendanceRulesSchema, request.body);
@@ -229,16 +300,26 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
         select: RULE_FIELDS,
       });
 
+      /**
+       * A rule the payload did not mention keeps the value it has.
+       *
+       * The newer fields are optional so an older client can still save, and
+       * `undefined` reaching Prisma would be read as "leave alone" anyway -
+       * this makes that explicit rather than incidental, and keeps the diff
+       * below honest about what actually changed.
+       */
+      const changes = diff(
+        before as unknown as Record<string, unknown>,
+        Object.fromEntries(
+          Object.entries(input as Record<string, unknown>).filter(([, v]) => v !== undefined),
+        ),
+      );
+
       const after = await prisma.company.update({
         where: { id: auth.companyId },
         data: input,
         select: RULE_FIELDS,
       });
-
-      const changes = diff(
-        before as unknown as Record<string, unknown>,
-        input as unknown as Record<string, unknown>,
-      );
 
       // Every change is recorded with its old and new value. Nothing here is a
       // credential, and `recordAudit` redacts by key regardless.
@@ -256,13 +337,8 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      const data: AttendanceRulesView = {
-        ...after,
-        weekendDays: after.weekendDays as AttendanceRulesView['weekendDays'],
-        canManage: true,
-      };
-
-      return reply.send({ data });
+      const payrollIntegration = await payrollIntegrationFor(auth.companyId);
+      return reply.send({ data: ruleView(after, true, payrollIntegration) });
     },
   );
 

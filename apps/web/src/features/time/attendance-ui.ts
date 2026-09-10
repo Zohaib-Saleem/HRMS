@@ -1,4 +1,4 @@
-import type { DerivedAttendanceStatus } from '@hrms/shared';
+import type { AttendanceFlag, DerivedAttendanceStatus } from '@hrms/shared';
 
 /**
  * The shared visual vocabulary for attendance.
@@ -28,6 +28,9 @@ export const STATUS_TONE: Record<
   // A day that has not happened yet carries no judgement, so it gets the
   // quietest treatment available - never the red used for absence.
   UPCOMING: 'neutral',
+  // Rostered off. Not a weekend, not an absence: the shift simply does not
+  // work that day, and nobody failed to attend it.
+  OFF_DAY: 'neutral',
 };
 
 /** Background / text / border triples, one per status. */
@@ -41,6 +44,10 @@ export const STATUS_COLOR: Record<DerivedAttendanceStatus, string> = {
   // Deliberately the plainest cell in the set: an empty future day should read
   // as "nothing here yet", not as a mark against the employee.
   UPCOMING: 'bg-att-upcoming text-att-upcoming-foreground border-att-upcoming-border border-dashed',
+  // The weekend hue, because it is the same kind of day - not worked - with a
+  // dashed edge so a company weekend and a shift's own off day stay tellable
+  // apart at a glance in a month grid.
+  OFF_DAY: 'bg-att-weekend text-att-weekend-foreground border-att-weekend-border border-dashed',
 };
 
 /** The same triples plus a hover step, for the interactive calendar grid. */
@@ -52,6 +59,7 @@ export const STATUS_CELL: Record<DerivedAttendanceStatus, string> = {
   HOLIDAY: `${STATUS_COLOR.HOLIDAY} hover:bg-att-holiday-hover`,
   WEEKEND: `${STATUS_COLOR.WEEKEND} hover:bg-att-weekend-hover`,
   UPCOMING: `${STATUS_COLOR.UPCOMING} hover:bg-att-upcoming-hover`,
+  OFF_DAY: `${STATUS_COLOR.OFF_DAY} hover:bg-att-weekend-hover`,
 };
 
 /**
@@ -72,6 +80,7 @@ export const STATUS_BADGE: Record<DerivedAttendanceStatus, string> = {
   HOLIDAY: `${BADGE_SHAPE} ${STATUS_COLOR.HOLIDAY}`,
   WEEKEND: `${BADGE_SHAPE} ${STATUS_COLOR.WEEKEND}`,
   UPCOMING: `${BADGE_SHAPE} ${STATUS_COLOR.UPCOMING}`,
+  OFF_DAY: `${BADGE_SHAPE} ${STATUS_COLOR.OFF_DAY}`,
 };
 
 /** Text-only status colours, for counts in a summary strip. */
@@ -83,6 +92,7 @@ export const STATUS_TEXT: Record<DerivedAttendanceStatus, string> = {
   HOLIDAY: 'text-att-holiday-foreground',
   WEEKEND: 'text-att-weekend-foreground',
   UPCOMING: 'text-att-upcoming-foreground',
+  OFF_DAY: 'text-att-weekend-foreground',
 };
 
 /**
@@ -103,3 +113,23 @@ export const minutesLabel = (minutes: number | null | undefined): string =>
 
 export const timeLabel = (iso: string | null | undefined): string =>
   iso ? new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '--';
+
+
+/**
+ * Flag badges.
+ *
+ * A flag is not a status. A late day is a PRESENT day that was late, and the
+ * two are shown side by side: the status says whether the day was worked, the
+ * flag says what else needs looking at. Giving flags their own quieter shape
+ * keeps that distinction visible in a dense grid.
+ */
+export const FLAG_BADGE: Record<AttendanceFlag, string> = {
+  LATE: `${BADGE_SHAPE} bg-att-half-day text-att-half-day-foreground border-att-half-day-border`,
+  EARLY_LEAVE: `${BADGE_SHAPE} bg-att-half-day text-att-half-day-foreground border-att-half-day-border`,
+  OVERTIME: `${BADGE_SHAPE} bg-att-present text-att-present-foreground border-att-present-border`,
+  MISSING_PUNCH: `${BADGE_SHAPE} bg-att-absent text-att-absent-foreground border-att-absent-border`,
+  IRREGULAR: `${BADGE_SHAPE} bg-att-absent text-att-absent-foreground border-att-absent-border`,
+  // A manual adjustment is information, not a problem: it should read as a
+  // note on the day rather than as another thing that went wrong.
+  MANUAL: `${BADGE_SHAPE} bg-att-weekend text-att-weekend-foreground border-att-weekend-border`,
+};

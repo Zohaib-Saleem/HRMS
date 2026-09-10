@@ -209,6 +209,26 @@ model Company {
   missingCheckOutStatus AttendanceMissingPunchRule @default(PRESENT)
   missingCheckInStatus  AttendanceMissingPunchRule @default(ABSENT)
 
+  // --- attendance module (step 1) ----------------------------------------
+  // Flags and non-working-day behaviour. Defaults reproduce what the engine
+  // did before these existed, so nothing derived changes until Super Admin
+  // changes a setting.
+
+  /// Break length assumed for the default schedule when no shift is assigned.
+  /// Only subtracted when breakIncludedInWindow is false.
+  defaultBreakMinutes Int @default(0)
+
+  /// Lateness at or above this many minutes carries the LATE flag. Zero flags
+  /// any lateness the grace period did not forgive. Grace decides what is
+  /// recorded; this decides what is reported as a late day.
+  lateThresholdMinutes       Int @default(0)
+  /// Same rule for leaving early.
+  earlyLeaveThresholdMinutes Int @default(0)
+
+  /// What time worked on a weekend or holiday is worth.
+  weekendWorkRule NonWorkingDayWorkRule @default(AS_WORKING_DAY)
+  holidayWorkRule NonWorkingDayWorkRule @default(AS_WORKING_DAY)
+
   // --- check-in location restriction (phase 5) ----------------------------
   /// Off by default: existing companies keep unrestricted check-in.
   locationRestrictionEnabled Boolean  @default(false)
@@ -233,14 +253,15 @@ model Company {
   auditLogs    AuditLog[]
 
   // --- phase 3 ---
-  approvalRequests    ApprovalRequest[]
-  notifications       Notification[]
-  attendanceRecords   AttendanceRecord[]
-  regularizations     AttendanceRegularizationRequest[]
-  shifts              Shift[]
-  shiftAssignments    EmployeeShiftAssignment[]
-  shiftChangeRequests ShiftChangeRequest[]
-  timesheets          Timesheet[]
+  approvalRequests      ApprovalRequest[]
+  notifications         Notification[]
+  attendanceRecords     AttendanceRecord[]
+  attendanceAdjustments AttendanceAdjustment[]
+  regularizations       AttendanceRegularizationRequest[]
+  shifts                Shift[]
+  shiftAssignments      EmployeeShiftAssignment[]
+  shiftChangeRequests   ShiftChangeRequest[]
+  timesheets            Timesheet[]
 
   // --- phase 6 ---
   attendancePolicies          AttendancePolicy[]
@@ -521,13 +542,14 @@ model Employee {
   leadOfTeam       Team?       @relation("TeamLead")
 
   // --- phase 3 ---
-  approvalRequests    ApprovalRequest[]                 @relation("ApprovalRequester")
-  approvalSteps       ApprovalStep[]                    @relation("ApprovalApprover")
-  attendanceRecords   AttendanceRecord[]
-  regularizations     AttendanceRegularizationRequest[]
-  shiftAssignments    EmployeeShiftAssignment[]
-  shiftChangeRequests ShiftChangeRequest[]
-  timesheets          Timesheet[]
+  approvalRequests      ApprovalRequest[]                 @relation("ApprovalRequester")
+  approvalSteps         ApprovalStep[]                    @relation("ApprovalApprover")
+  attendanceRecords     AttendanceRecord[]
+  attendanceAdjustments AttendanceAdjustment[]
+  regularizations       AttendanceRegularizationRequest[]
+  shiftAssignments      EmployeeShiftAssignment[]
+  shiftChangeRequests   ShiftChangeRequest[]
+  timesheets            Timesheet[]
 
   // --- phase 4 ---
   leaveBalances LeaveBalance[]
@@ -606,11 +628,12 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee  Employee?
-  userRoles UserRole[]
-  sessions  Session[]
-  auditLogs AuditLog[] @relation("AuditActor")
+  company               Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee              Employee?
+  userRoles             UserRole[]
+  sessions              Session[]
+  auditLogs             AuditLog[]             @relation("AuditActor")
+  attendanceAdjustments AttendanceAdjustment[] @relation("AttendanceAdjustmentActor")
 
   /// Who suspended this account, when an administrator did.
   suspendedBy    User?  @relation("UserSuspendedBy", fields: [suspendedById], references: [id], onDelete: SetNull)
@@ -817,6 +840,37 @@ enum AttendanceMode {
   REMOTE
 }
 
+/// What time worked on a non-working day is worth.
+enum NonWorkingDayWorkRule {
+  /// Scored by the ordinary rules: overtime after the shift end, and any
+  /// overtime flows to payroll at the non-working-day multiplier. The
+  /// behaviour in force before the rule existed.
+  AS_WORKING_DAY
+  /// Every worked minute is overtime, up to the daily cap.
+  ALL_OVERTIME
+  /// The punches are kept and shown; nothing is credited.
+  IGNORE
+}
+
+/// Why an attendance adjustment was written.
+enum AttendanceAdjustmentKind {
+  /// A person corrected a processed day.
+  CORRECTION
+  /// A PunchCode mapping changed and punches were re-attributed.
+  MAPPING_CHANGE
+}
+
+/// A reported property of a day, alongside its status. A late day is still a
+/// present day; the flag says what else was true about it.
+enum AttendanceFlag {
+  LATE
+  EARLY_LEAVE
+  OVERTIME
+  MISSING_PUNCH
+  IRREGULAR
+  MANUAL
+}
+
 enum TimesheetStatus {
   DRAFT
   SUBMITTED
@@ -985,6 +1039,10 @@ model AttendanceRecord {
   earlyLeaveMinutes Int?
   /// The portion of workedMinutes beyond the configured overtime threshold.
   overtimeMinutes   Int?
+  /// The day started too late to fit the shift it was scored against. Stored
+  /// by the engine at write time; rows from before the column existed read
+  /// false, which is what they were reported as.
+  irregular         Boolean @default(false)
 
   /// Where the check-in came from, when the company records it. Stored for the
   /// audit trail even when the restriction is switched off.
@@ -994,14 +1052,48 @@ model AttendanceRecord {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  shift    Shift?   @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  company     Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee    Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift       Shift?                 @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  adjustments AttendanceAdjustment[]
 
   @@unique([employeeId, date])
   @@index([companyId, date])
   @@index([companyId, status])
   @@map("attendance_records")
+}
+
+/// One manual change to processed attendance, or one re-attribution of
+/// punches after a mapping correction.
+///
+/// The raw punch is never edited and the record is overwritten in place, so
+/// this ledger is what makes a correction auditable: old value, new value,
+/// who, why and when, per field. Nothing here is ever deleted.
+model AttendanceAdjustment {
+  id         String   @id @default(cuid())
+  companyId  String
+  employeeId String
+  date       DateTime @db.Date
+  recordId   String?
+
+  kind          AttendanceAdjustmentKind @default(CORRECTION)
+  /// Names of the fields that changed, in the order they are shown.
+  changedFields String[]
+  before        Json
+  after         Json
+  reason        String
+  actorId       String?
+
+  createdAt DateTime @default(now())
+
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  record   AttendanceRecord? @relation(fields: [recordId], references: [id], onDelete: SetNull)
+  actor    User?             @relation("AttendanceAdjustmentActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, date])
+  @@index([companyId, createdAt])
+  @@map("attendance_adjustments")
 }
 
 /// A request to correct an attendance record. Carries its own status mirroring
@@ -1044,6 +1136,30 @@ model Shift {
   endTime      String
   breakMinutes Int     @default(0)
   isActive     Boolean @default(true)
+  description  String?
+
+  /// Days this shift works. Empty means the company's working days (every day
+  /// that is not a configured weekend day). A day outside the list is an off
+  /// day for anyone on the shift.
+  workingDays WeekDay[] @default([])
+
+  /// Rostered minutes, for reports and payroll. Null derives it from the
+  /// window and the break, the way it always has been.
+  expectedMinutes Int?
+
+  /// Rule overrides. Null inherits the company attendance rules, so a shift
+  /// states only what is different about it.
+  graceMinutes                  Int?
+  earlyLeaveGraceMinutes        Int?
+  lateTrackingEnabled           Boolean?
+  earlyDepartureTrackingEnabled Boolean?
+  overtimeEnabled               Boolean?
+  overtimeDailyCapMinutes       Int?
+  overtimeMinimumMinutes        Int?
+
+  /// When the definition took effect, for the record. Assignments carry their
+  /// own dates; this documents the shift itself.
+  effectiveFrom DateTime? @db.Date
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1568,6 +1684,14 @@ model AttendanceDeviceUserMapping {
   employeeId String
   isActive   Boolean @default(true)
 
+  /// The period this mapping attributes punches for. Null `effectiveFrom`
+  /// means "since the beginning", null `effectiveTo` means "still in force".
+  /// A PIN reassigned to a new joiner keeps its old mapping, closed, so the
+  /// leaver's punches stay theirs and the history is readable.
+  effectiveFrom DateTime? @db.Date
+  effectiveTo   DateTime? @db.Date
+  notes         String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1575,8 +1699,9 @@ model AttendanceDeviceUserMapping {
   device   AttendanceDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   employee Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  /// One device user resolves to exactly one employee on a given device.
-  @@unique([deviceId, deviceUserId])
+  /// One device user resolves to exactly one employee on a given DAY. The
+  /// service refuses overlapping periods; the index only speeds the lookup.
+  @@index([deviceId, deviceUserId])
   @@index([companyId, employeeId])
   @@map("attendance_device_user_mappings")
 }
@@ -1848,6 +1973,7 @@ enum PayrollExceptionCode {
   UNAPPROVED_OVERTIME
   NON_POSITIVE_NET
   INCOMPLETE_EMPLOYEE
+  OVERTIME_CAPPED
 }
 
 /// BLOCKING stops finalization; WARNING is recorded and shown but does not.
@@ -1899,6 +2025,11 @@ model PayrollSettings {
   /// When true - the default - only overtime on an APPROVED timesheet is paid.
   /// Unapproved hours are still counted and reported as an exception.
   requireApprovedOvertime Boolean             @default(true)
+  /// Most overtime minutes paid to one employee in one pay period. Null - the
+  /// default - pays whatever the attendance engine reported, which already
+  /// carries the attendance policy's daily, weekly and monthly caps. This is a
+  /// pay ceiling on top of those, not a replacement for them.
+  overtimeCapMinutes      Int?
 
   // --- what an absence costs ------------------------------------------------
   /// Whether a day recorded as ABSENT reduces pay.
@@ -2215,6 +2346,9 @@ model PayrollLine {
   /// The subset of overtimeMinutes that sat on an approved timesheet. Only this
   /// is paid when the company requires approval.
   approvedOvertimeMinutes Int     @default(0)
+  /// What was actually priced: the approved (or all) minutes after the payroll
+  /// overtime cap. The overtime line on the payslip is this many minutes.
+  paidOvertimeMinutes     Int     @default(0)
 
   // --- money ----------------------------------------------------------------
   basicAmount     Decimal @db.Decimal(14, 2)
@@ -2261,6 +2395,9 @@ model PayrollEarning {
   calc      PayrollComponentCalc @default(FIXED)
   /// The percentage or fixed figure the amount came from, for explicability.
   rate      Decimal?             @db.Decimal(14, 4)
+  /// Hours or days the rate was multiplied by: overtime hours, payable days
+  /// for a per-day allowance. Null when the line is a flat figure.
+  units     Decimal?             @db.Decimal(10, 2)
   amount    Decimal              @db.Decimal(14, 2)
   isTaxable Boolean              @default(true)
 

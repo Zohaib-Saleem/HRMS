@@ -20,7 +20,7 @@ import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/t
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/features/auth/session-context';
-import { SalaryDialog } from '@/features/people/employee-compensation';
+import { SalaryDialog } from '@/features/people/salary-dialog';
 
 /**
  * Salary management: everyone, and what they are on.
@@ -204,6 +204,7 @@ export function SalaryManagementPage() {
       {canManage && adding ? (
         <SalaryDialog
           employeeId={adding.employeeId}
+          employeeName={adding.employeeName}
           currency={adding.currentSalary?.currency ?? 'USD'}
           open
           onClose={() => setAdding(null)}

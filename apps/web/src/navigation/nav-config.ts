@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Banknote,
+  BarChart3,
   Building2,
   ClipboardCheck,
   FileClock,
@@ -15,6 +16,7 @@ import {
   Fingerprint,
   LayoutDashboard,
   LifeBuoy,
+  PencilLine,
   Receipt,
   Settings,
   TrendingUp,
@@ -109,6 +111,24 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Team attendance',
         to: '/attendance/team',
         icon: UsersRound,
+        permission: PERMISSIONS.ATTENDANCE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // Readable by anyone who may read attendance; the correction form
+        // inside needs attendance.manage, and the endpoint is the real gate.
+        label: 'Corrections',
+        to: '/attendance/corrections',
+        icon: PencilLine,
+        permission: PERMISSIONS.ATTENDANCE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Attendance reports',
+        to: '/attendance/reports',
+        icon: BarChart3,
         permission: PERMISSIONS.ATTENDANCE_READ,
         status: 'ready',
         matchPrefix: true,
@@ -251,6 +271,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/approvals': 'Approvals',
   '/attendance': 'Attendance',
   '/attendance/team': 'Team attendance',
+  '/attendance/corrections': 'Attendance corrections',
+  '/attendance/reports': 'Attendance reports',
   '/attendance/devices': 'Devices',
   '/attendance/punches': 'Device punches',
   '/shifts': 'Shifts',
@@ -272,6 +294,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/settings/company': 'Company',
   '/settings/attendance': 'Attendance policy',
   '/settings/attendance-rules': 'Attendance rules',
+  '/settings/device-mapping': 'Device user mapping',
+  '/payroll/preview': 'Payroll preview',
   '/payroll/salaries': 'Salary management',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/roles': 'Roles and permissions',

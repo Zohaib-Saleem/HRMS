@@ -11,17 +11,23 @@ import {
 /** A derived day, with only the fields the grouping actually reads set. */
 const day = (over: Partial<AttendanceDay> & Pick<AttendanceDay, 'status'>): AttendanceDay => ({
   date: '2026-09-01',
+  flags: [],
   checkInAt: null,
   checkOutAt: null,
   workedMinutes: null,
   lateMinutes: null,
   earlyLeaveMinutes: null,
   overtimeMinutes: null,
+  expectedMinutes: null,
+  irregular: false,
   mode: null,
+  shiftId: null,
   shiftName: null,
   notes: null,
   leaveTypeName: null,
   holidayName: null,
+  source: null,
+  recordId: null,
   hasRecord: true,
   ...over,
 });

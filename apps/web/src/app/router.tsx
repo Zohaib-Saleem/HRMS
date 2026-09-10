@@ -97,6 +97,10 @@ const PayrollSettingsPage = lazyPage(
   () => import('@/features/payroll/payroll-settings-page'),
   'PayrollSettingsPage',
 );
+const PayrollPreviewPage = lazyPage(
+  () => import('@/features/payroll/payroll-preview-page'),
+  'PayrollPreviewPage',
+);
 const PayslipsPage = lazyPage(() => import('@/features/payroll/payslips-page'), 'PayslipsPage');
 const PayslipPage = lazyPage(() => import('@/features/payroll/payslip-page'), 'PayslipPage');
 const HelpHomePage = lazyPage(() => import('@/features/help/help-home-page'), 'HelpHomePage');
@@ -111,6 +115,14 @@ const ApprovalDetailPage = lazyPage(
   'ApprovalDetailPage',
 );
 const AttendancePage = lazyPage(() => import('@/features/time/attendance-page'), 'AttendancePage');
+const AttendanceCorrectionsPage = lazyPage(
+  () => import('@/features/time/attendance-corrections-page'),
+  'AttendanceCorrectionsPage',
+);
+const AttendanceReportsPage = lazyPage(
+  () => import('@/features/time/attendance-reports-page'),
+  'AttendanceReportsPage',
+);
 const TeamAttendancePage = lazyPage(
   () => import('@/features/time/team-attendance-page'),
   'TeamAttendancePage',
@@ -145,6 +157,10 @@ const AttendanceRulesPage = lazyPage(
 const AttendancePoliciesPage = lazyPage(
   () => import('@/features/settings/attendance-policies-page'),
   'AttendancePoliciesPage',
+);
+const DeviceMappingPage = lazyPage(
+  () => import('@/features/settings/device-mapping-page'),
+  'DeviceMappingPage',
 );
 const RolesPage = lazyPage(() => import('@/features/settings/roles-page'), 'RolesPage');
 const AuditLogPage = lazyPage(() => import('@/features/settings/audit-log-page'), 'AuditLogPage');
@@ -276,6 +292,10 @@ export function AppRoutes() {
           <Route path="attendance/team" element={<TeamAttendancePage />} />
           {/* Scope is enforced server-side, so a guessed id reveals nothing. */}
           <Route path="attendance/team/:employeeId" element={<TeamAttendanceDetailPage />} />
+          {/* Readable with attendance.read; the correction form itself needs
+              attendance.manage, and the endpoint enforces that regardless. */}
+          <Route path="attendance/corrections" element={<AttendanceCorrectionsPage />} />
+          <Route path="attendance/reports" element={<AttendanceReportsPage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.DEVICE_READ} />}>
@@ -291,6 +311,7 @@ export function AppRoutes() {
             <Route path="profiles" element={<PayrollProfilesPage />} />
             <Route path="components" element={<SalaryComponentsPage />} />
             <Route path="reports" element={<PayrollReportsPage />} />
+            <Route path="preview" element={<PayrollPreviewPage />} />
             <Route element={<RequirePermission permission={PERMISSIONS.PAYROLL_MANAGE} />}>
               <Route path="settings" element={<PayrollSettingsPage />} />
             </Route>
@@ -362,6 +383,9 @@ export function AppRoutes() {
                   settings.manage, and the endpoint enforces it regardless. */}
               <Route path="attendance-rules" element={<AttendanceRulesPage />} />
               <Route path="attendance-policies" element={<AttendancePoliciesPage />} />
+            </Route>
+            <Route element={<RequirePermission permission={PERMISSIONS.DEVICE_READ} />}>
+              <Route path="device-mapping" element={<DeviceMappingPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
               <Route path="users" element={<UsersPage />} />

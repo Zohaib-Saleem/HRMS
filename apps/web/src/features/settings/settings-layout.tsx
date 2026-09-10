@@ -2,6 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import {
   Building2,
   Clock,
+  Fingerprint,
   KeyRound,
   Layers3,
   ScrollText,
@@ -39,6 +40,15 @@ export const TABS: SettingsTab[] = [
     capability: 'attendanceRules',
   },
   { to: '/settings/attendance-policies', label: 'Policy overrides', icon: Layers3, permission: PERMISSIONS.COMPANY_READ },
+  {
+    // Attribution: which employee a terminal PunchCode belongs to. Gated on
+    // the device permission rather than company.read, because that is what
+    // the endpoints behind it actually check.
+    to: '/settings/device-mapping',
+    label: 'Device user mapping',
+    icon: Fingerprint,
+    permission: PERMISSIONS.DEVICE_READ,
+  },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },
   { to: '/settings/audit', label: 'Audit log', icon: ScrollText, permission: PERMISSIONS.AUDIT_READ },

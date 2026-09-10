@@ -9,7 +9,10 @@ import {
   IRREGULAR_CUTOFF_MODE_LABELS,
   MISSING_PUNCH_RULES,
   MISSING_PUNCH_RULE_LABELS,
+  NON_WORKING_DAY_WORK_RULES,
+  NON_WORKING_DAY_WORK_RULE_LABELS,
   PERMISSIONS,
+  WEEK_DAYS,
   WEEK_DAY_LABELS,
   attendanceRulesSchema,
   type AttendanceRulesInput,
@@ -276,10 +279,22 @@ const FIELD_LABELS: Record<keyof AttendanceRulesInput, string> = {
   overtimeMonthlyCapMinutes: 'Monthly overtime cap',
   missingCheckOutStatus: 'Missing check-out',
   missingCheckInStatus: 'Missing check-in',
+  defaultBreakMinutes: 'Default break',
+  weekendDays: 'Weekend days',
+  halfDayMinutes: 'Half-day minutes',
+  fullDayMinutes: 'Full-day minutes',
+  lateThresholdMinutes: 'Late flag threshold',
+  earlyLeaveThresholdMinutes: 'Early-leave flag threshold',
+  weekendWorkRule: 'Work on a weekend',
+  holidayWorkRule: 'Work on a holiday',
 };
 
-const shown = (v: unknown): string =>
-  typeof v === 'boolean' ? (v ? 'On' : 'Off') : String(v);
+const shown = (v: unknown): string => {
+  if (typeof v === 'boolean') return v ? 'On' : 'Off';
+  if (Array.isArray(v)) return v.length === 0 ? 'None' : v.join(', ');
+  if (v === null) return 'No limit';
+  return String(v);
+};
 
 /** The fields that actually differ, for the save confirmation. */
 function changedFields(
@@ -287,7 +302,9 @@ function changedFields(
   after: AttendanceRulesInput,
 ): Array<{ label: string; from: string; to: string }> {
   return (Object.keys(FIELD_LABELS) as Array<keyof AttendanceRulesInput>)
-    .filter((key) => before[key] !== after[key])
+    // `weekendDays` is an array, so reference inequality would report it as
+    // changed on every save. Compare what the reader would compare: the value.
+    .filter((key) => shown(before[key]) !== shown(after[key]))
     .map((key) => ({
       label: FIELD_LABELS[key],
       from: shown(before[key]),
@@ -306,7 +323,13 @@ export function AttendanceRulesPage() {
 
   // The server decides; the UI only reflects it. Both are checked, because a
   // hidden control is a courtesy and the endpoint is the actual gate.
-  const canManage = has(PERMISSIONS.SETTINGS_MANAGE) && (query.data?.canManage ?? false);
+  // Either permission opens the form: `settings.manage` is Super Admin's, and
+  // `attendance.rules.manage` exists so HR can be granted these alone. The
+  // server decides regardless - `canManage` on the payload is the real answer
+  // and a hidden control was never the gate.
+  const canManage =
+    (has(PERMISSIONS.SETTINGS_MANAGE) || has(PERMISSIONS.ATTENDANCE_RULES_MANAGE)) &&
+    (query.data?.canManage ?? false);
   const rulesUnavailable = query.state === 'unavailable';
 
   const form = useForm<AttendanceRulesInput>({
@@ -336,6 +359,14 @@ export function AttendanceRulesPage() {
           overtimeMonthlyCapMinutes: query.data.overtimeMonthlyCapMinutes,
           missingCheckOutStatus: query.data.missingCheckOutStatus,
           missingCheckInStatus: query.data.missingCheckInStatus,
+          defaultBreakMinutes: query.data.defaultBreakMinutes,
+          weekendDays: query.data.weekendDays,
+          halfDayMinutes: query.data.halfDayMinutes,
+          fullDayMinutes: query.data.fullDayMinutes,
+          lateThresholdMinutes: query.data.lateThresholdMinutes,
+          earlyLeaveThresholdMinutes: query.data.earlyLeaveThresholdMinutes,
+          weekendWorkRule: query.data.weekendWorkRule,
+          holidayWorkRule: query.data.holidayWorkRule,
         }
       : undefined,
   });
@@ -410,6 +441,14 @@ export function AttendanceRulesPage() {
     overtimeMonthlyCapMinutes: rules.overtimeMonthlyCapMinutes,
     missingCheckOutStatus: rules.missingCheckOutStatus,
     missingCheckInStatus: rules.missingCheckInStatus,
+    defaultBreakMinutes: rules.defaultBreakMinutes,
+    weekendDays: rules.weekendDays,
+    halfDayMinutes: rules.halfDayMinutes,
+    fullDayMinutes: rules.fullDayMinutes,
+    lateThresholdMinutes: rules.lateThresholdMinutes,
+    earlyLeaveThresholdMinutes: rules.earlyLeaveThresholdMinutes,
+    weekendWorkRule: rules.weekendWorkRule,
+    holidayWorkRule: rules.holidayWorkRule,
   };
   const window =
     (toMinutes(live?.defaultShiftEnd ?? rules.defaultShiftEnd) ?? 0) -
@@ -485,23 +524,63 @@ export function AttendanceRulesPage() {
           <CardHeader>
             <CardTitle className="text-base">General</CardTitle>
             <CardDescription>
-              Set on the company profile and the attendance policy. Shown here for context.
+              The working week, and the timezone every clock time on this screen is read in.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
+          <CardContent className="space-y-4">
             <div>
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Timezone</p>
               <p className="text-sm font-medium">{rules.timezone}</p>
               <p className="text-xs text-muted-foreground">Edited on the Company screen.</p>
             </div>
-            <div>
-              <p className="text-xs uppercase tracking-wide text-muted-foreground">Working week</p>
-              <p className="text-sm font-medium">
-                {rules.weekendDays.length === 0
-                  ? 'Every day is a working day'
-                  : `All except ${rules.weekendDays.map((d: WeekDay) => WEEK_DAY_LABELS[d]).join(', ')}`}
-              </p>
-            </div>
+
+            <Controller
+              control={form.control}
+              name="weekendDays"
+              render={({ field }) => {
+                const selected = (field.value ?? []) as WeekDay[];
+                return (
+                  <fieldset>
+                    <legend className="mb-1.5 text-[13px] font-medium">Weekend days</legend>
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      Days nobody is expected. Attendance is never counted against them, and a
+                      shift may still override this with its own working days.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {WEEK_DAYS.map((day) => (
+                        <label
+                          key={day}
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-md border border-input px-2.5 py-1.5 text-xs',
+                            canManage ? 'cursor-pointer hover:bg-accent/40' : 'cursor-not-allowed opacity-60',
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            className="size-3.5 rounded border-input accent-[var(--primary)]"
+                            disabled={!canManage}
+                            checked={selected.includes(day)}
+                            onChange={(event) =>
+                              field.onChange(
+                                event.target.checked
+                                  ? [...selected, day]
+                                  : selected.filter((d) => d !== day),
+                              )
+                            }
+                          />
+                          {WEEK_DAY_LABELS[day]}
+                        </label>
+                      ))}
+                    </div>
+                    {form.formState.errors.weekendDays ? (
+                      <p className="mt-1.5 text-xs text-destructive">
+                        {form.formState.errors.weekendDays.message}
+                      </p>
+                    ) : null}
+                  </fieldset>
+                );
+              }}
+            />
           </CardContent>
         </Card>
 
@@ -833,20 +912,61 @@ export function AttendanceRulesPage() {
           </CardContent>
         </Card>
 
-        {/* --- read-only: half day and missing punches ----------------------- */}
+        {/* --- what a day is worth ------------------------------------------ */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Half day and missing punches</CardTitle>
-            <CardDescription>Unchanged by this screen.</CardDescription>
+            <CardTitle className="text-base">What a day is worth</CardTitle>
+            <CardDescription>
+              The thresholds that decide whether a day is a full day, a half day or an absence -
+              and what a day with a punch missing on one end counts as.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            <p className="text-muted-foreground">
-              A day of at least <strong>{rules.halfDayMinutes} minutes</strong> counts as a half day
-              and at least <strong>{rules.fullDayMinutes} minutes</strong> as a full day, measured on
-              elapsed time. Leaving before the shift ends is recorded as an early departure and does
-              not by itself make the day a half day. These thresholds are edited on the attendance
-              policy screen.
-            </p>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <FormField
+                label="Full-day minutes"
+                htmlFor="fullDayMinutes"
+                hint={`The ${windowMinutes}-minute window, less any tolerance below.`}
+                error={form.formState.errors.fullDayMinutes?.message}
+              >
+                <Input
+                  id="fullDayMinutes"
+                  type="number"
+                  min={1}
+                  disabled={!canManage}
+                  {...form.register('fullDayMinutes')}
+                />
+              </FormField>
+              <FormField
+                label="Half-day minutes"
+                htmlFor="halfDayMinutes"
+                hint="Below this, the day is an absence."
+                error={form.formState.errors.halfDayMinutes?.message}
+              >
+                <Input
+                  id="halfDayMinutes"
+                  type="number"
+                  min={0}
+                  disabled={!canManage}
+                  {...form.register('halfDayMinutes')}
+                />
+              </FormField>
+              <FormField
+                label="Default break (minutes)"
+                htmlFor="defaultBreakMinutes"
+                hint="Only subtracted when the break sits outside the window."
+                error={form.formState.errors.defaultBreakMinutes?.message}
+              >
+                <Input
+                  id="defaultBreakMinutes"
+                  type="number"
+                  min={0}
+                  disabled={!canManage}
+                  {...form.register('defaultBreakMinutes')}
+                />
+              </FormField>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField
                 label="Day with a check-in and no check-out"
@@ -875,6 +995,132 @@ export function AttendanceRulesPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* --- flag thresholds ---------------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Reporting thresholds</CardTitle>
+            <CardDescription>
+              Grace decides what is <em>recorded</em>; these decide what is <em>reported</em>. A
+              five-minute overrun can be recorded and still not worth flagging as a late day.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <FormField
+              label="Flag as late from (minutes)"
+              htmlFor="lateThresholdMinutes"
+              hint="Zero flags any lateness the grace period did not forgive."
+              error={form.formState.errors.lateThresholdMinutes?.message}
+            >
+              <Input
+                id="lateThresholdMinutes"
+                type="number"
+                min={0}
+                disabled={!canManage}
+                {...form.register('lateThresholdMinutes')}
+              />
+            </FormField>
+            <FormField
+              label="Flag as early leave from (minutes)"
+              htmlFor="earlyLeaveThresholdMinutes"
+              hint="The same rule for leaving before the shift ends."
+              error={form.formState.errors.earlyLeaveThresholdMinutes?.message}
+            >
+              <Input
+                id="earlyLeaveThresholdMinutes"
+                type="number"
+                min={0}
+                disabled={!canManage}
+                {...form.register('earlyLeaveThresholdMinutes')}
+              />
+            </FormField>
+          </CardContent>
+        </Card>
+
+        {/* --- weekends and holidays ---------------------------------------- */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Work on a non-working day</CardTitle>
+            <CardDescription>
+              What time worked on a weekend or a public holiday is worth. Applied when attendance
+              is read, so changing it needs no recalculation - and changes nothing already stored.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <FormField
+              label="Worked on a weekend"
+              htmlFor="weekendWorkRule"
+              error={form.formState.errors.weekendWorkRule?.message}
+            >
+              <NativeSelect id="weekendWorkRule" disabled={!canManage}
+                {...form.register('weekendWorkRule')}>
+                {NON_WORKING_DAY_WORK_RULES.map((rule) => (
+                  <option key={rule} value={rule}>{NON_WORKING_DAY_WORK_RULE_LABELS[rule]}</option>
+                ))}
+              </NativeSelect>
+            </FormField>
+            <FormField
+              label="Worked on a holiday"
+              htmlFor="holidayWorkRule"
+              error={form.formState.errors.holidayWorkRule?.message}
+            >
+              <NativeSelect id="holidayWorkRule" disabled={!canManage}
+                {...form.register('holidayWorkRule')}>
+                {NON_WORKING_DAY_WORK_RULES.map((rule) => (
+                  <option key={rule} value={rule}>{NON_WORKING_DAY_WORK_RULE_LABELS[rule]}</option>
+                ))}
+              </NativeSelect>
+            </FormField>
+          </CardContent>
+        </Card>
+
+        {/* --- what these rules cost --------------------------------------- */}
+        {rules.payrollIntegration ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">What these rules cost</CardTitle>
+              <CardDescription>
+                Read from payroll settings and edited there. Shown here because a rule that
+                records lateness and a rule that charges for it are two different decisions, and
+                it should be obvious which are currently on.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
+              {(
+                [
+                  ['Unpaid absence reduces pay', rules.payrollIntegration.deductUnpaidAbsence],
+                  ['Unpaid leave reduces pay', rules.payrollIntegration.deductUnpaidLeave],
+                  ['Lateness is deducted', rules.payrollIntegration.lateDeductionEnabled],
+                  ['Early leaving is deducted', rules.payrollIntegration.earlyLeaveDeductionEnabled],
+                  ['Overtime is paid', rules.payrollIntegration.overtimePaid],
+                  [
+                    'Overtime needs an approved timesheet',
+                    rules.payrollIntegration.requireApprovedOvertime,
+                  ],
+                ] as Array<[string, boolean]>
+              ).map(([label, on]) => (
+                <div
+                  key={label}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
+                >
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className={cn('text-xs font-semibold', on ? 'text-success' : 'text-muted-foreground')}>
+                    {on ? 'On' : 'Off'}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 sm:col-span-2">
+                <span className="text-muted-foreground">Overtime multiplier and pay ceiling</span>
+                <span className="text-xs font-semibold">
+                  {rules.payrollIntegration.overtimeMultiplier}x
+                  {rules.payrollIntegration.overtimeCapMinutes === null
+                    ? ', no ceiling'
+                    : `, at most ${(rules.payrollIntegration.overtimeCapMinutes / 60).toFixed(2)} h a period`}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
       </div>
 
       <div className="space-y-4 xl:sticky xl:top-20">

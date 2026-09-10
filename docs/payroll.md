@@ -86,6 +86,20 @@ counted, reported as an exception, and not paid.
 500/hr × 1.5 × 4 approved hours = 3,000
 ```
 
+Overtime minutes come from the attendance engine as recorded - payroll never
+re-derives them from punches. The attendance policy's daily, weekly and
+monthly caps have already been applied by the time payroll reads a day.
+`overtimeCapMinutes` on payroll settings is a ceiling on top of that: the most
+overtime paid to one person in one period, or null for no ceiling. When it
+trims something the run carries an `OVERTIME_CAPPED` warning saying how much,
+and the line records `paidOvertimeMinutes` alongside the recorded and approved
+figures so the payslip can show all three.
+
+`standardHoursPerDay` turns a daily rate into an hourly one (9 hours = 540
+minutes); `fallbackScheduledMinutes` is the length assumed for a working day
+with no shift assignment behind it. Both are settings, both are shown on
+Payroll → Settings, and neither is a constant in the engine.
+
 **Deductions** — unpaid absence and unpaid leave each have their own on/off
 switch. Lateness and early leaving can be charged `PER_MINUTE` or
 `PER_OCCURRENCE`, with a payroll grace period on top of whatever the attendance
@@ -114,6 +128,31 @@ nothing to reach back into. The period is closed and cannot be run again.
 Corrections after finalization are raised as a `PayrollAdjustment`, which is
 applied in a later run. The original line and the correction both stay visible.
 
+## The preview
+
+**Payroll → Preview** answers "what would this pay?" before anybody commits to
+it. `GET /payroll/runs/preview` accepts a run, a period, or a bare date range —
+so a period with no run yet can be previewed too.
+
+It runs `computePayroll()`, which is *the same function a run runs*. A run then
+persists what it returns; the preview shows it and throws it away. That shared
+path is the point: the preview and the payslip that follows it cannot disagree
+about a period except about facts that changed in between.
+
+**The preview writes nothing.** No line, no exception, no run status, and no
+adjustment is claimed — it passes `runId: null`, so it sees only adjustments
+still unspoken for and marks none of them as spent.
+
+Columns, per employee: basic salary, paid days, absent days, unpaid leave,
+allowances, overtime hours and amount, deductions, gross and net. Each row
+opens to show every earning and deduction line with its rate and units, plus
+the rates the whole calculation was derived from. Exceptions are hung on the
+employee they belong to rather than heaped at the bottom.
+
+Employees a **blocking** exception stopped short of a line still appear, marked
+— because a preview that quietly omitted the three people with no salary on
+record is exactly how a payroll gets finalized without them.
+
 ## Exceptions
 
 The calculation records what it could not resolve rather than guessing:
@@ -128,6 +167,7 @@ The calculation records what it could not resolve rather than guessing:
 | `INVALID_ATTENDANCE` | warning | checked in but never out, or no attendance at all for the whole period |
 | `UNAPPROVED_OVERTIME` | warning | hours recorded but not paid |
 | `INCOMPLETE_EMPLOYEE` | warning | employee number or hire date missing |
+| `OVERTIME_CAPPED` | warning | overtime above the payroll ceiling, recorded and not paid |
 
 A run carrying a blocking exception cannot be approved or finalized. That is
 the mechanism behind "do not silently produce questionable payroll".
@@ -148,7 +188,10 @@ Managers hold no payroll permission by default: seeing a report's attendance is
 not the same as seeing their salary.
 
 Every read of a line, payslip, salary or adjustment is filtered through
-`employeeScopeFilter`. An employee with an OWN scope sees exactly one payslip,
+`employeeScopeFilter`. A payslip exists from the moment a run is finalized,
+but is released to its owner only when the run's payslips are published; until
+then anyone without `payroll.read` gets a 404 for it and does not see it
+listed. An employee with an OWN scope sees exactly one payslip,
 and changing the id in the URL returns 403 — not somebody else's pay. That is
 asserted directly in the test suite, and the assertion was verified to fail
 when the guard is removed.
@@ -176,6 +219,7 @@ counted twice or not at all.
 | `/payroll/profiles` | Salary history and assigned components, per employee | `payroll.read` |
 | `/payroll/components` | The allowance and deduction catalogue | `payroll.read` |
 | `/payroll/reports` | Eight reports with filters and CSV export | `payroll.read` |
+| `/payroll/preview` | What a run or period would pay, written nowhere | `payroll.read` |
 | `/payroll/settings` | Frequency, basis, overtime, deductions, rounding, tax | `payroll.manage` |
 | `/payslips` | Payslips, narrowed by data scope | `payslip.read` |
 | `/payslips/:id` | The payslip document, printable | `payslip.read` |
@@ -211,3 +255,60 @@ npx dotenv -e .env -- npx tsx scripts/audit-payroll.mjs
 
 Drives the real API end to end: the workflow, immutability, exceptions,
 adjustments and employee isolation.
+
+
+## A worked example
+
+Pinned in `calculation.test.ts` under **the worked example**, so the arithmetic
+below is asserted rather than described.
+
+**Given.** Salary 120,000 monthly. A 30-day period: 20 days present, 2 days of
+paid leave, 3 days of unpaid absence, 5 weekend days. Two hours of *approved*
+overtime and a fixed allowance of 10,000. Company settings: `FIXED_DAYS` basis
+of 30, 8 standard hours a day, overtime at 1.5x, absence deducted, approval
+required.
+
+**The rates.**
+
+```
+daily rate    120,000 / 30 basis days     =   4,000.00
+hourly rate     4,000 / 8 standard hours  =     500.00
+```
+
+**Earnings.**
+
+```
+basic         one salary, whole period    = 120,000.00
+overtime      2 h × 500 × 1.5             =   1,500.00
+allowance     fixed                       =  10,000.00
+                                            -----------
+GROSS                                        131,500.00
+```
+
+**Deductions.**
+
+```
+unpaid absence   3 days × 4,000           =  12,000.00
+paid leave       2 days, paid             =       0.00
+                                            -----------
+DEDUCTIONS                                    12,000.00
+```
+
+**Net.**
+
+```
+NET           131,500 − 12,000            = 119,500.00
+```
+
+**Day counts.** Scheduled days are 20 + 2 + 3 = **25**; the 5 weekend days are
+nobody's expectation and are not in the count. Payable days are 25 − 3 = **22**
+— present, plus paid leave, minus what is not paid for.
+
+**Why paid leave costs nothing.** It is a scheduled day the employee is paid
+for. It never becomes a deduction line at all, so it cannot be charged twice by
+being both "not present" and "on leave".
+
+**If the overtime were not approved**, with `requireApprovedOvertime` on: gross
+falls to exactly 130,000 and net to 118,000. Nothing else moves — the overtime
+line simply is not priced, and the hours are still counted and reported as an
+`UNAPPROVED_OVERTIME` exception.

@@ -683,6 +683,7 @@ export const payrollReconciliationRoutes: FastifyPluginAsync = async (app) => {
           weekendDays: num(line.weekendDays),
           overtimeMinutes: line.overtimeMinutes,
           approvedOvertimeMinutes: line.approvedOvertimeMinutes,
+          paidOvertimeMinutes: line.paidOvertimeMinutes,
           lateOccurrences: line.lateOccurrences,
           lateMinutes: line.lateMinutes,
           earlyLeaveOccurrences: line.earlyLeaveOccurrences,

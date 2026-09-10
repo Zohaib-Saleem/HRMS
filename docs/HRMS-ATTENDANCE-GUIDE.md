@@ -273,6 +273,10 @@ Anyone with no attendance record on a working day is recorded absent.
 
 ## 8. Corrections
 
+There are two routes to a corrected day, and they are for different people.
+
+### The request route (employee or manager)
+
 An employee or manager raises **Attendance → Request a correction** with the
 date, the proposed check-in and check-out, and a reason. This creates an
 approval request of type `ATTENDANCE_REGULARIZATION`.
@@ -280,8 +284,113 @@ approval request of type `ATTENDANCE_REGULARIZATION`.
 On approval the attendance record is written with `source: ADMIN`, which means
 **no future device sync will overwrite it**.
 
+### The Correction Centre (HR and Super Admin)
+
+**Attendance → Corrections** searches every processed day the caller may see —
+by name, employee code, PunchCode, date or month, department, team, shift,
+status or flag — and opens one day at a time.
+
+The day panel shows three things side by side, deliberately:
+
+| Panel | What it is |
+|---|---|
+| **Stored** | The processed record, as payroll will read it |
+| **From punches** | What today's rules would make of the raw punches. Shown for comparison; **never written** |
+| **Original punches** | Every punch the terminal reported, with the two that were chosen as the arrival and the departure marked |
+
+Correctable fields: check-in, check-out, shift, status, worked minutes, late
+minutes, early-leave minutes, overtime minutes, notes. A **reason is
+mandatory**.
+
+Anything left blank in the minute boxes is **recomputed from the times** under
+the rules that were in force *on that date* — not today's rules, so correcting
+a day in March does not regrade it against a rule introduced in September.
+Filling a minute box is an explicit override, for when the arithmetic is right
+and the world is wrong (a terminal whose clock drifted an hour).
+
+Three guarantees, enforced in `attendance-corrections.service.ts` and asserted
+by its tests:
+
+1. **No raw punch is ever written.** Not the instant, not the PIN, not the
+   direction. A correction changes what the *processed* day says.
+2. **Exactly one employee-day is touched.** No other day, no other person, and
+   no historical rescoring of anything the correction did not name.
+3. **Every change is written down**: old value, new value, changed fields, the
+   reason, who, and when, into `attendance_adjustments` — which is append-only
+   and never pruned — plus the ordinary audit log.
+
+The record is marked `source: ADMIN`, which is what stops the next device sync
+from quietly undoing the correction.
+
 An administrator holding `attendance.manage` can also write a record directly
 via `POST /attendance` without an approval.
+
+---
+
+## 8a. PunchCode mapping
+
+**Settings → Device user mapping** answers one question: which employee does
+PunchCode 42 on this terminal belong to, and since when?
+
+A mapping is a **period**. `effectiveFrom` blank means "since the beginning";
+`effectiveTo` blank means "still in force". Two mappings of the same PIN on the
+same device never overlap, so any day resolves to at most one employee.
+
+That is what makes a PIN handed from a leaver to a new joiner safe:
+
+```
+PunchCode 42, Main gate
+├─ Ayesha Khan     … → 2026-06-30     (closed)
+└─ Bilal Ahmed     2026-07-01 → …     (in force)
+```
+
+June's punches stay Ayesha's. July's become Bilal's.
+
+- **Duplicate protection.** The same PunchCode cannot be given to a second
+  employee over overlapping dates. The refusal names who holds it and since
+  when. Taking it over needs both a start date and explicit consent, and closes
+  the other mapping the day before.
+- **A correction moves the future, not the past.** Re-attribution starts at the
+  effective date; punches before it keep the employee they had.
+- **Nothing is deleted.** Retiring a mapping deactivates it, so the punches it
+  attributed still have a mapping behind them explaining who they belong to.
+- **Nothing is recalculated.** Re-attributed punches have their `processedAt`
+  cleared and the affected day count is reported. Scoring them is an explicit
+  **Reprocess** from *Device punches*.
+
+**View history** on any row reads the audit log rather than a private copy, so
+the panel and the audit trail cannot tell two different stories.
+
+---
+
+## 8b. Reports
+
+**Attendance → Attendance reports** builds twelve reports from the *same
+derived days* the attendance screens read — never from a second query that
+could disagree.
+
+| Report | One row per |
+|---|---|
+| Daily | employee-day: status, in, out, worked, late, early, OT, flags |
+| Monthly | employee: present, half, absent, leave, holidays, weekends, late count and minutes, early count and minutes, OT hours, attendance % |
+| Employee | one person's whole file: the month as a calendar, the daily detail, the raw punches, every correction, and the shift history |
+| Department / Team | group: employee count, attendance %, absence, late, early, OT |
+| Late / Early leave / Absence / Overtime / Missing punch | the days that match one condition |
+| Leave vs attendance | employee: working days against present, paid leave, unpaid leave and absence |
+| Summary | calendar day, across everybody |
+
+Every report exports to CSV at the same URL with `/export`.
+
+**Attendance percentage** is present days (a half day counting a half) over the
+days that were actually *scored* — present, half, absent and leave. Weekends,
+holidays, off days and days still to come are in neither the numerator nor the
+denominator, so a month a week old does not read as 75% absent. With nothing
+scored it is `null`, not zero: "no data" and "nobody came" are different
+answers.
+
+**Employees on no team are grouped as "Unassigned", never dropped.** Teams are
+optional in this HRMS, and a team report that silently omitted everyone outside
+one would understate the company.
 
 ---
 

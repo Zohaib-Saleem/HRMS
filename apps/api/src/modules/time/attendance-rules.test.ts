@@ -57,6 +57,13 @@ const DEFAULTS: AttendancePolicy = {
   missingCheckInStatus: 'ABSENT',
   irregularCheckInMode: 'ABSOLUTE_TIME',
   irregularAfterShiftStartMinutes: 120,
+  // Added with the attendance module. The shipped values, which reproduce
+  // exactly what the engine did before these rules existed.
+  defaultBreakMinutes: 0,
+  lateThresholdMinutes: 0,
+  earlyLeaveThresholdMinutes: 0,
+  weekendWorkRule: 'AS_WORKING_DAY',
+  holidayWorkRule: 'AS_WORKING_DAY',
 };
 
 /** Scores one day. `shift` null means "no assignment, use the company window". */

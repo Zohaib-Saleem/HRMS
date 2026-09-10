@@ -107,6 +107,7 @@ export function effectiveConfig(
     overtimeMultiplier: toNumber(profile?.overtimeMultiplier ?? settings.overtimeMultiplier),
     overtimeFixedRate: toNumber(profile?.overtimeFixedRate ?? settings.overtimeFixedRate),
     requireApprovedOvertime: settings.requireApprovedOvertime,
+    overtimeCapMinutes: settings.overtimeCapMinutes,
 
     deductUnpaidAbsence: profile?.deductUnpaidAbsence ?? settings.deductUnpaidAbsence,
     deductUnpaidLeave: profile?.deductUnpaidLeave ?? settings.deductUnpaidLeave,
@@ -379,7 +380,7 @@ export function shiftLengthMinutes(
 
 // ------------------------------------------------------------------ exceptions
 
-interface PendingException {
+export interface PendingException {
   code: PayrollExceptionCode;
   severity: PayrollExceptionSeverity;
   message: string;
@@ -468,14 +469,55 @@ export async function calculateRun(input: {
   }
 }
 
-async function runCalculation(input: {
-  run: { id: string; periodId: string; period: { startDate: Date; endDate: Date } };
+/**
+ * One employee's computed line, before anything is written.
+ *
+ * `runId` is deliberately absent: the calculation does not know or care
+ * whether its output is going to be persisted, which is exactly what lets the
+ * preview and the run share it.
+ */
+export interface ComputedLine {
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  departmentName: string | null;
+  data: Omit<Prisma.PayrollLineUncheckedCreateInput, 'runId'>;
+  earnings: ReturnType<typeof calculate>['earnings'];
+  deductions: ReturnType<typeof calculate>['deductions'];
+}
+
+export interface ComputedPayroll {
+  from: Date;
+  to: Date;
+  currency: string;
+  employeesConsidered: number;
+  lines: ComputedLine[];
+  exceptions: PendingException[];
+  /** Adjustment ids this calculation consumed. Claimed only when persisting. */
+  appliedAdjustmentIds: string[];
+}
+
+/**
+ * The whole payroll calculation, computed and returned.
+ *
+ * Nothing here writes. That is the point: a run persists what this returns,
+ * and a preview shows it and throws it away, so the two can never disagree
+ * about what a period pays. Splitting them into separate implementations
+ * would guarantee that they eventually did.
+ */
+export async function computePayroll(input: {
   companyId: string;
-  actorId: string | null;
-}): Promise<CalculateOutcome> {
-  const { run, companyId, actorId } = input;
-  const from = run.period.startDate;
-  const to = run.period.endDate;
+  from: Date;
+  to: Date;
+  /**
+   * The run whose already-claimed adjustments should still be visible. Null
+   * for a preview, which claims nothing and so sees only unclaimed ones.
+   */
+  runId: string | null;
+  /** Narrows the employee set. Used by the preview, never by a run. */
+  filter?: Prisma.EmployeeWhereInput;
+}): Promise<ComputedPayroll> {
+  const { companyId, from, to, runId } = input;
 
   const [settings, company] = await Promise.all([
     resolveSettings(companyId),
@@ -491,9 +533,10 @@ async function runCalculation(input: {
     where: {
       companyId,
       OR: [{ terminationDate: null }, { terminationDate: { gte: from } }],
-      AND: [{ OR: [{ hireDate: null }, { hireDate: { lte: to } }] }],
+      AND: [{ OR: [{ hireDate: null }, { hireDate: { lte: to } }] }, input.filter ?? {}],
     },
     orderBy: [{ employeeNumber: 'asc' }],
+    include: { department: { select: { name: true } } },
   });
 
   const employeeIds = employees.map((e) => e.id);
@@ -522,7 +565,7 @@ async function runCalculation(input: {
         companyId,
         employeeId: { in: employeeIds },
         appliedAt: null,
-        OR: [{ appliedRunId: null }, { appliedRunId: run.id }],
+        OR: runId ? [{ appliedRunId: null }, { appliedRunId: runId }] : [{ appliedRunId: null }],
       },
     }),
     gatherFacts({
@@ -582,9 +625,7 @@ async function runCalculation(input: {
 
   const periodDays = daysInRange(from, to).length;
   const pending: PendingException[] = [];
-  const lineData: Array<{ employeeId: string; data: Prisma.PayrollLineUncheckedCreateInput }> = [];
-  const earningsByEmployee = new Map<string, ReturnType<typeof calculate>['earnings']>();
-  const deductionsByEmployee = new Map<string, ReturnType<typeof calculate>['deductions']>();
+  const lines: ComputedLine[] = [];
   const appliedAdjustmentIds: string[] = [];
 
   for (const employee of employees) {
@@ -732,6 +773,23 @@ async function runCalculation(input: {
       });
     }
 
+    // A ceiling that trimmed something is a fact the employee will ask about,
+    // so it is reported rather than silently applied. Not blocking: the cap is
+    // the company's own rule, working as configured.
+    if (result.cappedOvertimeMinutes > 0) {
+      pending.push({
+        code: 'OVERTIME_CAPPED',
+        severity: 'WARNING',
+        message: `${employee.firstName} ${employee.lastName} worked ${(result.cappedOvertimeMinutes / 60).toFixed(2)} hour(s) of overtime beyond the ${((config.overtimeCapMinutes ?? 0) / 60).toFixed(2)}-hour payroll cap; they were not paid.`,
+        employeeId: employee.id,
+        detail: {
+          cappedMinutes: result.cappedOvertimeMinutes,
+          capMinutes: config.overtimeCapMinutes,
+          paidMinutes: result.paidOvertimeMinutes,
+        },
+      });
+    }
+
     if (result.netAmount <= 0) {
       pending.push({
         code: 'NON_POSITIVE_NET',
@@ -743,11 +801,15 @@ async function runCalculation(input: {
     }
 
     const latestSegment = segments[segments.length - 1];
-    lineData.push({
+    lines.push({
       employeeId: employee.id,
+      employeeName: employee.displayName ?? `${employee.firstName} ${employee.lastName}`.trim(),
+      employeeNumber: employee.employeeNumber,
+      departmentName: employee.department?.name ?? null,
+      earnings: result.earnings,
+      deductions: result.deductions,
       data: {
         companyId,
-        runId: run.id,
         employeeId: employee.id,
         salaryType: latestSegment?.salaryType ?? 'MONTHLY',
         salaryAmount: latestSegment?.amount ?? 0,
@@ -776,6 +838,7 @@ async function runCalculation(input: {
         earlyLeaveMinutes: result.tally.earlyLeaveMinutes,
         overtimeMinutes: result.tally.overtimeMinutes,
         approvedOvertimeMinutes: result.tally.approvedOvertimeMinutes,
+        paidOvertimeMinutes: result.paidOvertimeMinutes,
 
         basicAmount: result.basicAmount,
         earningsTotal: result.earningsTotal,
@@ -787,9 +850,42 @@ async function runCalculation(input: {
       },
     });
 
-    earningsByEmployee.set(employee.id, result.earnings);
-    deductionsByEmployee.set(employee.id, result.deductions);
   }
+
+  return {
+    from,
+    to,
+    currency: company.currency,
+    employeesConsidered: employees.length,
+    lines,
+    exceptions: pending,
+    appliedAdjustmentIds,
+  };
+}
+
+/**
+ * Persists a computed payroll onto a run.
+ *
+ * The write half, and nothing else: no arithmetic happens below this line.
+ */
+async function runCalculation(input: {
+  run: { id: string; periodId: string; period: { startDate: Date; endDate: Date } };
+  companyId: string;
+  actorId: string | null;
+}): Promise<CalculateOutcome> {
+  const { run, companyId, actorId } = input;
+
+  const computed = await computePayroll({
+    companyId,
+    from: run.period.startDate,
+    to: run.period.endDate,
+    runId: run.id,
+  });
+
+  const { lines, exceptions: pending, appliedAdjustmentIds } = computed;
+  const lineData = lines;
+  const company = { currency: computed.currency };
+  const employees = { length: computed.employeesConsidered };
 
   const blocking = pending.filter((e) => e.severity === 'BLOCKING').length;
   const grossTotal = lineData.reduce((sum, l) => sum + Number(l.data.grossAmount), 0);
@@ -818,9 +914,8 @@ async function runCalculation(input: {
     }
 
     for (const line of lineData) {
-      const created = await tx.payrollLine.create({ data: line.data });
-      const earnings = earningsByEmployee.get(line.employeeId) ?? [];
-      const deductions = deductionsByEmployee.get(line.employeeId) ?? [];
+      const created = await tx.payrollLine.create({ data: { ...line.data, runId: run.id } });
+      const { earnings, deductions } = line;
 
       if (earnings.length > 0) {
         await tx.payrollEarning.createMany({
@@ -832,6 +927,7 @@ async function runCalculation(input: {
             kind: e.kind,
             calc: e.calc,
             rate: e.rate,
+            units: e.units,
             amount: e.amount,
             isTaxable: e.isTaxable,
           })),

@@ -61,6 +61,7 @@ const emptyTotals = (): AttendanceTotals => ({
   holiday: 0,
   weekend: 0,
   upcoming: 0,
+  offDay: 0,
   workedMinutes: 0,
   lateMinutes: 0,
   overtimeMinutes: 0,
@@ -77,6 +78,7 @@ function tally(days: readonly AttendanceDay[]): AttendanceTotals {
     else if (d.status === 'WEEKEND') acc.weekend += 1;
     // A working day that has not arrived is counted separately, never as absence.
     else if (d.status === 'UPCOMING') acc.upcoming += 1;
+    else if (d.status === 'OFF_DAY') acc.offDay += 1;
 
     acc.workedMinutes += d.workedMinutes ?? 0;
     acc.lateMinutes += d.lateMinutes ?? 0;
@@ -223,6 +225,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         lateMinutes: computed.lateMinutes,
         earlyLeaveMinutes: computed.earlyLeaveMinutes,
         overtimeMinutes: computed.overtimeMinutes,
+        irregular: computed.irregular,
         shiftId: shift?.id ?? null,
         notes: input.notes ?? null,
         source: 'ADMIN' as const,
@@ -271,6 +274,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const workingDay =
       day !== undefined &&
       day.status !== 'WEEKEND' &&
+      day.status !== 'OFF_DAY' &&
       day.status !== 'HOLIDAY' &&
       day.status !== 'ON_LEAVE';
 
@@ -291,7 +295,9 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       shiftEndTime: shift?.endTime ?? null,
       isWorkingDay: workingDay,
       reason:
-        day?.holidayName ?? day?.leaveTypeName ?? (day?.status === 'WEEKEND' ? 'Weekend' : null),
+        day?.holidayName ??
+        day?.leaveTypeName ??
+        (day?.status === 'WEEKEND' ? 'Weekend' : day?.status === 'OFF_DAY' ? 'Off day' : null),
       locationRequired: policy.locationRestrictionEnabled,
       // The allow-list itself is never sent to the browser; only whether one
       // applies, so the widget can explain a refusal without publishing the
@@ -315,7 +321,13 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     // Refuse rather than quietly record a day the calendar says is not worked.
-    if (day && (day.status === 'WEEKEND' || day.status === 'HOLIDAY' || day.status === 'ON_LEAVE')) {
+    if (
+      day &&
+      (day.status === 'WEEKEND' ||
+        day.status === 'OFF_DAY' ||
+        day.status === 'HOLIDAY' ||
+        day.status === 'ON_LEAVE')
+    ) {
       throw new ConflictError(
         `Today is recorded as ${day.status.toLowerCase().replace('_', ' ')}${day.holidayName ? ` (${day.holidayName})` : ''}, so there is nothing to check in to.`,
       );
@@ -425,6 +437,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         lateMinutes: computed.lateMinutes,
         earlyLeaveMinutes: computed.earlyLeaveMinutes,
         overtimeMinutes: computed.overtimeMinutes,
+        irregular: computed.irregular,
         status: computed.status,
         notes: input.notes ?? existing.notes,
       },
@@ -446,6 +459,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         checkOutAt: now.toISOString(),
         workedMinutes: computed.workedMinutes ?? 0,
         overtimeMinutes: computed.overtimeMinutes,
+        irregular: computed.irregular,
         earlyLeaveMinutes: computed.earlyLeaveMinutes,
         status: computed.status,
       },

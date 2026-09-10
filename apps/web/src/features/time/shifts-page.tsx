@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Clock, Pencil, Plus, Repeat } from 'lucide-react';
 import {
   PERMISSIONS,
+  WEEK_DAY_VALUES,
   type ShiftChangeRequestInput,
   type ShiftInput,
   type ShiftRecord,
@@ -218,17 +219,33 @@ function ShiftDrawer({
   const queryClient = useQueryClient();
   const isEdit = shift !== null;
 
-  const { register, handleSubmit, formState, reset, setError } = useForm<ShiftInput>({
+  const { register, handleSubmit, formState, reset, setError, watch } = useForm<ShiftInput>({
     resolver: zodResolver(shiftInputSchema),
     values: {
       name: shift?.name ?? '',
       code: shift?.code ?? '',
+      description: shift?.description ?? '',
       startTime: shift?.startTime ?? '09:00',
       endTime: shift?.endTime ?? '18:00',
       breakMinutes: shift?.breakMinutes ?? 60,
       isActive: shift?.isActive ?? true,
+      workingDays: shift?.workingDays ?? [],
+      expectedMinutes: shift?.expectedMinutes ?? null,
+      // Null everywhere means "inherit the company rule". A shift states only
+      // what is different about it; anything left blank follows the rules
+      // screen, and keeps following it when that screen changes.
+      graceMinutes: shift?.graceMinutes ?? null,
+      earlyLeaveGraceMinutes: shift?.earlyLeaveGraceMinutes ?? null,
+      lateTrackingEnabled: shift?.lateTrackingEnabled ?? null,
+      earlyDepartureTrackingEnabled: shift?.earlyDepartureTrackingEnabled ?? null,
+      overtimeEnabled: shift?.overtimeEnabled ?? null,
+      overtimeDailyCapMinutes: shift?.overtimeDailyCapMinutes ?? null,
+      overtimeMinimumMinutes: shift?.overtimeMinimumMinutes ?? null,
+      effectiveFrom: shift?.effectiveFrom ?? null,
     },
   });
+
+  const workingDays = watch('workingDays') ?? [];
 
   const mutation = useMutation({
     mutationFn: (values: ShiftInput) =>
@@ -275,6 +292,131 @@ function ShiftDrawer({
             <FormField label="End time" htmlFor="shift-end" error={formState.errors.endTime?.message} required>
               <Input type="time" {...register('endTime')} />
             </FormField>
+            <FormField
+              label="Description"
+              htmlFor="shift-description"
+              error={formState.errors.description?.message}
+              className="sm:col-span-2"
+            >
+              <Input {...register('description')} placeholder="What this shift is for" />
+            </FormField>
+
+            <FormField
+              label="Rostered minutes"
+              htmlFor="shift-expected"
+              hint="Blank derives it from the window and the break."
+              error={formState.errors.expectedMinutes?.message}
+            >
+              <Input type="number" min={0} {...register('expectedMinutes')} placeholder="Derived" />
+            </FormField>
+            <FormField
+              label="In force from"
+              htmlFor="shift-effective-from"
+              hint="For the record. Assignments carry their own dates."
+              error={formState.errors.effectiveFrom?.message}
+            >
+              <Input type="date" {...register('effectiveFrom')} />
+            </FormField>
+
+            <fieldset className="sm:col-span-2">
+              <legend className="mb-1.5 text-[13px] font-medium">Working days</legend>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Leave every box clear to follow the company weekend. Tick days to give this shift
+                its own week - a Sunday-to-Thursday team inside a Monday-to-Friday company.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {WEEK_DAY_VALUES.map((day) => (
+                  <label
+                    key={day}
+                    className="flex cursor-pointer items-center gap-1.5 rounded-md border border-input px-2.5 py-1.5 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-3.5 rounded border-input accent-[var(--primary)]"
+                      value={day}
+                      checked={workingDays.includes(day)}
+                      {...register('workingDays')}
+                    />
+                    {day.slice(0, 3)}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="sm:col-span-2 rounded-lg border border-border p-3">
+              <legend className="px-1 text-[13px] font-medium">Rule overrides</legend>
+              <p className="mb-3 text-xs text-muted-foreground">
+                Blank inherits the company attendance rules.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField
+                  label="Late grace (minutes)"
+                  htmlFor="shift-grace"
+                  error={formState.errors.graceMinutes?.message}
+                >
+                  <Input type="number" min={0} {...register('graceMinutes')} placeholder="Inherit" />
+                </FormField>
+                <FormField
+                  label="Early-leave grace (minutes)"
+                  htmlFor="shift-early-grace"
+                  error={formState.errors.earlyLeaveGraceMinutes?.message}
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    {...register('earlyLeaveGraceMinutes')}
+                    placeholder="Inherit"
+                  />
+                </FormField>
+                <FormField label="Track lateness" htmlFor="shift-late-tracking">
+                  <NativeSelect {...register('lateTrackingEnabled')}>
+                    <option value="">Inherit</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
+                  </NativeSelect>
+                </FormField>
+                <FormField label="Track early departure" htmlFor="shift-early-tracking">
+                  <NativeSelect {...register('earlyDepartureTrackingEnabled')}>
+                    <option value="">Inherit</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
+                  </NativeSelect>
+                </FormField>
+                <FormField label="Overtime" htmlFor="shift-overtime">
+                  <NativeSelect {...register('overtimeEnabled')}>
+                    <option value="">Inherit</option>
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                  </NativeSelect>
+                </FormField>
+                <FormField
+                  label="Daily overtime cap (minutes)"
+                  htmlFor="shift-ot-cap"
+                  error={formState.errors.overtimeDailyCapMinutes?.message}
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    {...register('overtimeDailyCapMinutes')}
+                    placeholder="Inherit"
+                  />
+                </FormField>
+                <FormField
+                  label="Minimum overtime (minutes)"
+                  htmlFor="shift-ot-min"
+                  hint="Below this, nothing is credited."
+                  error={formState.errors.overtimeMinimumMinutes?.message}
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    {...register('overtimeMinimumMinutes')}
+                    placeholder="Inherit"
+                  />
+                </FormField>
+              </div>
+            </fieldset>
+
             <label className="flex cursor-pointer items-center gap-2.5 text-[13px] sm:col-span-2">
               <input type="checkbox" className="size-4 rounded border-input accent-[var(--primary)]" {...register('isActive')} />
               Active

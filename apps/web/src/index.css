@@ -356,6 +356,21 @@
   }
 }
 
+@layer components {
+  /*
+   * A centred modal never exceeds the viewport. Header and footer stay put;
+   * DialogBody is the part that scrolls. The dvh line wins where supported
+   * and respects notches and home indicators; the vh line is the fallback.
+   */
+  .hrms-modal {
+    max-height: calc(100vh - 2rem);
+    max-height: calc(
+      100dvh - 2rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+    );
+    max-width: calc(100vw - 2rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  }
+}
+
 @layer utilities {
   .animate-in-fade {
     animation: hrms-fade-in 160ms ease-out both;
@@ -413,15 +428,20 @@
   }
 }
 
-/* Keeps the -translate-x/y centring while scaling. */
+/*
+ * Scale only. The panel is centred by Tailwind's `-translate-x-1/2
+ * -translate-y-1/2`, which in v4 is the standalone CSS `translate` property,
+ * not `transform`. Putting translate() in here as well stacked the two and
+ * pushed every modal a further half-panel up and to the left, off-screen.
+ */
 @keyframes hrms-modal-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.97);
+    transform: scale(0.97);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: scale(1);
   }
 }
 

@@ -1,5 +1,14 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { BarChart3, LayoutDashboard, Layers3, Receipt, Settings2, UserCog, Wallet } from 'lucide-react';
+import {
+  BarChart3,
+  Calculator,
+  LayoutDashboard,
+  Layers3,
+  Receipt,
+  Settings2,
+  UserCog,
+  Wallet,
+} from 'lucide-react';
 import { PERMISSIONS, type Permission } from '@hrms/shared';
 import { usePermissions } from '@/features/auth/session-context';
 import { cn } from '@/lib/utils';
@@ -27,6 +36,15 @@ const TABS: Array<{
     end: true,
   },
   { to: '/payroll/runs', label: 'Pay runs', icon: Receipt, permission: PERMISSIONS.PAYROLL_READ },
+  {
+    // Sits beside Pay runs deliberately: the preview is the step before a run
+    // is finalized, and burying it under a run would hide it from whoever
+    // needs to check the arithmetic first.
+    to: '/payroll/preview',
+    label: 'Preview',
+    icon: Calculator,
+    permission: PERMISSIONS.PAYROLL_READ,
+  },
   {
     to: '/payroll/salaries',
     label: 'Salary management',

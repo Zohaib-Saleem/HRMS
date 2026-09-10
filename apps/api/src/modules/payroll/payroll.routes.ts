@@ -109,6 +109,8 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
       overtimeMultiplier: num(settings.overtimeMultiplier),
       overtimeFixedRate: num(settings.overtimeFixedRate),
       requireApprovedOvertime: settings.requireApprovedOvertime,
+      overtimeCapMinutes: settings.overtimeCapMinutes,
+      fallbackScheduledMinutes: settings.fallbackScheduledMinutes,
       deductUnpaidAbsence: settings.deductUnpaidAbsence,
       deductUnpaidLeave: settings.deductUnpaidLeave,
       lateDeductionMode: settings.lateDeductionMode,
@@ -144,6 +146,8 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
         overtimeMultiplier: num(before.overtimeMultiplier),
         overtimeFixedRate: num(before.overtimeFixedRate),
         requireApprovedOvertime: before.requireApprovedOvertime,
+        overtimeCapMinutes: before.overtimeCapMinutes,
+        fallbackScheduledMinutes: before.fallbackScheduledMinutes,
         deductUnpaidAbsence: before.deductUnpaidAbsence,
         deductUnpaidLeave: before.deductUnpaidLeave,
         lateDeductionMode: before.lateDeductionMode,
@@ -154,6 +158,8 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
         earlyLeaveGraceMinutes: before.earlyLeaveGraceMinutes,
         roundingDecimals: before.roundingDecimals,
         payslipPrefix: before.payslipPrefix,
+        prorationMethod: before.prorationMethod,
+        payDay: before.payDay,
         ...(request.body as Record<string, unknown>),
       });
 

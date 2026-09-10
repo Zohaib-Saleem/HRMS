@@ -217,7 +217,7 @@ export function EmployeeDetailPage() {
       {tab === 'Overview' ? <OverviewTab employee={employee} /> : null}
       {tab === 'Personal' ? <PersonalTab employee={employee} canSeeRestricted={has(PERMISSIONS.EMPLOYEE_SENSITIVE_READ)} /> : null}
       {tab === 'Compensation' ? (
-        <EmployeeCompensation employeeId={employee.id} />
+        <EmployeeCompensation employeeId={employee.id} employeeName={employee.fullName} />
       ) : null}
       {tab === 'Experience' ? <ExperienceTab employee={employee} /> : null}
       {tab === 'Reports' ? <ReportsTab employee={employee} onOpen={(rid) => navigate(`/people/${rid}`)} /> : null}

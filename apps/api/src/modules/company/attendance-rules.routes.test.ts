@@ -14,6 +14,9 @@ import { PERMISSIONS, type Permission } from '@hrms/shared';
 
 const db = vi.hoisted(() => ({
   company: { findUniqueOrThrow: vi.fn(), update: vi.fn() },
+  // The rules screen reads the pay-side switches beside the rules they depend
+  // on. It reads them; it never writes them.
+  payrollSettings: { findUnique: vi.fn() },
   auditLog: { create: vi.fn() },
 }));
 
@@ -51,6 +54,11 @@ const STORED = {
   halfDayMinutes: 240,
   fullDayMinutes: 480,
   overtimeAfterMinutes: 480,
+  defaultBreakMinutes: 0,
+  lateThresholdMinutes: 0,
+  earlyLeaveThresholdMinutes: 0,
+  weekendWorkRule: 'AS_WORKING_DAY',
+  holidayWorkRule: 'AS_WORKING_DAY',
 };
 
 /** A valid payload; individual cases corrupt one field. */
@@ -88,6 +96,12 @@ const SUPER_ADMIN: Permission[] = [
 ];
 /** HR Admin holds company.manage but NOT settings.manage. */
 const HR_ADMIN: Permission[] = [PERMISSIONS.COMPANY_READ, PERMISSIONS.COMPANY_MANAGE];
+/** HR Admin, plus the rules permission granted to them explicitly. */
+const HR_ADMIN_WITH_RULES: Permission[] = [
+  PERMISSIONS.COMPANY_READ,
+  PERMISSIONS.COMPANY_MANAGE,
+  PERMISSIONS.ATTENDANCE_RULES_MANAGE,
+];
 const EMPLOYEE: Permission[] = [PERMISSIONS.COMPANY_READ];
 const NOBODY: Permission[] = [];
 
@@ -121,6 +135,7 @@ beforeEach(() => {
     ...STORED,
     ...data,
   }));
+  db.payrollSettings.findUnique.mockResolvedValue(null);
   db.auditLog.create.mockResolvedValue({});
 });
 
@@ -240,8 +255,10 @@ describe('changing the rules', () => {
 
     const written = db.company.update.mock.calls[0]?.[0]?.data as Record<string, unknown>;
     expect(written).not.toHaveProperty('isSuperCompany');
-    // Half-day thresholds are not this endpoint's to change.
-    expect(written).not.toHaveProperty('halfDayMinutes');
+    // Half-day thresholds ARE this endpoint's to change now: the attendance
+    // module moved every rule the engine reads onto one screen, so that a
+    // rule Super Admin cannot see is not also a rule Super Admin cannot fix.
+    expect(written).toHaveProperty('halfDayMinutes', 1);
   });
 });
 
@@ -336,5 +353,100 @@ describe('saving rules touches nothing but the company row', () => {
     expect(db.company.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'company-1' } }),
     );
+  });
+});
+
+
+describe('the explicit rules permission', () => {
+  it('lets HR Admin save once attendance.rules.manage is granted', async () => {
+    // The whole reason the permission exists: a company that wants its HR
+    // team to own the attendance rules should not have to hand them every
+    // other system setting to do it.
+    app = await appAs(HR_ADMIN_WITH_RULES);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/company/attendance-rules',
+      payload: VALID,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(db.company.update).toHaveBeenCalledTimes(1);
+    expect(response.json().data.canManage).toBe(true);
+  });
+
+  it('still refuses HR Admin without it', async () => {
+    app = await appAs(HR_ADMIN);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/company/attendance-rules',
+      payload: VALID,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(db.company.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('what the screen reads back', () => {
+  it('carries the shipped defaults, so "reset" offers what a new company gets', async () => {
+    app = await appAs(SUPER_ADMIN);
+
+    const response = await app.inject({ method: 'GET', url: '/company/attendance-rules' });
+    const data = response.json().data;
+
+    // The confirmed office policy, as configuration rather than as code.
+    expect(data.defaults.defaultShiftStart).toBe('09:00');
+    expect(data.defaults.defaultShiftEnd).toBe('18:00');
+    expect(data.defaults.fullDayMinutes).toBe(480);
+    expect(data.defaults.weekendDays).toEqual(['SATURDAY', 'SUNDAY']);
+  });
+
+  it('reads the pay-side switches, and never writes them', async () => {
+    db.payrollSettings.findUnique.mockResolvedValue({
+      deductUnpaidAbsence: true,
+      deductUnpaidLeave: true,
+      lateDeductionMode: 'PER_MINUTE',
+      earlyLeaveDeductionMode: 'NONE',
+      overtimeMode: 'MULTIPLIER',
+      requireApprovedOvertime: true,
+      overtimeMultiplier: 1.5,
+      overtimeCapMinutes: 2400,
+    });
+
+    app = await appAs(SUPER_ADMIN);
+    const response = await app.inject({ method: 'GET', url: '/company/attendance-rules' });
+    const integration = response.json().data.payrollIntegration;
+
+    expect(integration.lateDeductionEnabled).toBe(true);
+    expect(integration.earlyLeaveDeductionEnabled).toBe(false);
+    expect(integration.overtimePaid).toBe(true);
+    expect(integration.overtimeCapMinutes).toBe(2400);
+    // One store, no copy: this screen reads payroll settings and edits none.
+    expect(db.payrollSettings).not.toHaveProperty('update');
+    expect(db.payrollSettings).not.toHaveProperty('upsert');
+  });
+
+  it('says null when payroll has never been configured', async () => {
+    app = await appAs(SUPER_ADMIN);
+    const response = await app.inject({ method: 'GET', url: '/company/attendance-rules' });
+    expect(response.json().data.payrollIntegration).toBeNull();
+  });
+
+  it('leaves a rule the payload did not mention exactly as it was', async () => {
+    app = await appAs(SUPER_ADMIN);
+
+    await app.inject({
+      method: 'PATCH',
+      url: '/company/attendance-rules',
+      payload: VALID,
+    });
+
+    const written = db.company.update.mock.calls[0]![0]!.data as Record<string, unknown>;
+    // The newer fields are optional so an older client can still save. An
+    // absent field must mean "leave alone", never "reset to a default".
+    expect(written.weekendWorkRule).toBeUndefined();
+    expect(written.lateThresholdMinutes).toBeUndefined();
   });
 });
