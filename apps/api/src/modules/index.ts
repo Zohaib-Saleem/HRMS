@@ -22,6 +22,7 @@ import { attendancePolicyRoutes } from './time/attendance-policies.routes.js';
 import { attendanceRoutes } from './time/attendance.routes.js';
 import { attendanceAdminRoutes } from './time/attendance-admin.routes.js';
 import { attendanceReportRoutes } from './time/attendance-reports.routes.js';
+import { attendanceAnalyticsRoutes } from './time/attendance-analytics.routes.js';
 import { shiftRoutes } from './time/shifts.routes.js';
 import { timesheetRoutes } from './time/timesheets.routes.js';
 import { leaveTypeRoutes } from './leave/leave-types.routes.js';
@@ -83,6 +84,7 @@ export const modules: ModuleDefinition[] = [
   // self-service routes stay readable.
   { prefix: '/attendance', plugin: attendanceAdminRoutes },
   { prefix: '/attendance/reports', plugin: attendanceReportRoutes },
+  { prefix: '/attendance/analytics', plugin: attendanceAnalyticsRoutes },
   { prefix: '/attendance/mappings', plugin: deviceMappingRoutes },
   { prefix: '/attendance-policies', plugin: attendancePolicyRoutes },
   { prefix: '/attendance/devices', plugin: attendanceDeviceRoutes },

@@ -19,11 +19,164 @@ const monthLabel = (d: Date) =>
   d.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
 
 /**
- * Month grid of derived attendance.
+ * One cell of the month grid.
+ *
+ * Deliberately not `AttendanceDay`. The same grid draws one person's month -
+ * where a cell is a status - and the whole workforce's month, where a cell is a
+ * tally and no single status is true of it. Reducing both to a colour and two
+ * short lines is what lets one grid serve both without either lying.
+ */
+export interface CalendarCell {
+  date: string;
+  /** Which `--att-*` colour the cell takes. */
+  status: DerivedAttendanceStatus;
+  /** The line under the day number. Kept to a couple of words. */
+  label: string;
+  /** The full text for the title attribute and the accessible name. */
+  detail: string;
+}
+
+/** One person's derived day, as a cell. The reading the calendar always had. */
+export function cellFromDay(day: AttendanceDay): CalendarCell {
+  return {
+    date: day.date,
+    status: day.status,
+    label: day.holidayName ?? day.leaveTypeName ?? DERIVED_ATTENDANCE_STATUS_LABELS[day.status],
+    detail: [
+      day.date,
+      DERIVED_ATTENDANCE_STATUS_LABELS[day.status],
+      day.holidayName ?? day.leaveTypeName ?? '',
+      day.workedMinutes !== null ? `${(day.workedMinutes / 60).toFixed(1)}h` : '',
+      day.lateMinutes ? `${day.lateMinutes}m late` : '',
+      day.overtimeMinutes ? `${day.overtimeMinutes}m overtime` : '',
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  };
+}
+
+interface GridProps {
+  cells: CalendarCell[];
+  loading?: boolean;
+  selectedDate?: string | null;
+  onSelectDate?: ((date: string) => void) | undefined;
+}
+
+/**
+ * The month grid itself.
  *
  * Every calendar day appears, including ones with no record - the API
  * classifies them as weekend, holiday, leave or absent, so a gap in the grid
  * always means something specific rather than missing data.
+ *
+ * A cell is a button only when there is somewhere to go. A static grid of
+ * buttons that do nothing is worse for a screen reader than a static grid.
+ */
+export function CalendarGrid({ cells, loading = false, selectedDate, onSelectDate }: GridProps) {
+  // Blank cells so the first day lands under the right weekday column.
+  const leadingBlanks = cells.length > 0 ? new Date(`${cells[0]!.date}T00:00:00Z`).getUTCDay() : 0;
+
+  return (
+    <>
+      <div className="grid grid-cols-7 gap-1 sm:gap-1.5" role="grid" aria-label="Attendance calendar">
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+          <div
+            key={d}
+            className="pb-1 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:text-[11px]"
+          >
+            {d}
+          </div>
+        ))}
+
+        {loading ? (
+          Array.from({ length: 35 }).map((_, i) => (
+            <Skeleton key={i} className="aspect-square rounded-lg" />
+          ))
+        ) : (
+          <>
+            {Array.from({ length: leadingBlanks }).map((_, i) => (
+              <div key={`blank-${i}`} aria-hidden />
+            ))}
+            {cells.map((cell) => {
+              const dayNumber = Number(cell.date.slice(8, 10));
+              const selected = cell.date === selectedDate;
+              const className = cn(
+                'flex aspect-square flex-col items-center justify-center rounded-lg border p-1 text-center transition-colors',
+                STATUS_CELL[cell.status],
+                selected && 'ring-2 ring-ring ring-offset-1 ring-offset-background',
+              );
+              const body = (
+                <>
+                  <span className="tabular text-[12px] font-semibold leading-none sm:text-[13px]">
+                    {dayNumber}
+                  </span>
+                  <span className="mt-1 line-clamp-2 text-[9px] font-medium leading-tight sm:text-[9.5px]">
+                    {cell.label}
+                  </span>
+                </>
+              );
+
+              return onSelectDate ? (
+                <button
+                  key={cell.date}
+                  type="button"
+                  title={cell.detail}
+                  aria-label={cell.detail}
+                  aria-pressed={selected}
+                  onClick={() => onSelectDate(cell.date)}
+                  className={cn(className, 'cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring')}
+                >
+                  {body}
+                </button>
+              ) : (
+                <div key={cell.date} title={cell.detail} className={className}>
+                  {body}
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2.5 border-t border-border pt-3 text-[11px] text-muted-foreground sm:gap-3 sm:text-[11.5px]">
+        {(Object.keys(STATUS_COLOR) as DerivedAttendanceStatus[]).map((s) => (
+          <span key={s} className="inline-flex items-center gap-1.5">
+            <span className={cn('size-3 rounded border', STATUS_COLOR[s])} aria-hidden />
+            {DERIVED_ATTENDANCE_STATUS_LABELS[s]}
+          </span>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** Previous / next month, shared by every caller that navigates months. */
+export function MonthNav({
+  onShift,
+  className,
+}: {
+  onShift: (delta: number) => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn('flex items-center gap-1', className)}>
+      <Button variant="outline" size="icon-sm" aria-label="Previous month" onClick={() => onShift(-1)}>
+        <ChevronLeft />
+      </Button>
+      <Button variant="outline" size="icon-sm" aria-label="Next month" onClick={() => onShift(1)}>
+        <ChevronRight />
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * One person's month of derived attendance, fetching its own data.
+ *
+ * The personal calendar as it has always been: its own month state, its own
+ * request to `/attendance/summary`, its own totals strip. The grid underneath
+ * is now shared with the analytics view so the two can never disagree about
+ * what a status looks like.
  */
 export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
   const [month, setMonth] = React.useState(() => {
@@ -50,21 +203,11 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
   const days = query.data?.days ?? [];
   const totals = query.data?.totals;
 
-  // Blank cells so the first day lands under the right weekday column.
-  const leadingBlanks = days.length > 0 ? new Date(`${days[0]!.date}T00:00:00Z`).getUTCDay() : 0;
-
   return (
     <Card className="mb-6">
       <CardHeader bordered className="flex-row items-center justify-between">
         <CardTitle>{monthLabel(month)}</CardTitle>
-        <div className="flex items-center gap-1">
-          <Button variant="outline" size="icon-sm" aria-label="Previous month" onClick={() => shiftMonth(-1)}>
-            <ChevronLeft />
-          </Button>
-          <Button variant="outline" size="icon-sm" aria-label="Next month" onClick={() => shiftMonth(1)}>
-            <ChevronRight />
-          </Button>
-        </div>
+        <MonthNav onShift={shiftMonth} />
       </CardHeader>
 
       {query.isError ? (
@@ -100,63 +243,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId?: string }) {
             </div>
           ) : null}
 
-          <div className="grid grid-cols-7 gap-1.5" role="grid" aria-label="Attendance calendar">
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-              <div key={d} className="pb-1 text-center text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {d}
-              </div>
-            ))}
-
-            {query.isLoading
-              ? Array.from({ length: 35 }).map((_, i) => (
-                  <Skeleton key={i} className="aspect-square rounded-lg" />
-                ))
-              : (
-                <>
-                  {Array.from({ length: leadingBlanks }).map((_, i) => (
-                    <div key={`blank-${i}`} aria-hidden />
-                  ))}
-                  {days.map((day) => {
-                    const dayNumber = Number(day.date.slice(8, 10));
-                    const title = [
-                      day.date,
-                      DERIVED_ATTENDANCE_STATUS_LABELS[day.status],
-                      day.holidayName ?? day.leaveTypeName ?? '',
-                      day.workedMinutes !== null ? `${(day.workedMinutes / 60).toFixed(1)}h` : '',
-                      day.lateMinutes ? `${day.lateMinutes}m late` : '',
-                      day.overtimeMinutes ? `${day.overtimeMinutes}m overtime` : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ');
-
-                    return (
-                      <div
-                        key={day.date}
-                        title={title}
-                        className={cn(
-                          'flex aspect-square flex-col items-center justify-center rounded-lg border p-1 text-center transition-colors',
-                          STATUS_CELL[day.status],
-                        )}
-                      >
-                        <span className="tabular text-[13px] font-semibold leading-none">{dayNumber}</span>
-                        <span className="mt-1 line-clamp-2 text-[9.5px] font-medium leading-tight">
-                          {day.holidayName ?? day.leaveTypeName ?? DERIVED_ATTENDANCE_STATUS_LABELS[day.status]}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </>
-              )}
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-3 border-t border-border pt-3 text-[11.5px] text-muted-foreground">
-            {(Object.keys(STATUS_COLOR) as DerivedAttendanceStatus[]).map((s) => (
-              <span key={s} className="inline-flex items-center gap-1.5">
-                <span className={cn('size-3 rounded border', STATUS_COLOR[s])} aria-hidden />
-                {DERIVED_ATTENDANCE_STATUS_LABELS[s]}
-              </span>
-            ))}
-          </div>
+          <CalendarGrid cells={days.map(cellFromDay)} loading={query.isLoading} />
         </CardContent>
       )}
     </Card>

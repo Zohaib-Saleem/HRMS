@@ -985,6 +985,15 @@ export const attendanceReportQuerySchema = z.object({
   departmentId: z.string().trim().max(64).optional(),
   teamId: z.string().trim().max(64).optional(),
   shiftId: z.string().trim().max(64).optional(),
+  /**
+   * Narrows to employee-days in this state, before the report is built.
+   *
+   * Optional and absent by default, so every existing report is unchanged.
+   * It exists so an export can be the same population the screen was showing:
+   * a chart filtered to absences that exported every day would not be an
+   * export of what the reader was looking at.
+   */
+  status: z.enum(DERIVED_ATTENDANCE_STATUSES).optional(),
   format: z.enum(['json', 'csv']).default('json'),
 });
 
@@ -1067,3 +1076,139 @@ export const attendanceEmployeeFileQuerySchema = z.object({
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
 });
+
+// ------------------------------------------------------ attendance analytics
+
+/**
+ * The aggregated month behind the attendance bar chart.
+ *
+ * One row per calendar day, for everybody the caller may see, computed on the
+ * server from exactly the same derivation the table, the calendar and the
+ * reports use. The browser never sees a punch or a per-employee day: a month
+ * for the whole company is thirty-odd rows here and tens of thousands of rows
+ * if the aggregation is done in the client.
+ *
+ * Nothing in this shape is a new rule. Every figure is a sum of values the
+ * engine already produced, and every count is a tally of statuses and flags it
+ * already assigned.
+ */
+export const attendanceAnalyticsQuerySchema = z.object({
+  /** YYYY-MM. An explicit from/to wins, matching every other attendance query. */
+  month: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}$/, 'Use YYYY-MM.')
+    .optional(),
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  employeeId: z.string().trim().max(64).optional(),
+  departmentId: z.string().trim().max(64).optional(),
+  teamId: z.string().trim().max(64).optional(),
+  /**
+   * Narrows to employee-days in this state. Accepts the derived set, so
+   * "weekends only" and "off days only" are answerable.
+   *
+   * Filtering removes days from the aggregate, so the chart and the summary
+   * describe the filtered population together and cannot disagree.
+   */
+  status: z.enum(DERIVED_ATTENDANCE_STATUSES).optional(),
+});
+
+export type AttendanceAnalyticsQuery = z.infer<typeof attendanceAnalyticsQuerySchema>;
+
+/**
+ * How one day's worked time divides up.
+ *
+ * The three parts partition `workedMinutes` exactly - they are disjoint and
+ * they sum to it - which is what makes the stack an honest shape. In
+ * particular:
+ *
+ *   - Overtime is a LABEL on part of worked time, never time added to it, so
+ *     it is carved out of the total rather than piled on top.
+ *   - `lateMinutes` is time NOT worked - minutes missed at the start of a
+ *     shift - so it is never a segment of the bar. It is reported beside the
+ *     bar instead. `lateWorkedMinutes` is a different quantity: the ordinary
+ *     worked time contributed by days that carried the LATE flag.
+ */
+export interface AttendanceWorkedSplit {
+  /** Regular worked minutes on days with no LATE flag. */
+  onTimeMinutes: number;
+  /** Regular worked minutes on days that did carry the LATE flag. */
+  lateWorkedMinutes: number;
+  /** The overtime portion of worked minutes, on any day. */
+  overtimeMinutes: number;
+}
+
+/** One calendar day, summed over every employee in scope. */
+export interface AttendanceDailyTotal extends AttendanceWorkedSplit {
+  date: string;
+  /** Employee-days counted for this date - the population behind the column. */
+  employeeCount: number;
+  present: number;
+  halfDay: number;
+  absent: number;
+  onLeave: number;
+  holiday: number;
+  weekend: number;
+  offDay: number;
+  upcoming: number;
+  /** Sum of worked minutes. Equals the three split parts added together. */
+  workedMinutes: number;
+  /** Sum of rostered minutes on days somebody was rostered for. */
+  expectedMinutes: number;
+  /** Minutes missed at the start of a shift. Never part of worked time. */
+  lateMinutes: number;
+  earlyLeaveMinutes: number;
+  /** How many employee-days carried each flag. */
+  lateCount: number;
+  overtimeCount: number;
+  /** Earliest check-in and latest check-out across the day, ISO or null. */
+  firstCheckInAt: string | null;
+  lastCheckOutAt: string | null;
+  /**
+   * What the day is, for the column's state ribbon.
+   *
+   * The day's own character where it has one - a company holiday, a weekend,
+   * a date that has not arrived - and `WORKING` otherwise. Derived from the
+   * statuses already assigned, never from a weekday number.
+   */
+  dayState: 'WORKING' | 'WEEKEND' | 'HOLIDAY' | 'UPCOMING' | 'OFF_DAY';
+  /** The holiday's name when every employee's day was that holiday. */
+  holidayName: string | null;
+}
+
+/** The headline cards above the chart. Same population as the days. */
+export interface AttendanceAnalyticsSummary {
+  /** Distinct employees in scope after filtering - people, not employee-days. */
+  totalEmployees: number;
+  present: number;
+  absent: number;
+  halfDay: number;
+  onLeave: number;
+  holiday: number;
+  weekend: number;
+  offDay: number;
+  upcoming: number;
+  workedMinutes: number;
+  overtimeMinutes: number;
+  lateMinutes: number;
+  earlyLeaveMinutes: number;
+  /**
+   * Mean worked minutes per employee-day that produced a worked figure.
+   *
+   * Days nobody worked are not in the denominator: averaging them in would
+   * report a company that works eight hours as working five, and the figure
+   * would drop every weekend. Null when nothing was worked at all.
+   */
+  averageWorkedMinutes: number | null;
+  /** Present + half days over the employee-days that were scored. */
+  attendancePercentage: number | null;
+}
+
+export interface AttendanceAnalyticsResponse {
+  days: AttendanceDailyTotal[];
+  summary: AttendanceAnalyticsSummary;
+  range: { from: string; to: string };
+  /** True when the employee set was cut at the server ceiling. */
+  truncated: boolean;
+}

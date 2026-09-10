@@ -371,8 +371,19 @@ export const attendanceReportRoutes: FastifyPluginAsync = async (app) => {
       shiftName: shifts[index]?.name ?? null,
     }));
 
+    /**
+     * The status filter, applied to days rather than to employees.
+     *
+     * Filtering here - once, in the one place that assembles a report - keeps
+     * every report type consistent with it and keeps the deriver unaware of
+     * it. An employee with no matching day still appears with no rows, which
+     * is what a per-employee summary of "days absent" should show.
+     */
     const days = new Map<string, DerivedDay[]>(
-      employees.map((e) => [e.id, derived.get(e.id) ?? []]),
+      employees.map((e) => {
+        const all = derived.get(e.id) ?? [];
+        return [e.id, query.status ? all.filter((d) => d.status === query.status) : all];
+      }),
     );
 
     return buildAttendanceReport({

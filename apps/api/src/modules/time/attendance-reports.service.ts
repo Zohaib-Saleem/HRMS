@@ -276,6 +276,13 @@ function monthlyReport(input: ReportInput): Pick<AttendanceReport, 'columns' | '
     }
 
     rows.push({
+      /**
+       * Carried for screens that need to link a row back to a person, and
+       * deliberately not in `columns`: the CSV and the report table are both
+       * built from the column list, so an id here is invisible to every
+       * existing consumer and changes no export.
+       */
+      employeeId: employee.id,
       employeeNumber: employee.employeeNumber,
       employeeName: employee.name,
       departmentName: employee.departmentName,
