@@ -7,6 +7,7 @@ import { SidebarNav } from './sidebar';
 import { UserMenu } from './user-menu';
 import { NotificationCenter } from '@/features/notifications/notification-center';
 import { cn } from '@/lib/utils';
+import { BreadcrumbTitleProvider } from './breadcrumb-title';
 
 const COLLAPSE_KEY = 'hrms.sidebar.collapsed';
 
@@ -26,6 +27,8 @@ export function AppShell() {
   const [collapsed, setCollapsed] = React.useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const location = useLocation();
+  /** What the current page calls itself, for the last breadcrumb. */
+  const [leafTitle, setLeafTitle] = React.useState<string | null>(null);
 
   const toggleCollapsed = React.useCallback(() => {
     setCollapsed((prev) => {
@@ -41,6 +44,10 @@ export function AppShell() {
 
   // Close the mobile drawer whenever the route changes.
   React.useEffect(() => setMobileOpen(false), [location.pathname]);
+
+  // A name belongs to the page that set it. Dropping it on navigation stops the
+  // previous record's name sitting in the trail while the next one loads.
+  React.useEffect(() => setLeafTitle(null), [location.pathname]);
 
   return (
     <div className="flex h-full bg-background">
@@ -83,7 +90,7 @@ export function AppShell() {
             <Menu className="size-5" />
           </button>
 
-          <Breadcrumbs pathname={location.pathname} />
+          <Breadcrumbs pathname={location.pathname} leafTitle={leafTitle} />
 
           <div className="ml-auto flex items-center gap-1.5">
             {/* Reserved for global search - wired up with the People module. */}
@@ -116,7 +123,9 @@ export function AppShell() {
               blank the whole page.
             */}
             <React.Suspense fallback={<RouteFallback />}>
-              <Outlet />
+              <BreadcrumbTitleProvider setTitle={setLeafTitle}>
+                <Outlet />
+              </BreadcrumbTitleProvider>
             </React.Suspense>
           </div>
         </main>
@@ -137,18 +146,19 @@ function RouteFallback() {
 }
 
 /** Derives the trail from the nav registry, so it never drifts from routing. */
-function Breadcrumbs({ pathname }: { pathname: string }) {
+function Breadcrumbs({ pathname, leafTitle }: { pathname: string; leafTitle: string | null }) {
   const segments = pathname.split('/').filter(Boolean);
 
   const trail = segments.map((_, index) => {
     const to = `/${segments.slice(0, index + 1).join('/')}`;
     const fromNav = NAV_SECTIONS.flatMap((s) => s.items).find((item) => item.to === to)?.label;
-    const label =
-      ROUTE_TITLES[to] ??
-      fromNav ??
-      to.split('/').pop()?.replace(/-/g, ' ') ??
-      'Page';
-    return { to, label };
+    const registered = ROUTE_TITLES[to] ?? fromNav;
+    // The page's own name is only consulted for the LAST crumb, and only when
+    // the registry has nothing - a real route title always wins.
+    const named = registered ?? (index === segments.length - 1 ? leafTitle : null);
+    const label = named ?? to.split('/').pop()?.replace(/-/g, ' ') ?? 'Page';
+    // An id read as a word under `capitalize`; a name must not be re-cased.
+    return { to, label, isName: named !== null && registered === undefined };
   });
 
   return (
@@ -166,7 +176,10 @@ function Breadcrumbs({ pathname }: { pathname: string }) {
         <React.Fragment key={crumb.to}>
           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" aria-hidden />
           {index === trail.length - 1 ? (
-            <span className="truncate font-medium capitalize" aria-current="page">
+            <span
+              className={cn('truncate font-medium', !crumb.isName && 'capitalize')}
+              aria-current="page"
+            >
               {crumb.label}
             </span>
           ) : (

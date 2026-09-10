@@ -1,25 +1,30 @@
 import * as React from 'react';
-import { Users } from 'lucide-react';
+import { CalendarClock } from 'lucide-react';
 import {
   DERIVED_ATTENDANCE_STATUS_LABELS,
-  UNASSIGNED_TEAM_LABEL,
   type AttendanceDay,
-  type TeamAttendanceRow,
 } from '@hrms/shared';
 import { cn, formatDate } from '@/lib/utils';
 import { EmptyState } from '@/components/feedback/states';
 import { minutesLabel, timeLabel } from './attendance-ui';
 
 /**
- * Team attendance as bars: one vertical bar per employee per day.
+ * One employee's month as bars: one vertical bar per day.
  *
- * Reads the rows the table beside it already fetched from `/attendance/team` -
- * the same request, the same filters, the same data scope, the same page. There
- * is no second query and no second calculation: every figure here was derived
- * by the attendance engine on the server, and this only decides how tall to
- * draw it and what colour to paint it.
+ * Draws the days the calendar beside it already fetched from
+ * `/attendance/summary` - the same request, the same month, the same employee.
+ * There is no second query and no second derivation: every figure here was
+ * produced by the attendance engine on the server, and this file only decides
+ * how tall to draw it and what colour to paint it.
  *
- * Two rules keep it honest.
+ * Nothing in here knows what a working day is worth. No hour count, no grace
+ * period, no late or half-day or overtime threshold appears in this file, and
+ * none may be added: a company that moves from an eight-hour day to a nine-hour
+ * one changes its policy, the engine re-scores the days, and these bars follow
+ * without being touched. The only arithmetic performed here is a proportion -
+ * this day's worked minutes against the tallest day on screen.
+ *
+ * Two rules keep the drawing honest.
  *
  *   1. Bar height is `workedMinutes` and nothing else. A day with no worked
  *      time has no height to give, so it is drawn as a short marker in the
@@ -28,41 +33,22 @@ import { minutesLabel, timeLabel } from './attendance-ui';
  *
  *   2. Overtime is carved OUT of worked time, never stacked on top, because
  *      that is what overtime is: a label on part of the day. The bar is the
- *      hours somebody worked; the indigo cap says how many of them counted as
- *      overtime.
+ *      hours somebody worked; the indigo cap says how many of them the engine
+ *      counted as overtime.
  *
- * Colour comes from the status the engine assigned, with the LATE flag allowed
- * to tint an otherwise ordinary present day. Nothing here re-derives a status
- * from times, thresholds or shift rules.
+ * Colour comes from the status the engine assigned, with its own LATE flag
+ * allowed to tint an otherwise ordinary present day. Nothing here re-derives a
+ * status from times, thresholds or shift rules.
  */
 
 /** Never narrower than this; below it the plot scrolls sideways instead. */
-const MIN_COLUMN = 26;
-const GAP = 4;
+const MIN_COLUMN = 22;
+const GAP = 3;
 const PLOT_HEIGHT = 224;
 
-/**
- * The narrowest an employee's group may be drawn.
- *
- * A single-day range gives each person one bar, and a 26px column is not enough
- * to write a name under - every label came out as "Ad…". The group reserves
- * room for the name and centres its bars inside it instead.
- */
-const MIN_GROUP = 74;
-
-const groupWidth = (barCount: number): number =>
-  Math.max(MIN_GROUP, barCount * MIN_COLUMN + Math.max(0, barCount - 1) * GAP);
-
-interface Bar {
-  key: string;
-  employeeId: string;
-  employeeName: string;
-  employeeNumber: string;
-  /** The shift on the day itself where there is one, else the row's. */
-  shiftName: string | null;
-  teamName: string | null;
-  departmentName: string | null;
+interface BarDay {
   day: AttendanceDay;
+  key: string;
 }
 
 /**
@@ -73,7 +59,8 @@ interface Bar {
  * page down over a tint. The question is only ever asked of the engine's own
  * flag - lateness is never re-derived here from times or thresholds.
  */
-const isLate = (day: AttendanceDay): boolean => (day.flags ?? []).includes('LATE');
+const hasFlag = (day: AttendanceDay, flag: string): boolean =>
+  (day.flags ?? []).includes(flag as never);
 
 /**
  * The colour a bar takes.
@@ -82,7 +69,7 @@ const isLate = (day: AttendanceDay): boolean => (day.flags ?? []).includes('LATE
  * on-time day - it is an absence, a holiday, a weekend. Only once the day is
  * known to have been worked does lateness get to tint it.
  */
-function barColor(day: AttendanceDay): string {
+export function barColor(day: AttendanceDay): string {
   switch (day.status) {
     case 'ABSENT':
       return 'var(--att-absent-border)';
@@ -98,9 +85,7 @@ function barColor(day: AttendanceDay): string {
     case 'HALF_DAY':
       return 'var(--att-half-day-border)';
     case 'PRESENT':
-      return isLate(day)
-        ? 'var(--att-half-day-border)'
-        : 'var(--att-present-border)';
+      return hasFlag(day, 'LATE') ? 'var(--att-half-day-border)' : 'var(--att-present-border)';
     default:
       // A status the engine grew that this file has not been taught yet reads
       // as neutral rather than as an absence.
@@ -108,9 +93,9 @@ function barColor(day: AttendanceDay): string {
   }
 }
 
-/** What the bar is called in the legend and the panel. */
-function barMeaning(day: AttendanceDay): string {
-  if (day.status === 'PRESENT' && isLate(day)) return 'Late';
+/** What the bar is called in the legend and the detail panel. */
+export function barMeaning(day: AttendanceDay): string {
+  if (day.status === 'PRESENT' && hasFlag(day, 'LATE')) return 'Late';
   return DERIVED_ATTENDANCE_STATUS_LABELS[day.status] ?? day.status;
 }
 
@@ -118,12 +103,15 @@ function barMeaning(day: AttendanceDay): string {
  * Ticks a reader can reach: whole hours.
  *
  * The top tick must COVER the tallest bar. Walking up from zero until the max
- * is passed does not guarantee that - a nine-hour day with a four-hour step
+ * is passed does not guarantee that - a nine-hour day against a four-hour step
  * stops at eight, and the bar is then drawn at 112% of a plot it cannot leave.
  * Rounding the maximum up to the step first is what makes the axis a scale
  * rather than a suggestion.
+ *
+ * The candidate steps are units of clock time, not a statement about the
+ * working day: whichever the data reaches is the one used.
  */
-function axisTicks(maxMinutes: number): number[] {
+export function axisTicks(maxMinutes: number): number[] {
   if (maxMinutes <= 0) return [0];
   const maxHours = maxMinutes / 60;
   const step = [1, 2, 4, 8, 12, 24].find((s) => s >= maxHours / 4) ?? 24;
@@ -139,44 +127,38 @@ const dayNumber = (iso: string): string => iso.slice(8, 10).replace(/^0/, '');
 const orDash = (value: string | null | undefined): string =>
   value === null || value === undefined || value === '' ? '--' : value;
 
-export function TeamAttendanceBars({
-  rows,
+export function EmployeeAttendanceBars({
+  days,
+  employeeName,
   loading = false,
-  singleDay,
 }: {
-  rows: TeamAttendanceRow[];
+  days: AttendanceDay[];
+  employeeName: string;
   loading?: boolean;
-  /** One bar per person when true; a group of days per person otherwise. */
-  singleDay: boolean;
 }) {
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [selected, setSelected] = React.useState<string | null>(null);
 
-  const bars = React.useMemo<Bar[]>(
-    () =>
-      rows.flatMap((row) =>
-        // `days` is optional in practice as well as in principle: a row for
-        // somebody with nothing in range can arrive without it.
-        (row.days ?? []).map((day) => ({
-          key: `${row.employeeId}-${day.date}`,
-          employeeId: row.employeeId,
-          employeeName: row.employeeName,
-          employeeNumber: row.employeeNumber,
-          shiftName: day.shiftName ?? row.shiftName ?? null,
-          teamName: row.teamName,
-          departmentName: row.departmentName,
-          day,
-        })),
-      ),
-    [rows],
+  // A day that arrives without a date cannot be placed on an axis, and a null
+  // entry in the array is not worth a crash.
+  const bars = React.useMemo<BarDay[]>(
+    () => (days ?? []).filter((day) => day?.date).map((day) => ({ day, key: day.date })),
+    [days],
   );
+
+  // The month changing under a selection must not leave a stale day on screen.
+  const keys = bars.map((b) => b.key).join('|');
+  React.useEffect(() => {
+    setSelected(null);
+    setHovered(null);
+  }, [keys]);
 
   const shownKey = hovered ?? selected;
   const shown = bars.find((b) => b.key === shownKey) ?? null;
 
   const maxWorked = Math.max(0, ...bars.map((b) => b.day.workedMinutes ?? 0));
   const ticks = axisTicks(maxWorked);
-  // Never zero: an all-absent page still needs an axis to draw against.
+  // Never zero: an all-absent month still needs an axis to draw against.
   const axisTop = Math.max(ticks[ticks.length - 1] ?? 1, 1) * 60;
 
   if (loading) {
@@ -186,29 +168,14 @@ export function TeamAttendanceBars({
   if (bars.length === 0) {
     return (
       <EmptyState
-        icon={Users}
+        icon={CalendarClock}
         title="Nothing to chart"
-        description="No attendance days match the current filters. Widen the date range, or clear a filter."
+        description="No attendance days in this month. Try another month with the arrows above."
       />
     );
   }
 
-  // Grouped by person so a range reads as "this employee's week" rather than as
-  // an undifferentiated run of bars.
-  const groups: Array<{ employeeId: string; label: string; bars: Bar[] }> = [];
-  for (const bar of bars) {
-    const last = groups[groups.length - 1];
-    if (last && last.employeeId === bar.employeeId) last.bars.push(bar);
-    else
-      groups.push({
-        employeeId: bar.employeeId,
-        label: bar.employeeName,
-        bars: [bar],
-      });
-  }
-
-  const trackWidth =
-    groups.reduce((sum, group) => sum + groupWidth(group.bars.length), 0) + groups.length * 12;
+  const trackWidth = bars.length * (MIN_COLUMN + GAP);
 
   return (
     <div className="space-y-3">
@@ -228,7 +195,10 @@ export function TeamAttendanceBars({
 
         <div className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain pb-1">
           <div className="relative" style={{ minWidth: trackWidth }}>
-            <div className="pointer-events-none absolute inset-x-0 top-0" style={{ height: PLOT_HEIGHT }}>
+            <div
+              className="pointer-events-none absolute inset-x-0 top-0"
+              style={{ height: PLOT_HEIGHT }}
+            >
               {ticks.map((tick) => (
                 <div
                   key={tick}
@@ -239,82 +209,61 @@ export function TeamAttendanceBars({
             </div>
 
             <div
-              className="relative flex items-end gap-3"
-              style={{ height: PLOT_HEIGHT }}
+              className="relative flex items-end"
+              style={{ height: PLOT_HEIGHT, gap: GAP }}
               role="list"
-              aria-label="Worked hours per employee per day"
+              aria-label={`Worked hours per day for ${employeeName}`}
             >
-              {groups.map((group) => (
-                <div
-                  key={group.employeeId}
-                  className="flex h-full items-end justify-center"
-                  style={{ gap: GAP, minWidth: groupWidth(group.bars.length) }}
-                >
-                  {group.bars.map((bar) => (
-                    <BarColumn
-                      key={bar.key}
-                      bar={bar}
-                      axisTop={axisTop}
-                      selected={bar.key === selected}
-                      onHover={setHovered}
-                      onSelect={(key) => setSelected((prev) => (prev === key ? null : key))}
-                    />
-                  ))}
-                </div>
+              {bars.map((bar) => (
+                <BarColumn
+                  key={bar.key}
+                  bar={bar}
+                  employeeName={employeeName}
+                  axisTop={axisTop}
+                  selected={bar.key === selected}
+                  onHover={setHovered}
+                  onSelect={(key) => setSelected((prev) => (prev === key ? null : key))}
+                />
               ))}
             </div>
 
-            {/* The x axis: a day number under each bar, a name under each group. */}
-            <div className="mt-1.5 flex gap-3">
-              {groups.map((group) => (
-                <div
-                  key={group.employeeId}
-                  className="min-w-0"
-                  style={{ minWidth: groupWidth(group.bars.length) }}
+            {/* The x axis: the day of the month under each bar. */}
+            <div className="mt-1.5 flex" style={{ gap: GAP }}>
+              {bars.map((bar) => (
+                <span
+                  key={bar.key}
+                  className={cn(
+                    'tabular text-center text-[10px] leading-none sm:text-[10.5px]',
+                    bar.key === selected
+                      ? 'font-semibold text-foreground'
+                      : 'text-muted-foreground',
+                  )}
+                  style={{ minWidth: MIN_COLUMN, width: MIN_COLUMN }}
                 >
-                  <div className="flex justify-center" style={{ gap: GAP }}>
-                    {group.bars.map((bar) => (
-                      <span
-                        key={bar.key}
-                        className={cn(
-                          'tabular truncate text-center text-[10px] leading-none sm:text-[10.5px]',
-                          bar.key === selected
-                            ? 'font-semibold text-foreground'
-                            : 'text-muted-foreground',
-                        )}
-                        style={{ minWidth: MIN_COLUMN }}
-                      >
-                        {singleDay ? '' : dayNumber(bar.day.date)}
-                      </span>
-                    ))}
-                  </div>
-                  <p
-                    className="mt-1 truncate text-center text-[10.5px] text-muted-foreground"
-                    title={group.label}
-                  >
-                    {group.label}
-                  </p>
-                </div>
+                  {dayNumber(bar.day.date)}
+                </span>
               ))}
             </div>
           </div>
         </div>
       </div>
 
-      <BarDetail bar={shown} />
-      <TeamBarsLegend />
+      <BarDetail bar={shown} employeeName={employeeName} />
+      <BarsLegend />
     </div>
   );
 }
 
 function BarColumn({
   bar,
+  employeeName,
   axisTop,
   selected,
   onHover,
   onSelect,
 }: {
-  bar: Bar;
+  bar: BarDay;
+  employeeName: string;
   axisTop: number;
   selected: boolean;
   onHover: (key: string | null) => void;
@@ -322,18 +271,20 @@ function BarColumn({
 }) {
   const { day } = bar;
   const worked = day.workedMinutes ?? 0;
+  // Clamped to the day so a data oddity cannot draw a bar out of its own plot.
   const overtime = Math.min(day.overtimeMinutes ?? 0, worked);
   const base = Math.max(0, worked - overtime);
   const color = barColor(day);
 
   const label = [
-    bar.employeeName,
+    employeeName,
     formatDate(day.date),
     barMeaning(day),
     worked > 0 ? `${(worked / 60).toFixed(1)} hours worked` : 'no hours worked',
     day.lateMinutes ? `${day.lateMinutes} minutes late` : '',
     day.earlyLeaveMinutes ? `${day.earlyLeaveMinutes} minutes early leave` : '',
     overtime ? `${overtime} minutes overtime` : '',
+    hasFlag(day, 'MISSING_PUNCH') ? 'missing punch' : '',
   ]
     .filter(Boolean)
     .join(', ');
@@ -355,6 +306,7 @@ function BarColumn({
         type="button"
         className="absolute inset-0 z-10 cursor-pointer rounded-t-[3px] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring"
         aria-label={label}
+        title={label}
         aria-pressed={selected}
         onClick={() => onSelect(bar.key)}
         onMouseEnter={() => onHover(bar.key)}
@@ -376,11 +328,7 @@ function BarColumn({
         <>
           <div
             className="w-full transition-opacity group-hover:opacity-85"
-            style={{
-              height: `${(base / axisTop) * 100}%`,
-              backgroundColor: color,
-              minHeight: 2,
-            }}
+            style={{ height: `${(base / axisTop) * 100}%`, backgroundColor: color, minHeight: 2 }}
           />
           {overtime > 0 ? (
             <div
@@ -394,6 +342,17 @@ function BarColumn({
           ) : null}
         </>
       )}
+
+      {/* A day the engine flagged as missing a punch gets a mark of its own:
+          the height is honest but incomplete, and that is worth saying. */}
+      {hasFlag(day, 'MISSING_PUNCH') ? (
+        <span
+          className="pointer-events-none absolute inset-x-0 -top-3 text-center text-[10px] font-bold leading-none text-att-absent-foreground"
+          aria-hidden
+        >
+          !
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -404,15 +363,17 @@ function BarColumn({
  * A panel under the chart rather than a floating box: on a phone there is
  * nowhere for a floating tooltip to go, and hover does not exist there at all.
  * Tapping a bar selects it, so the figures stay on screen instead of vanishing
- * when the finger lifts. Every field is listed even when unavailable, printed
- * as a dash, so a missing check-out reads as missing rather than as absent from
- * the panel.
+ * when the finger lifts. Desktop also gets the same text as a native `title`
+ * tooltip on the bar itself.
+ *
+ * Every field is listed even when unavailable, printed as a dash, so a missing
+ * check-out reads as missing rather than as absent from the panel.
  */
-function BarDetail({ bar }: { bar: Bar | null }) {
+function BarDetail({ bar, employeeName }: { bar: BarDay | null; employeeName: string }) {
   if (!bar) {
     return (
       <p className="rounded-lg border border-dashed border-border px-3 py-2 text-[12.5px] text-muted-foreground">
-        Tap or hover a bar for that employee&apos;s day.
+        Hover a bar, or tap one on a phone, for that day&apos;s figures.
       </p>
     );
   }
@@ -426,20 +387,27 @@ function BarDetail({ bar }: { bar: Bar | null }) {
       aria-live="polite"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <span className="text-[13px] font-semibold">
-          {bar.employeeName}
-          <span className="tabular ml-1.5 text-[11.5px] font-normal text-muted-foreground">
-            {orDash(bar.employeeNumber)}
-          </span>
-        </span>
+        <span className="text-[13px] font-semibold">{employeeName}</span>
         <span className="text-[12px] text-muted-foreground">{formatDate(day.date)}</span>
       </div>
 
       <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3 lg:grid-cols-5">
         <Figure label="Status" value={day.holidayName ?? day.leaveTypeName ?? barMeaning(day)} />
-        <Figure label="Shift" value={orDash(bar.shiftName) === '--' ? 'Unassigned' : bar.shiftName!} />
-        <Figure label="Check in" value={timeLabel(day.checkInAt)} />
-        <Figure label="Check out" value={timeLabel(day.checkOutAt)} />
+        <Figure label="Shift" value={day.shiftName ?? 'Unassigned'} />
+        <Figure
+          label="Check in"
+          value={day.checkInAt ? timeLabel(day.checkInAt) : '--'}
+        />
+        <Figure
+          label="Check out"
+          value={
+            day.checkOutAt
+              ? timeLabel(day.checkOutAt)
+              : hasFlag(day, 'MISSING_PUNCH')
+                ? 'Missing'
+                : '--'
+          }
+        />
         <Figure label="Worked" value={minutesLabel(day.workedMinutes)} />
         <Figure label="Late" value={day.lateMinutes ? minutesLabel(day.lateMinutes) : '--'} />
         <Figure
@@ -450,8 +418,7 @@ function BarDetail({ bar }: { bar: Bar | null }) {
           label="Overtime"
           value={day.overtimeMinutes ? minutesLabel(day.overtimeMinutes) : '--'}
         />
-        <Figure label="Team" value={bar.teamName ?? UNASSIGNED_TEAM_LABEL} />
-        <Figure label="Department" value={orDash(bar.departmentName)} />
+        <Figure label="Source" value={orDash(day.source)} />
       </dl>
     </div>
   );
@@ -466,7 +433,7 @@ function Figure({ label, value }: { label: string; value: string }) {
   );
 }
 
-const LEGEND: Array<{ label: string; color: string; dashed?: boolean }> = [
+const LEGEND: Array<{ label: string; color: string }> = [
   { label: 'On time', color: 'var(--att-present-border)' },
   { label: 'Late / half day', color: 'var(--att-half-day-border)' },
   { label: 'Overtime', color: 'var(--att-overtime-border)' },
@@ -476,7 +443,7 @@ const LEGEND: Array<{ label: string; color: string; dashed?: boolean }> = [
   { label: 'Weekend / off', color: 'var(--att-weekend-border)' },
 ];
 
-export function TeamBarsLegend() {
+export function BarsLegend() {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border pt-3">
       {LEGEND.map((item) => (
@@ -496,9 +463,12 @@ export function TeamBarsLegend() {
         />
         <span className="text-[12px] text-muted-foreground">Upcoming</span>
       </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="text-[11px] font-bold text-att-absent-foreground" aria-hidden>
+          !
+        </span>
+        <span className="text-[12px] text-muted-foreground">Missing punch</span>
+      </span>
     </div>
   );
 }
-
-/** Exported for tests: the colour and label rules, without any DOM. */
-export const __testing = { barColor, barMeaning, axisTicks };

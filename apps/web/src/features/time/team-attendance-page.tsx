@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { BarChart3, CalendarCheck, CalendarDays, ChevronDown, ChevronRight, TableIcon, Users } from 'lucide-react';
+import { CalendarCheck, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import {
   ATTENDANCE_STATUSES,
   ATTENDANCE_STATUS_LABELS,
@@ -30,11 +30,6 @@ import { Pagination } from '@/components/ui/pagination';
 import { ListSkeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
-import { ViewSwitcher, type ViewOption } from '@/components/ui/view-switcher';
-import { useStickyState } from '@/lib/use-sticky-state';
-import { CalendarGrid } from './attendance-calendar';
-import { TeamAttendanceBars } from './team-attendance-bars';
-import { teamCalendarCells } from './team-attendance-calendar';
 import { LATE_TEXT, STATUS_BADGE, STATUS_TEXT, minutesLabel, timeLabel } from './attendance-ui';
 
 /**
@@ -60,38 +55,6 @@ interface TeamSummaryResponse {
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
-/** First and last day of the month containing `iso`. */
-function monthAround(iso: string): { from: string; to: string } {
-  const date = new Date(`${iso}T00:00:00Z`);
-  const base = Number.isNaN(date.getTime()) ? new Date() : date;
-  const year = base.getUTCFullYear();
-  const month = base.getUTCMonth();
-  return {
-    from: new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10),
-    to: new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10),
-  };
-}
-
-/**
- * Which shape the team's attendance is drawn in.
- *
- * `table` is what this page has always been and stays the default, so nothing
- * an administrator does daily moves under them. The other two are new readings
- * of the SAME request - no extra endpoint, no second derivation.
- */
-type TeamView = 'table' | 'calendar' | 'bars';
-
-const TEAM_VIEWS: ReadonlyArray<ViewOption<TeamView>> = [
-  { key: 'table', label: 'Table', icon: TableIcon },
-  { key: 'calendar', label: 'Calendar', icon: CalendarDays },
-  { key: 'bars', label: 'Bars', icon: BarChart3 },
-];
-
-const TEAM_VIEW_KEYS = TEAM_VIEWS.map((v) => v.key);
-
-/** Remembered across visits, so the reader is not re-choosing every time. */
-const TEAM_VIEW_STORAGE_KEY = 'hrms.team-attendance.view';
-
 export function TeamAttendancePage() {
   const { has } = usePermissions();
   const { lookups } = useLookups();
@@ -109,11 +72,6 @@ export function TeamAttendancePage() {
     limit: 20,
   }));
   const [expanded, setExpanded] = React.useState<string | null>(null);
-  const [view, setView] = useStickyState<TeamView>(
-    TEAM_VIEW_STORAGE_KEY,
-    'table',
-    TEAM_VIEW_KEYS,
-  );
   const debouncedQuery = useDebounced(filters.q, 350);
 
   const update = React.useCallback(
@@ -208,30 +166,6 @@ export function TeamAttendancePage() {
         }
       />
 
-      {/*
-        The switcher leads the page. It used to not exist here at all, and the
-        lesson from the personal attendance page is that a view control tucked
-        in among header buttons is a control nobody finds - so this one gets its
-        own row, at the top, at full width on a phone.
-      */}
-      <Card className="mb-5">
-        <div className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-          <ViewSwitcher
-            value={view}
-            onChange={setView}
-            options={TEAM_VIEWS}
-            label="Team attendance view"
-          />
-          <p className="text-[12.5px] text-muted-foreground">
-            {view === 'table'
-              ? 'One row per person, with the days expandable across a range.'
-              : view === 'calendar'
-                ? 'The selected range as a month grid, one cell per date.'
-                : 'One bar per employee per day. Height is time actually worked.'}
-          </p>
-        </div>
-      </Card>
-
       {totals ? (
         <Card className="mb-6">
           <div className="tabular flex flex-wrap gap-x-6 gap-y-2 p-4 text-[13px] text-muted-foreground">
@@ -322,13 +256,6 @@ export function TeamAttendancePage() {
                 aria-label="To date"
                 className="w-40"
               />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => update(monthAround(filters.from))}
-              >
-                This month
-              </Button>
               <NativeSelect
                 value={filters.status}
                 onChange={(e) => update({ status: e.target.value })}
@@ -346,51 +273,6 @@ export function TeamAttendancePage() {
 
         {query.isError ? (
           <ErrorState error={query.error} onRetry={() => void query.refetch()} />
-        ) : view === 'calendar' ? (
-          <div className="px-4 py-4 sm:px-5">
-            {singleDay ? (
-              <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-border px-3 py-2">
-                <p className="text-[12.5px] text-muted-foreground">
-                  A calendar of one day is one square. Widen the range to see a month.
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => update(monthAround(filters.from))}
-                >
-                  Show the whole month
-                </Button>
-              </div>
-            ) : null}
-
-            {!query.isLoading && rows.length === 0 ? (
-              <EmptyState
-                icon={Users}
-                title={hasFilters ? 'Nobody matches those filters' : 'No one in your team yet'}
-                description="You see the people your role gives you access to. Ask an administrator if someone is missing."
-              />
-            ) : (
-              <CalendarGrid cells={teamCalendarCells(rows)} loading={query.isLoading} />
-            )}
-          </div>
-        ) : view === 'bars' ? (
-          <>
-            <div className="px-4 py-4 sm:px-5">
-              <TeamAttendanceBars
-                rows={rows}
-                loading={query.isLoading}
-                singleDay={singleDay}
-              />
-            </div>
-            {query.data?.meta ? (
-              <Pagination
-                meta={query.data.meta}
-                disabled={query.isFetching}
-                onPageChange={(page) => update({ page })}
-                onLimitChange={(limit) => update({ limit })}
-              />
-            ) : null}
-          </>
         ) : (
           <>
             <TableWrapper>

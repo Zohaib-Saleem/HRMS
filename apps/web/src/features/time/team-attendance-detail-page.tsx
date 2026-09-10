@@ -20,7 +20,8 @@ import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { usePermissions } from '@/features/auth/session-context';
-import { AttendanceCalendar } from './attendance-calendar';
+import { useBreadcrumbTitle } from '@/components/layout/breadcrumb-title';
+import { EmployeeAttendanceViews } from './employee-attendance-views';
 import { LATE_TEXT, STATUS_BADGE, minutesLabel, timeLabel } from './attendance-ui';
 
 /**
@@ -77,13 +78,19 @@ export function TeamAttendanceDetailPage() {
     retry: false,
   });
 
+  const name = employee.data
+    ? (employee.data.displayName ?? `${employee.data.firstName} ${employee.data.lastName}`)
+    : '';
+
+  // Above the error return on purpose: a hook may not sit behind a branch, and
+  // this one has to run on the render that fails as well. Without it the last
+  // crumb is the raw employee id from the URL.
+  useBreadcrumbTitle(name);
+
   if (employee.isError) {
     return <ErrorState error={employee.error} onRetry={() => void employee.refetch()} />;
   }
 
-  const name = employee.data
-    ? (employee.data.displayName ?? `${employee.data.firstName} ${employee.data.lastName}`)
-    : '';
   const rows = history.data?.data ?? [];
 
   return (
@@ -100,6 +107,35 @@ export function TeamAttendanceDetailPage() {
           </Button>
         }
       />
+
+      <Card className="mb-6">
+        <CardHeader bordered>
+          <CardTitle>Who this is</CardTitle>
+        </CardHeader>
+        <CardContent className="py-4">
+          {employee.isLoading ? (
+            <Skeleton className="h-5 w-80" />
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px] text-muted-foreground">
+              <span className="text-[14px] font-semibold text-foreground">{name}</span>
+              <span className="tabular">{employee.data?.employeeNumber ?? '--'}</span>
+              <span>
+                Department{' '}
+                <span className="font-medium text-foreground">
+                  {employee.data?.department?.name ?? 'Unassigned'}
+                </span>
+              </span>
+              <span>
+                Team{' '}
+                <span className="font-medium text-foreground">
+                  {employee.data?.team?.name ?? 'Unassigned'}
+                </span>
+              </span>
+              {employee.data?.jobTitle ? <span>{employee.data.jobTitle}</span> : null}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="mb-6">
         <CardHeader bordered>
@@ -144,7 +180,7 @@ export function TeamAttendanceDetailPage() {
         </CardContent>
       </Card>
 
-      <AttendanceCalendar employeeId={employeeId} />
+      <EmployeeAttendanceViews employeeId={employeeId} employeeName={name || 'This employee'} />
 
       <Card className="overflow-hidden">
         <CardHeader bordered>
