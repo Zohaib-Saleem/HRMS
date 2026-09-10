@@ -28,6 +28,10 @@ const db = vi.hoisted(() => ({
   employeeSalary: { findMany: vi.fn() },
   employeeSalaryComponent: { findMany: vi.fn() },
   payrollAdjustment: { findMany: vi.fn() },
+  // Read-only, like every other table here: a preview looks up which loan
+  // repayments would fall in the period and claims none of them. No writer is
+  // exposed, so an attempt to claim one crashes rather than passing quietly.
+  employeeLoanInstallment: { findMany: vi.fn() },
   timesheet: { findMany: vi.fn() },
   employeeShiftAssignment: { findMany: vi.fn() },
   attendanceRecord: { findMany: vi.fn() },
@@ -179,6 +183,7 @@ beforeEach(() => {
   ]);
   db.employeeSalaryComponent.findMany.mockResolvedValue([]);
   db.payrollAdjustment.findMany.mockResolvedValue([]);
+  db.employeeLoanInstallment.findMany.mockResolvedValue([]);
   db.timesheet.findMany.mockResolvedValue([]);
   db.employeeShiftAssignment.findMany.mockResolvedValue([]);
   db.attendanceRecord.findMany.mockResolvedValue(presentRecords());

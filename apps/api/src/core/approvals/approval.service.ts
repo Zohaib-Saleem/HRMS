@@ -8,6 +8,7 @@ import { notify } from '../notifications/notification.service.js';
 import type { AuthContext } from '../../auth/session.js';
 import { employeeScopeFilter } from '../../auth/scope.js';
 import { applyRegularization, applyShiftChange } from '../../modules/time/attendance.service.js';
+import { applyLoanDecision } from '../../modules/loans/loans.routes.js';
 
 /**
  * Approval engine.
@@ -524,6 +525,13 @@ export async function syncSubjectStatus(
           status: status === 'APPROVED' ? 'APPROVED' : status === 'REJECTED' ? 'REJECTED' : 'SUBMITTED',
         },
       });
+      return;
+    case 'LOAN_REQUEST':
+      // Approving agrees to the loan; it does not release it. The loan module
+      // owns that distinction - the engine only reports the decision.
+      if (status === 'APPROVED' || status === 'REJECTED' || status === 'CANCELLED') {
+        await applyLoanDecision(subjectId, status);
+      }
       return;
     case 'LEAVE_REQUEST':
       await prisma.leaveRequest.updateMany({

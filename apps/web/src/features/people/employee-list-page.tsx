@@ -33,6 +33,8 @@ const STATUS_TONE: Record<EmployeeStatus, 'success' | 'warning' | 'destructive' 
   ACTIVE: 'success',
   ON_LEAVE: 'warning',
   SUSPENDED: 'destructive',
+  INACTIVE: 'neutral',
+  RESIGNED: 'neutral',
   TERMINATED: 'neutral',
 };
 

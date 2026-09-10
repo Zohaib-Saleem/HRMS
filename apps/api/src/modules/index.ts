@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { authRoutes } from '../auth/auth.routes.js';
 import { meRoutes } from './me/me.routes.js';
 import { companyRoutes } from './company/company.routes.js';
+import { companyLinkRoutes } from './company/company-links.routes.js';
 import { rolesRoutes } from './roles/roles.routes.js';
 import { userRoutes } from './users/users.routes.js';
 import { auditRoutes } from './audit/audit.routes.js';
@@ -41,6 +42,10 @@ import {
   payslipRoutes,
   salaryComponentRoutes,
 } from './payroll/payroll-runs.routes.js';
+import { salaryRevisionRoutes } from './payroll/salary-revisions.routes.js';
+import { contractRoutes } from './employment/contracts.routes.js';
+import { policyAssignmentRoutes, policyRoutes } from './employment/policies.routes.js';
+import { loanRoutes } from './loans/loans.routes.js';
 import {
   payrollDashboardRoutes,
   payrollReconciliationRoutes,
@@ -63,6 +68,7 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/auth', plugin: authRoutes },
   { prefix: '/me', plugin: meRoutes },
   { prefix: '/company', plugin: companyRoutes },
+  { prefix: '/company/links', plugin: companyLinkRoutes },
   { prefix: '/roles', plugin: rolesRoutes },
   { prefix: '/users', plugin: userRoutes },
   { prefix: '/audit-logs', plugin: auditRoutes },
@@ -111,6 +117,13 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/payroll/reports', plugin: payrollReportRoutes },
   { prefix: '/payroll/reconciliation', plugin: payrollReconciliationRoutes },
   { prefix: '/payslips', plugin: payslipRoutes },
+
+  // --- phase 10: contracts, policies, salary revisions and loans ---------
+  { prefix: '/contracts', plugin: contractRoutes },
+  { prefix: '/policies', plugin: policyRoutes },
+  { prefix: '/policy-assignments', plugin: policyAssignmentRoutes },
+  { prefix: '/payroll/salary-revisions', plugin: salaryRevisionRoutes },
+  { prefix: '/loans', plugin: loanRoutes },
 
   // --- phase 5+ ---------------------------------------------------------
   // { prefix: '/documents', plugin: documentRoutes },

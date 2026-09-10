@@ -46,6 +46,15 @@ enum EmployeeStatus {
   ON_LEAVE
   SUSPENDED
   TERMINATED
+  /// Employed but not currently working and not on a recorded leave: a
+  /// sabbatical, a long unpaid break, a record parked pending paperwork.
+  /// Distinct from SUSPENDED, which is a disciplinary state, and from
+  /// TERMINATED, which ends the employment.
+  INACTIVE
+  /// Left of their own accord. Kept apart from TERMINATED because who ended
+  /// the employment is a fact people ask about, and because a resignation
+  /// carries a resignation date of its own alongside the last working day.
+  RESIGNED
 }
 
 enum EmploymentType {
@@ -317,6 +326,15 @@ model Company {
   payslips                 Payslip[]
   payrollExceptions        PayrollException[]
 
+  // --- phase 10 ---
+  links             CompanyLink[]
+  employeeContracts EmployeeContract[]
+  policies          CompanyPolicy[]
+  policyAssignments EmployeePolicyAssignment[]
+  salaryRevisions   SalaryRevision[]
+  employeeLoans     EmployeeLoan[]
+  loanInstallments  EmployeeLoanInstallment[]
+
   @@map("companies")
 }
 
@@ -471,6 +489,10 @@ model Employee {
   hireDate              DateTime?      @db.Date
   confirmationDate      DateTime?      @db.Date
   terminationDate       DateTime?      @db.Date
+  /// The day the employee handed in their resignation. Set when the status is
+  /// RESIGNED. Deliberately separate from terminationDate, which is the last
+  /// day worked - the two are rarely the same and payroll reads the latter.
+  resignationDate       DateTime?      @db.Date
   sourceOfHire          String?
   linkedinUrl           String?
   /// Prior experience in whole months, kept as a number so it can be summed.
@@ -586,6 +608,13 @@ model Employee {
   payrollLines       PayrollLine[]
   payrollAdjustments PayrollAdjustment[]
   payslips           Payslip[]
+
+  // --- phase 10: contracts, policies, salary revisions and loans ---
+  contracts         EmployeeContract[]
+  policyAssignments EmployeePolicyAssignment[]
+  salaryRevisions   SalaryRevision[]
+  loans             EmployeeLoan[]
+  loanInstallments  EmployeeLoanInstallment[]
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
@@ -810,6 +839,9 @@ enum ApprovalSubjectType {
   SHIFT_CHANGE
   TIMESHEET
   LEAVE_REQUEST
+  /// An employee asking for a salary advance or loan. Same engine as every
+  /// other request; the loan record is the subject.
+  LOAN_REQUEST
 }
 
 enum NotificationType {
@@ -1392,6 +1424,12 @@ model LeaveRequest {
   totalDays Decimal @db.Decimal(6, 2)
 
   reason String
+
+  /// Supporting evidence for the request - a medical certificate, a booking.
+  /// Held as a link rather than a file: there is no document store yet, and a
+  /// URL is lossless where a missing upload endpoint would be a blocker.
+  documentUrl  String?
+  documentName String?
 
   status            ApprovalStatus @default(PENDING)
   approvalRequestId String?        @unique
@@ -2167,8 +2205,11 @@ model EmployeeSalary {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// Set when this record was opened by a recorded increment rather than
+  /// entered directly. The revision is the paperwork; this row is the money.
+  revision SalaryRevision? @relation("RevisionSalary")
 
   @@index([employeeId, effectiveFrom])
   @@index([companyId, effectiveFrom])
@@ -2318,10 +2359,11 @@ model PayrollRun {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  period     PayrollPeriod      @relation(fields: [periodId], references: [id], onDelete: Cascade)
-  lines      PayrollLine[]
-  exceptions PayrollException[]
+  company          Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  period           PayrollPeriod             @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  lines            PayrollLine[]
+  exceptions       PayrollException[]
+  loanInstallments EmployeeLoanInstallment[]
 
   @@index([companyId, status])
   @@index([periodId, status])
@@ -2553,4 +2595,403 @@ model PayrollException {
   @@index([runId, severity])
   @@index([companyId, code])
   @@map("payroll_exceptions")
+}
+
+// ---------------------------------------------------------------- phase 10
+//
+// Employment paperwork and money owed: contracts, policies, salary revisions
+// and loans. Everything here is append-only history by design - a contract
+// that ends is not deleted, a policy that gets a new version is a new row, and
+// a salary revision writes a new EmployeeSalary rather than editing the old
+// one. Nothing in this section rewrites attendance, punches or a finalized
+// payroll figure.
+
+/// Company presence on the public internet, as configuration.
+///
+/// Deliberately a table rather than columns: "which platforms does this
+/// company have?" is an answer that grows, and a new one should be a row an
+/// administrator adds, not a migration. `Company.website` stays where it is -
+/// this is the wider list that sits alongside it.
+enum CompanyLinkKind {
+  WEBSITE
+  LINKEDIN
+  FACEBOOK
+  INSTAGRAM
+  X
+  YOUTUBE
+  DISCORD
+  GITHUB
+  CAREERS
+  OTHER
+}
+
+model CompanyLink {
+  id        String @id @default(cuid())
+  companyId String
+
+  kind  CompanyLinkKind @default(OTHER)
+  /// What to call it in the UI. Free text so "GamEmpires website" and
+  /// "Careers portal" are both expressible without a new enum member.
+  label String
+  url   String
+
+  /// Lower first; ties fall back to label.
+  displayOrder Int     @default(0)
+  isActive     Boolean @default(true)
+  description  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, label])
+  @@index([companyId, isActive, displayOrder])
+  @@map("company_links")
+}
+
+// ------------------------------------------------------------------ contracts
+
+enum EmployeeContractType {
+  PERMANENT
+  FIXED_TERM
+  PROBATION
+  INTERNSHIP
+  CONSULTANCY
+  PART_TIME
+  TEMPORARY
+}
+
+/// Where a contract is in its life.
+///
+/// EXPIRED is derived from the end date in the reading layer as well, so a
+/// contract nobody has touched still reports honestly; this column records the
+/// decision somebody made about it.
+enum EmployeeContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+  RENEWED
+}
+
+/// One contract, kept forever.
+///
+/// Superseding a contract opens a new row and closes the old one; it never
+/// edits the old one, so "what were they on last March?" stays answerable.
+model EmployeeContract {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  contractType EmployeeContractType   @default(PERMANENT)
+  status       EmployeeContractStatus @default(ACTIVE)
+
+  /// A reference number as it appears on the paper, when there is one.
+  reference String?
+
+  startDate DateTime  @db.Date
+  /// Null means open-ended, which is the ordinary shape of a permanent
+  /// contract. A fixed-term one without an end date is reported as a gap
+  /// rather than silently treated as permanent.
+  endDate   DateTime? @db.Date
+
+  /// The signed document. A link, for the same reason leave evidence is:
+  /// there is no file store in this system yet.
+  documentUrl  String?
+  documentName String?
+
+  /// The contract this one replaces, when it is a renewal.
+  previousContractId String? @unique
+
+  notes String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  previousContract EmployeeContract? @relation("ContractRenewal", fields: [previousContractId], references: [id], onDelete: SetNull)
+  renewedBy        EmployeeContract? @relation("ContractRenewal")
+
+  @@index([companyId, status])
+  @@index([employeeId, startDate])
+  @@index([companyId, endDate])
+  @@map("employee_contracts")
+}
+
+// ------------------------------------------------------------------- policies
+
+/// A policy document, at one version.
+///
+/// A new version is a NEW row, never an edit: an acknowledgement is an
+/// acknowledgement of a particular text, and rewriting the text under a
+/// signature would make the record a lie. `supersedesId` chains them so the
+/// history reads in order.
+model CompanyPolicy {
+  id        String @id @default(cuid())
+  companyId String
+
+  name    String
+  /// Free text: "1.0", "2026-Q1", "Rev C". Companies number policies their own
+  /// way and an enforced scheme would be wrong for most of them.
+  version String @default("1.0")
+
+  category    String?
+  description String?
+
+  effectiveDate DateTime @db.Date
+
+  documentUrl  String?
+  documentName String?
+
+  /// Whether it may still be assigned. Withdrawing a policy never deletes the
+  /// acknowledgements already given for it.
+  isActive Boolean @default(true)
+
+  /// The earlier version this one replaces.
+  supersedesId String? @unique
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company                    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supersedes   CompanyPolicy?             @relation("PolicyVersion", fields: [supersedesId], references: [id], onDelete: SetNull)
+  supersededBy CompanyPolicy?             @relation("PolicyVersion")
+  assignments  EmployeePolicyAssignment[]
+
+  @@unique([companyId, name, version])
+  @@index([companyId, isActive])
+  @@map("company_policies")
+}
+
+enum PolicyAcknowledgementStatus {
+  PENDING
+  ACKNOWLEDGED
+  DECLINED
+}
+
+/// One employee's copy of one policy version.
+///
+/// Never deleted and never reassigned to a different version: assigning the
+/// next version creates another row, so the trail shows what was accepted and
+/// when, for every version in turn.
+model EmployeePolicyAssignment {
+  id         String @id @default(cuid())
+  companyId  String
+  policyId   String
+  employeeId String
+
+  status PolicyAcknowledgementStatus @default(PENDING)
+
+  assignedAt     DateTime  @default(now())
+  assignedBy     String?
+  /// When the employee is expected to have read it by. Null is no deadline.
+  dueDate        DateTime? @db.Date
+  acknowledgedAt DateTime?
+  /// What the employee said when they acknowledged or declined it.
+  note           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  policy   CompanyPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  employee Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([policyId, employeeId])
+  @@index([companyId, status])
+  @@index([employeeId, assignedAt])
+  @@map("employee_policy_assignments")
+}
+
+// ----------------------------------------------------------- salary revisions
+
+/// An increment, as a record of the decision rather than of the number.
+///
+/// The number itself lives where it always did: in EmployeeSalary, which is
+/// what payroll reads and which is already effective-dated, so a revision
+/// dated 1 July leaves June paying June's salary. This row is the paperwork
+/// around it - what it was, what it became, who approved it and why - and it
+/// points at the EmployeeSalary row it opened so the two can never disagree.
+model SalaryRevision {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  /// The salary in force before the revision. Null for a first salary.
+  previousSalaryId String?
+  /// The salary record this revision opened.
+  salaryId         String? @unique
+
+  salaryType PayrollSalaryType @default(MONTHLY)
+  currency   String            @db.Char(3)
+
+  currentAmount    Decimal @db.Decimal(14, 2)
+  newAmount        Decimal @db.Decimal(14, 2)
+  /// Stored rather than derived so a reviewer reads the figures the decision
+  /// was actually made with, even if a salary row is later corrected.
+  incrementAmount  Decimal @db.Decimal(14, 2)
+  /// Percentage of the previous salary, to two decimals. Zero when there was
+  /// no previous salary to be a percentage of.
+  incrementPercent Decimal @db.Decimal(8, 2)
+
+  effectiveDate DateTime @db.Date
+
+  reason String
+  notes  String?
+
+  /// Who signed it off. The user id when it was someone with an account, and
+  /// the name as typed either way - a director who approved it by email has no
+  /// login here and the record still has to say who they were.
+  approvedByUserId String?
+  approvedByName   String?
+  approvedAt       DateTime?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  salary   EmployeeSalary? @relation("RevisionSalary", fields: [salaryId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, effectiveDate])
+  @@index([companyId, effectiveDate])
+  @@map("salary_revisions")
+}
+
+// ---------------------------------------------------------------------- loans
+
+/// Where a loan is in its life.
+///
+/// The distinction that matters to payroll is exactly one: only ACTIVE and
+/// COMPLETED loans have ever produced a deduction, and only an ACTIVE one can
+/// produce another. PENDING and REJECTED cost nobody anything.
+enum EmployeeLoanStatus {
+  /// Applied for by the employee, awaiting a decision.
+  PENDING
+  /// Decided in favour but not yet released - the schedule exists, deductions
+  /// start when it is activated.
+  APPROVED
+  REJECTED
+  /// Being repaid. This is the only status payroll deducts against.
+  ACTIVE
+  /// Fully repaid.
+  COMPLETED
+  /// Withdrawn or written off before completion.
+  CANCELLED
+}
+
+enum LoanInstallmentStatus {
+  SCHEDULED
+  /// Claimed by a payroll run that has not been finalized yet.
+  PENDING_PAYROLL
+  /// Deducted by a finalized payroll run.
+  PAID
+  /// Deliberately not collected, without ending the loan.
+  WAIVED
+  SKIPPED
+}
+
+/// A loan or salary advance.
+///
+/// Two ways in and one way out: an administrator creates one directly, or an
+/// employee applies and someone approves it. Either way the repayment schedule
+/// is generated up front, so "what is left?" is a sum over rows rather than a
+/// figure someone maintains by hand.
+model EmployeeLoan {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  reference String?
+
+  principalAmount Decimal @db.Decimal(14, 2)
+  currency        String  @db.Char(3)
+
+  installmentCount Int
+  /// What is taken each month. Held rather than derived because the last
+  /// installment usually differs by a few cents and the schedule carries the
+  /// exact figures.
+  monthlyDeduction Decimal @db.Decimal(14, 2)
+
+  /// The month the first deduction falls in, pinned to the first of the month.
+  startMonth DateTime @db.Date
+
+  status EmployeeLoanStatus @default(PENDING)
+
+  purpose String?
+  notes   String?
+
+  /// Set when an employee applied for it rather than HR creating it outright.
+  requestedByUserId String?
+  requestedAt       DateTime?
+  approvalRequestId String?   @unique
+
+  approvedByUserId String?
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  rejectionReason  String?
+
+  /// When repayment actually began, i.e. when the loan went ACTIVE.
+  activatedAt DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee     Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  installments EmployeeLoanInstallment[]
+
+  @@index([companyId, status])
+  @@index([employeeId, status])
+  @@map("employee_loans")
+}
+
+/// One scheduled repayment.
+///
+/// The payment history and the outstanding balance are both this table read
+/// two ways, which is why neither is stored on the loan: a running total that
+/// is maintained separately is a running total that eventually disagrees.
+model EmployeeLoanInstallment {
+  id         String @id @default(cuid())
+  companyId  String
+  loanId     String
+  employeeId String
+
+  /// 1-based position in the schedule.
+  sequence Int
+  /// The month this installment belongs to, pinned to the first of the month.
+  dueMonth DateTime @db.Date
+
+  amount Decimal @db.Decimal(14, 2)
+
+  status LoanInstallmentStatus @default(SCHEDULED)
+
+  /// The run that collected it. Cleared when a run is recalculated or
+  /// cancelled, exactly as PayrollAdjustment.appliedRunId is.
+  payrollRunId String?
+  paidAt       DateTime?
+  note         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  loan     EmployeeLoan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  employee Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  run      PayrollRun?  @relation(fields: [payrollRunId], references: [id], onDelete: SetNull)
+
+  @@unique([loanId, sequence])
+  @@index([employeeId, dueMonth])
+  @@index([companyId, status, dueMonth])
+  @@index([payrollRunId])
+  @@map("employee_loan_installments")
 }

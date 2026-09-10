@@ -18,6 +18,7 @@ import {
   type EffectiveConfig,
   type SalarySegment,
 } from './calculation.js';
+import { completeIfSettled, dueInstallmentsForPeriod } from '../loans/loans.service.js';
 
 /**
  * Running payroll.
@@ -495,6 +496,13 @@ export interface ComputedPayroll {
   exceptions: PendingException[];
   /** Adjustment ids this calculation consumed. Claimed only when persisting. */
   appliedAdjustmentIds: string[];
+  /**
+   * Loan installment ids this calculation collected. Tracked separately from
+   * adjustments because they live in a different table and are settled at a
+   * different moment: claimed when a run calculates, marked paid only when it
+   * is finalized.
+   */
+  appliedLoanInstallmentIds: string[];
 }
 
 /**
@@ -577,6 +585,28 @@ export async function computePayroll(input: {
     }),
   ]);
 
+  /**
+   * Loan repayments due in this period.
+   *
+   * Only installments belonging to an ACTIVE loan come back - `status: ACTIVE`
+   * inside `dueInstallmentsForPeriod` is the whole of "only approved loans
+   * affect payroll", enforced once rather than repeated here. A pending
+   * application, an approved-but-unreleased loan and a cancelled one all
+   * return nothing, so none of them can reach a payslip.
+   *
+   * They are priced through the adjustment channel because a repayment is
+   * arithmetically an adjustment: a flat figure taken off the net after
+   * everything else is decided. Nothing about how basic pay, overtime or
+   * attendance deductions are computed changes.
+   */
+  const loanInstallments = await dueInstallmentsForPeriod({
+    companyId,
+    employeeIds,
+    from,
+    to,
+    runId,
+  });
+
   const profileByEmployee = new Map(profiles.map((p) => [p.employeeId, p]));
   const salariesByEmployee = new Map<string, SalaryRow[]>();
   for (const row of salaries) {
@@ -611,22 +641,43 @@ export async function computePayroll(input: {
   }
 
   const adjustmentsByEmployee = new Map<string, AdjustmentInput[]>();
+  const pushAdjustment = (employeeId: string, input: AdjustmentInput) => {
+    const list = adjustmentsByEmployee.get(employeeId);
+    if (list) list.push(input);
+    else adjustmentsByEmployee.set(employeeId, [input]);
+  };
+
   for (const row of adjustments) {
-    const input: AdjustmentInput = {
+    pushAdjustment(row.employeeId, {
       id: row.id,
       kind: row.kind,
       label: row.label,
       amount: toNumber(row.amount),
-    };
-    const list = adjustmentsByEmployee.get(row.employeeId);
-    if (list) list.push(input);
-    else adjustmentsByEmployee.set(row.employeeId, [input]);
+    });
+  }
+
+  // Loan repayments, labelled LOAN so a payslip says why the money went
+  // rather than calling every one of them an adjustment.
+  const loanInstallmentsByEmployee = new Map<string, typeof loanInstallments>();
+  for (const installment of loanInstallments) {
+    pushAdjustment(installment.employeeId, {
+      id: installment.id,
+      kind: 'DEDUCTION',
+      label: `Loan repayment ${installment.sequence}/${installment.installmentCount}${installment.reference ? ` (${installment.reference})` : ''}`,
+      amount: installment.amount,
+      code: 'LOAN',
+      lineKind: 'LOAN',
+    });
+    const list = loanInstallmentsByEmployee.get(installment.employeeId);
+    if (list) list.push(installment);
+    else loanInstallmentsByEmployee.set(installment.employeeId, [installment]);
   }
 
   const periodDays = daysInRange(from, to).length;
   const pending: PendingException[] = [];
   const lines: ComputedLine[] = [];
   const appliedAdjustmentIds: string[] = [];
+  const appliedLoanInstallmentIds: string[] = [];
 
   for (const employee of employees) {
     const profile = profileByEmployee.get(employee.id) ?? null;
@@ -725,7 +776,16 @@ export async function computePayroll(input: {
       periodDays: employedDays.length > 0 ? employedDays.length : periodDays,
     });
 
-    for (const adjustment of employeeAdjustments) appliedAdjustmentIds.push(adjustment.id);
+    // Only ids that actually reached a line are claimed. An employee skipped
+    // by a `continue` above never had their repayment priced, so claiming it
+    // would strand the installment in a run that does not collect it.
+    const loanIds = new Set(
+      (loanInstallmentsByEmployee.get(employee.id) ?? []).map((i) => i.id),
+    );
+    for (const adjustment of employeeAdjustments) {
+      if (loanIds.has(adjustment.id)) appliedLoanInstallmentIds.push(adjustment.id);
+      else appliedAdjustmentIds.push(adjustment.id);
+    }
 
     // --- exceptions the figures themselves reveal ----------------------------
     if (result.tally.daysWithoutShift > 0) {
@@ -860,6 +920,7 @@ export async function computePayroll(input: {
     lines,
     exceptions: pending,
     appliedAdjustmentIds,
+    appliedLoanInstallmentIds,
   };
 }
 
@@ -882,7 +943,7 @@ async function runCalculation(input: {
     runId: run.id,
   });
 
-  const { lines, exceptions: pending, appliedAdjustmentIds } = computed;
+  const { lines, exceptions: pending, appliedAdjustmentIds, appliedLoanInstallmentIds } = computed;
   const lineData = lines;
   const company = { currency: computed.currency };
   const employees = { length: computed.employeesConsidered };
@@ -910,6 +971,26 @@ async function runCalculation(input: {
       await tx.payrollAdjustment.updateMany({
         where: { id: { in: appliedAdjustmentIds }, appliedAt: null },
         data: { appliedRunId: run.id },
+      });
+    }
+
+    /**
+     * Loan installments follow exactly the same claim-and-release cycle.
+     *
+     * Released back to SCHEDULED first, then re-claimed as PENDING_PAYROLL by
+     * this calculation. Without the release, recalculating a run after
+     * cancelling a loan would leave an installment claimed by a run that no
+     * longer collects it - and the employee's balance would never come down.
+     * Nothing is marked PAID here: an unfinalized run has taken no money.
+     */
+    await tx.employeeLoanInstallment.updateMany({
+      where: { payrollRunId: run.id, status: 'PENDING_PAYROLL' },
+      data: { payrollRunId: null, status: 'SCHEDULED' },
+    });
+    if (appliedLoanInstallmentIds.length > 0) {
+      await tx.employeeLoanInstallment.updateMany({
+        where: { id: { in: appliedLoanInstallmentIds }, status: 'SCHEDULED' },
+        data: { payrollRunId: run.id, status: 'PENDING_PAYROLL' },
       });
     }
 
@@ -1096,6 +1177,14 @@ export async function finalizeRun(input: {
       data: { appliedAt: finalizedAt },
     });
 
+    // The money has now actually moved, so the repayments this run collected
+    // become PAID. This is the only place an installment is ever settled by
+    // payroll - a run that is calculated and then cancelled collects nothing.
+    await tx.employeeLoanInstallment.updateMany({
+      where: { payrollRunId: runId, status: 'PENDING_PAYROLL' },
+      data: { status: 'PAID', paidAt: finalizedAt },
+    });
+
     await tx.payrollRun.update({
       where: { id: runId },
       data: { status: 'FINALIZED', finalizedAt, finalizedBy: actorId },
@@ -1109,6 +1198,28 @@ export async function finalizeRun(input: {
     return run.lines.length;
   });
 
-  logger.info({ event: 'PAYROLL_FINALIZED', runId, payslips }, 'payroll run finalized');
+  /**
+   * Close any loan the run just finished repaying.
+   *
+   * Outside the transaction on purpose: the payslips are the thing that must
+   * be atomic, and a loan that stays ACTIVE with an empty schedule collects
+   * nothing anyway - `dueInstallmentsForPeriod` finds no rows for it. Doing it
+   * here means the status catches up immediately in the ordinary case without
+   * putting a second table's consistency in the way of paying people.
+   */
+  const settledLoans = await prisma.employeeLoanInstallment.findMany({
+    where: { payrollRunId: runId, status: 'PAID' },
+    select: { loanId: true },
+    distinct: ['loanId'],
+  });
+  let completedLoans = 0;
+  for (const { loanId } of settledLoans) {
+    if (await completeIfSettled(loanId)) completedLoans += 1;
+  }
+
+  logger.info(
+    { event: 'PAYROLL_FINALIZED', runId, payslips, completedLoans },
+    'payroll run finalized',
+  );
   return { payslips };
 }

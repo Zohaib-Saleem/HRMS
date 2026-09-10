@@ -34,16 +34,19 @@ import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { Can, usePermissions } from '@/features/auth/session-context';
 import { EmployeeFormDrawer } from './employee-form-drawer';
+import { EmployeeContracts } from '@/features/employment/employee-contracts';
 import { cn } from '@/lib/utils';
 
 const STATUS_TONE: Record<EmployeeStatus, 'success' | 'warning' | 'destructive' | 'neutral'> = {
   ACTIVE: 'success',
   ON_LEAVE: 'warning',
   SUSPENDED: 'destructive',
+  INACTIVE: 'neutral',
+  RESIGNED: 'neutral',
   TERMINATED: 'neutral',
 };
 
-const TABS = ['Overview', 'Personal', 'Compensation', 'Experience', 'Reports'] as const;
+const TABS = ['Overview', 'Personal', 'Contracts', 'Compensation', 'Experience', 'Reports'] as const;
 type Tab = (typeof TABS)[number];
 
 export function EmployeeDetailPage() {
@@ -189,9 +192,13 @@ export function EmployeeDetailPage() {
 
       <div className="mb-5 overflow-x-auto border-b border-border">
         <nav className="flex min-w-max gap-1" aria-label="Employee sections">
-          {TABS.filter(
-            (item) => item !== 'Compensation' || has(PERMISSIONS.PAYROLL_READ),
-          ).map((item) => (
+          {TABS.filter((item) => {
+            // A tab whose contents the caller cannot read is not shown empty;
+            // it is not shown at all, so the row says what is actually here.
+            if (item === 'Compensation') return has(PERMISSIONS.PAYROLL_READ);
+            if (item === 'Contracts') return has(PERMISSIONS.CONTRACT_READ);
+            return true;
+          }).map((item) => (
             <button
               key={item}
               type="button"
@@ -216,6 +223,9 @@ export function EmployeeDetailPage() {
 
       {tab === 'Overview' ? <OverviewTab employee={employee} /> : null}
       {tab === 'Personal' ? <PersonalTab employee={employee} canSeeRestricted={has(PERMISSIONS.EMPLOYEE_SENSITIVE_READ)} /> : null}
+      {tab === 'Contracts' ? (
+        <EmployeeContracts employeeId={employee.id} employeeName={employee.fullName} />
+      ) : null}
       {tab === 'Compensation' ? (
         <EmployeeCompensation employeeId={employee.id} employeeName={employee.fullName} />
       ) : null}

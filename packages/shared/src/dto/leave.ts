@@ -79,6 +79,21 @@ export const leaveRequestCreateSchema = z
     endDate: isoDate,
     dayPart: z.enum(LEAVE_DAY_PARTS).default('FULL_DAY'),
     reason: z.string().trim().min(3, 'Give a reason for the leave.').max(1000),
+    /**
+     * Supporting evidence - a medical certificate, a booking confirmation.
+     * A link rather than an upload: there is no document store in this system
+     * yet, and a link to one the company already uses loses nothing.
+     */
+    documentUrl: z
+      .string()
+      .trim()
+      .max(500)
+      .nullish()
+      .transform((v) => (v === '' || v === undefined ? null : v))
+      .refine((v) => v === null || /^https?:\/\//i.test(v), {
+        message: 'Enter a link starting with http:// or https://.',
+      }),
+    documentName: optionalText(200),
   })
   .refine((v) => Date.parse(v.endDate) >= Date.parse(v.startDate), {
     message: 'The end date cannot be before the start date.',
@@ -117,6 +132,8 @@ export interface LeaveRequestRecord {
   dayPart: LeaveDayPart;
   totalDays: number;
   reason: string;
+  documentUrl: string | null;
+  documentName: string | null;
   status: ApprovalStatus;
   approvalRequestId: string | null;
   decidedAt: string | null;

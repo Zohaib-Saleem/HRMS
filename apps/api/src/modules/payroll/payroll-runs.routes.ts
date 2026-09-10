@@ -919,14 +919,30 @@ export const payrollRunRoutes: FastifyPluginAsync = async (app) => {
       if (!run) throw new NotFoundError('Payroll run');
       assertTransition(run.status, 'CANCELLED');
 
-      await prisma.payrollRun.update({
-        where: { id },
-        data: {
-          status: 'CANCELLED',
-          cancelledAt: new Date(),
-          cancelledBy: auth.userId,
-          cancelReason: input.reason,
-        },
+      const released = await prisma.$transaction(async (tx) => {
+        await tx.payrollRun.update({
+          where: { id },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt: new Date(),
+            cancelledBy: auth.userId,
+            cancelReason: input.reason,
+          },
+        });
+
+        /**
+         * Hand back the loan repayments this run had claimed.
+         *
+         * A cancelled run collected nothing, so its installments go back to
+         * SCHEDULED and the next run picks them up. Without this they would
+         * stay PENDING_PAYROLL against a run that will never finalize, and the
+         * employee's balance would stop coming down for good.
+         */
+        const { count } = await tx.employeeLoanInstallment.updateMany({
+          where: { payrollRunId: id, status: 'PENDING_PAYROLL' },
+          data: { payrollRunId: null, status: 'SCHEDULED' },
+        });
+        return count;
       });
 
       await recordAudit({
@@ -935,9 +951,9 @@ export const payrollRunRoutes: FastifyPluginAsync = async (app) => {
         action: 'payroll.run.cancel',
         entityType: 'PayrollRun',
         entityId: id,
-        summary: `Cancelled payroll run: ${input.reason}`,
+        summary: `Cancelled payroll run: ${input.reason}${released > 0 ? `; released ${released} loan installment(s) back to the schedule` : ''}`,
         before: { status: run.status },
-        after: { status: 'CANCELLED', reason: input.reason },
+        after: { status: 'CANCELLED', reason: input.reason, loanInstallmentsReleased: released },
         request,
       });
 

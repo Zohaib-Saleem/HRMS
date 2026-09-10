@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { SESSION_QUERY_KEY, usePermissions } from '@/features/auth/session-context';
+import { CompanyLinksCard } from './company-links-card';
 
 interface CompanyRecord extends UpdateCompanyInput {
   id: string;
@@ -136,6 +137,7 @@ export function CompanySettingsPage() {
   const dirty = formState.isDirty;
 
   return (
+    <div className="space-y-5">
     <form onSubmit={onSubmit} className="space-y-5">
       <fieldset disabled={!canManage} className="space-y-5">
         <Card>
@@ -255,6 +257,11 @@ export function CompanySettingsPage() {
         </p>
       ) : null}
     </form>
+
+      {/* Its own rows with their own lifecycle, so deliberately outside the
+          form above: a bad URL should not stop a timezone change saving. */}
+      <CompanyLinksCard />
+    </div>
   );
 }
 

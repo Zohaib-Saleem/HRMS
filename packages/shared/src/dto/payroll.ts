@@ -286,6 +286,81 @@ export interface EmployeeSalaryRecord {
   createdAt: string;
 }
 
+// ------------------------------------------------- salary revisions (increments)
+
+/**
+ * An increment, recorded as a decision.
+ *
+ * The money itself still lives in EmployeeSalary, which payroll already reads
+ * effective-dated - so a revision dated 1 July leaves June paying June's
+ * salary without anything else changing. Recording a revision opens the new
+ * salary record and closes the previous one the day before; it never edits a
+ * salary a run has already paid against.
+ *
+ * The amount is what is submitted. The increment and the percentage are
+ * derived on the server from the salary actually in force on the effective
+ * date, so a form that has gone stale cannot record an increment against a
+ * figure that has since changed.
+ */
+export const salaryRevisionSchema = z.object({
+  employeeId: z.string().trim().min(1).max(64),
+  newAmount: money().refine((v) => v >= 0, 'A salary cannot be negative.'),
+  salaryType: z.enum(PAYROLL_SALARY_TYPES).default('MONTHLY'),
+  currency: z.string().trim().length(3).optional(),
+  effectiveDate: DAY,
+  reason: z.string().trim().min(3, 'Say why the salary is changing.').max(500),
+  notes: z.string().trim().max(2000).nullable().optional(),
+  /**
+   * Who signed it off. A name is always recorded, because the person who
+   * agreed to a raise is often a director with no login here; the user id is
+   * set as well when they do have one.
+   */
+  approvedByName: z.string().trim().max(160).nullable().optional(),
+  approvedByUserId: z.string().trim().max(64).nullable().optional(),
+});
+
+export type SalaryRevisionInput = z.infer<typeof salaryRevisionSchema>;
+
+export const salaryRevisionQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  employeeId: z.string().trim().max(64).optional(),
+  from: DAY.optional(),
+  to: DAY.optional(),
+});
+
+export interface SalaryRevisionRecord {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  employeeNumber: string;
+  salaryType: PayrollSalaryType;
+  currency: string;
+  currentAmount: number;
+  newAmount: number;
+  incrementAmount: number;
+  incrementPercent: number;
+  effectiveDate: string;
+  reason: string;
+  notes: string | null;
+  approvedByName: string | null;
+  approvedAt: string | null;
+  /** The EmployeeSalary row this revision opened, when it still exists. */
+  salaryId: string | null;
+  createdAt: string;
+}
+
+/** What an increment works out to, for the form's live preview. */
+export function incrementFigures(
+  currentAmount: number,
+  newAmount: number,
+): { incrementAmount: number; incrementPercent: number } {
+  const incrementAmount = Math.round((newAmount - currentAmount) * 100) / 100;
+  const incrementPercent =
+    currentAmount > 0 ? Math.round((incrementAmount / currentAmount) * 10000) / 100 : 0;
+  return { incrementAmount, incrementPercent };
+}
+
 // ------------------------------------------------------------------ components
 
 export const salaryComponentSchema = z.object({

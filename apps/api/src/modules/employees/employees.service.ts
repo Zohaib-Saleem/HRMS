@@ -22,7 +22,10 @@ export const DETAIL_INCLUDE = {
   secondaryManager: { select: { id: true, firstName: true, lastName: true } },
   workExperience: { orderBy: { fromDate: 'desc' } },
   reports: {
-    where: { status: { not: 'TERMINATED' } },
+    // People who have left are not current direct reports. Both exit statuses
+    // are excluded, so a resignation removes somebody from the org chart the
+    // same way a termination always has.
+    where: { status: { notIn: ['TERMINATED', 'RESIGNED'] } },
     orderBy: [{ firstName: 'asc' }],
     select: { id: true, firstName: true, lastName: true, jobTitle: true },
   },
@@ -81,6 +84,7 @@ export function toDetail(row: DetailRow, includeRestricted: boolean): EmployeeDe
       : null,
     confirmationDate: isoDate(row.confirmationDate),
     terminationDate: isoDate(row.terminationDate),
+    resignationDate: isoDate(row.resignationDate),
     sourceOfHire: row.sourceOfHire,
     linkedinUrl: row.linkedinUrl,
     priorExperienceMonths: row.priorExperienceMonths,
@@ -263,6 +267,7 @@ export function toPrismaData(
     'hireDate',
     'confirmationDate',
     'terminationDate',
+    'resignationDate',
     'dateOfBirth',
     'passportExpiry',
     'visaExpiry',

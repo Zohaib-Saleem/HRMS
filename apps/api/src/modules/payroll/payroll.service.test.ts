@@ -18,6 +18,10 @@ const db = vi.hoisted(() => ({
   payslip: { count: vi.fn(), create: vi.fn() },
   payrollAdjustment: { updateMany: vi.fn() },
   payrollPeriod: { update: vi.fn() },
+  // Finalizing settles the loan repayments the run collected, so the double
+  // needs the table even for a run that has no loans against it.
+  employeeLoanInstallment: { updateMany: vi.fn(), findMany: vi.fn(() => []) },
+  employeeLoan: { findUnique: vi.fn(() => null), update: vi.fn() },
   $transaction: vi.fn(),
 }));
 

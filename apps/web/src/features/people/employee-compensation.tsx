@@ -14,6 +14,7 @@ import {
   type EmployeeSalaryRecord,
   type PayrollComponentKind,
   type SalaryComponentRecord,
+  type SalaryRevisionRecord,
 } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -33,6 +34,7 @@ import { EmptyState } from '@/components/feedback/states';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { usePermissions } from '@/features/auth/session-context';
 import { SalaryDialog, todayLocal } from './salary-dialog';
+import { IncrementDialog } from './increment-dialog';
 
 export { SalaryDialog } from './salary-dialog';
 
@@ -234,6 +236,7 @@ export function EmployeeCompensation({
   const canManage = has(PERMISSIONS.PAYROLL_MANAGE);
 
   const [salaryOpen, setSalaryOpen] = React.useState(false);
+  const [incrementOpen, setIncrementOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<EmployeeSalaryRecord | null>(null);
   const [componentKind, setComponentKind] = React.useState<PayrollComponentKind | null>(null);
   const queryClient = useQueryClient();
@@ -255,6 +258,23 @@ export function EmployeeCompensation({
     queryFn: () =>
       api.getPage<EmployeeSalaryRecord>('/payroll/salaries', {
         query: { employeeId, limit: 100 },
+      }),
+    enabled: canRead,
+  });
+
+  /**
+   * The increments behind the salary history.
+   *
+   * A separate list rather than a column on the salary table: not every salary
+   * record comes from an increment - an imported figure or a correction has no
+   * decision behind it - and showing "no reason recorded" against those would
+   * imply somebody failed to fill something in.
+   */
+  const revisions = useQuery({
+    queryKey: ['salary-revisions', { employeeId }],
+    queryFn: () =>
+      api.getPage<SalaryRevisionRecord>('/payroll/salary-revisions', {
+        query: { employeeId, limit: 50 },
       }),
     enabled: canRead,
   });
@@ -303,6 +323,7 @@ export function EmployeeCompensation({
 
   const history = salaries.data?.data ?? [];
   const current = history.find((row) => row.isCurrent) ?? null;
+  const revisionRows = revisions.data?.data ?? [];
   const currency = current?.currency ?? company.data?.currency ?? 'USD';
 
   const rows = components.data?.data ?? [];
@@ -389,6 +410,9 @@ export function EmployeeCompensation({
                   Edit
                 </Button>
               ) : null}
+              <Button size="sm" variant="outline" onClick={() => setIncrementOpen(true)}>
+                <TrendingUp className="size-4" aria-hidden /> Record increment
+              </Button>
               <Button size="sm" onClick={() => setSalaryOpen(true)}>
                 <Plus className="size-4" aria-hidden /> Record salary
               </Button>
@@ -540,8 +564,68 @@ export function EmployeeCompensation({
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Increments and revisions</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {revisionRows.length === 0 ? (
+            <p className="px-5 py-4 text-sm text-muted-foreground">
+              No increment has been recorded for this employee.
+            </p>
+          ) : (
+            <TableWrapper>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Effective</TH>
+                    <TH>From</TH>
+                    <TH>To</TH>
+                    <TH>Increment</TH>
+                    <TH>%</TH>
+                    <TH>Reason</TH>
+                    <TH>Approved by</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {revisionRows.map((row) => (
+                    <TR key={row.id}>
+                      <TD className="whitespace-nowrap font-medium">{day(row.effectiveDate)}</TD>
+                      <TD className="tabular-nums text-muted-foreground">
+                        {money(row.currentAmount, row.currency)}
+                      </TD>
+                      <TD className="tabular-nums">{money(row.newAmount, row.currency)}</TD>
+                      <TD className="tabular-nums">
+                        {row.incrementAmount >= 0 ? '+' : ''}
+                        {money(row.incrementAmount, row.currency)}
+                      </TD>
+                      <TD className="tabular-nums">
+                        {row.incrementPercent >= 0 ? '+' : ''}
+                        {row.incrementPercent}%
+                      </TD>
+                      <TD className="max-w-[16rem] truncate" title={row.reason}>
+                        {row.reason}
+                      </TD>
+                      <TD className="text-muted-foreground">{row.approvedByName ?? '—'}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrapper>
+          )}
+        </CardContent>
+      </Card>
+
       {canManage ? (
         <>
+          <IncrementDialog
+            employeeId={employeeId}
+            employeeName={employeeName ?? history[0]?.employeeName ?? 'This employee'}
+            current={current}
+            currency={currency}
+            open={incrementOpen}
+            onClose={() => setIncrementOpen(false)}
+          />
           <SalaryDialog
             employeeId={employeeId}
             employeeName={employeeName ?? history[0]?.employeeName}

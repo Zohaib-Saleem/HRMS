@@ -36,9 +36,10 @@ export async function organisationLookups(companyId: string): Promise<{
       orderBy: { name: 'asc' },
       select: { id: true, name: true, city: true },
     }),
-    // Anyone still employed can be someone's manager.
+    // Anyone still employed can be someone's manager. Both exit statuses are
+    // excluded, so somebody who resigned stops being offered as one.
     prisma.employee.findMany({
-      where: { companyId, status: { not: 'TERMINATED' } },
+      where: { companyId, status: { notIn: ['TERMINATED', 'RESIGNED'] } },
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
       select: { id: true, firstName: true, lastName: true, employeeNumber: true, jobTitle: true },
     }),

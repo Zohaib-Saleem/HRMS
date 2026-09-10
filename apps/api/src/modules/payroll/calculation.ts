@@ -115,6 +115,18 @@ export interface AdjustmentInput {
   kind: 'EARNING' | 'DEDUCTION';
   label: string;
   amount: number;
+  /**
+   * What to call the resulting payslip row, when it is not an ordinary
+   * correction. Labelling only - the arithmetic below is identical either way.
+   *
+   * A loan repayment is priced exactly like an adjustment and reaches the
+   * calculation through the same channel, but a reviewer reading a payslip
+   * needs to see LOAN rather than ADJUSTMENT to know why the money went.
+   * Omitted, both default to ADJUSTMENT, which is what every caller before
+   * loans existed produces.
+   */
+  code?: string;
+  lineKind?: string;
 }
 
 export interface AttendanceTally {
@@ -693,9 +705,9 @@ export function calculate(input: {
       adjustmentTotal += amount;
       earnings.push({
         componentId: null,
-        code: 'ADJUSTMENT',
+        code: adjustment.code ?? 'ADJUSTMENT',
         label: adjustment.label,
-        kind: 'ADJUSTMENT',
+        kind: adjustment.lineKind ?? 'ADJUSTMENT',
         calc: 'FIXED',
         rate: null,
         units: null,
@@ -706,9 +718,9 @@ export function calculate(input: {
       adjustmentTotal -= amount;
       deductions.push({
         componentId: null,
-        code: 'ADJUSTMENT',
+        code: adjustment.code ?? 'ADJUSTMENT',
         label: adjustment.label,
-        kind: 'ADJUSTMENT',
+        kind: adjustment.lineKind ?? 'ADJUSTMENT',
         calc: 'FIXED',
         rate: null,
         units: null,

@@ -91,6 +91,7 @@ export function EmployeeFormDrawer({
       hireDate: employee?.hireDate ?? '',
       confirmationDate: employee?.confirmationDate ?? '',
       terminationDate: employee?.terminationDate ?? '',
+      resignationDate: employee?.resignationDate ?? '',
       sourceOfHire: employee?.sourceOfHire ?? '',
       linkedinUrl: employee?.linkedinUrl ?? '',
       priorExperienceMonths: employee?.priorExperienceMonths ?? null,
@@ -276,6 +277,9 @@ export function EmployeeFormDrawer({
                 </FormField>
                 <FormField label="Confirmation date" htmlFor="emp-confirmationDate" error={formState.errors.confirmationDate?.message}>
                   <Input type="date" {...register('confirmationDate')} />
+                </FormField>
+                <FormField label="Resignation date" htmlFor="emp-resignationDate" error={formState.errors.resignationDate?.message} hint="Required when status is Resigned.">
+                  <Input type="date" {...register('resignationDate')} />
                 </FormField>
                 <FormField label="Termination date" htmlFor="emp-terminationDate" error={formState.errors.terminationDate?.message} hint="Required when status is Terminated.">
                   <Input type="date" {...register('terminationDate')} />

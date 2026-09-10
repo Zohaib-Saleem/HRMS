@@ -61,6 +61,8 @@ function toRecord(row: Row, callerEmployeeId: string | null, isAdmin: boolean): 
     dayPart: row.dayPart as LeaveDayPart,
     totalDays: toNumber(row.totalDays),
     reason: row.reason,
+    documentUrl: row.documentUrl,
+    documentName: row.documentName,
     status: row.status as ApprovalStatus,
     approvalRequestId: row.approvalRequestId,
     decidedAt: row.decidedAt?.toISOString() ?? null,
@@ -244,6 +246,8 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
             dayPart: input.dayPart,
             totalDays,
             reason: input.reason,
+            documentUrl: input.documentUrl,
+            documentName: input.documentName,
             status: 'PENDING',
           },
         });

@@ -32,6 +32,75 @@ export const updateCompanySchema = z.object({
 
 export type UpdateCompanyInput = z.infer<typeof updateCompanySchema>;
 
+// ----------------------------------------------------- online platforms (P10)
+
+/**
+ * Where the company exists on the public internet.
+ *
+ * A list rather than a fixed set of columns, because "which platforms?" is an
+ * answer that keeps growing and adding one should not be a migration. Nothing
+ * is seeded and no URL is assumed: every link here is one an administrator
+ * typed, which is the only way this can be right for any particular company.
+ */
+export const COMPANY_LINK_KINDS = [
+  'WEBSITE',
+  'LINKEDIN',
+  'FACEBOOK',
+  'INSTAGRAM',
+  'X',
+  'YOUTUBE',
+  'DISCORD',
+  'GITHUB',
+  'CAREERS',
+  'OTHER',
+] as const;
+
+export type CompanyLinkKind = (typeof COMPANY_LINK_KINDS)[number];
+
+export const COMPANY_LINK_KIND_LABELS: Record<CompanyLinkKind, string> = {
+  WEBSITE: 'Website',
+  LINKEDIN: 'LinkedIn',
+  FACEBOOK: 'Facebook',
+  INSTAGRAM: 'Instagram',
+  X: 'X',
+  YOUTUBE: 'YouTube',
+  DISCORD: 'Discord',
+  GITHUB: 'GitHub',
+  CAREERS: 'Careers',
+  OTHER: 'Other',
+};
+
+export const companyLinkSchema = z.object({
+  kind: z.enum(COMPANY_LINK_KINDS).default('OTHER'),
+  label: z.string().trim().min(1, 'Give the link a name.').max(80),
+  url: z
+    .string()
+    .trim()
+    .min(1, 'Enter the address.')
+    .max(500)
+    .refine((v) => /^https?:\/\//i.test(v), 'Enter a link starting with http:// or https://.'),
+  description: z
+    .string()
+    .trim()
+    .max(300)
+    .nullish()
+    .transform((v) => (v === '' || v === undefined ? null : v)),
+  displayOrder: z.coerce.number().int().min(0).max(999).default(0),
+  isActive: z.boolean().default(true),
+});
+
+export type CompanyLinkInput = z.infer<typeof companyLinkSchema>;
+
+export const companyLinkPatchSchema = companyLinkSchema.partial();
+
+export type CompanyLinkPatchInput = z.infer<typeof companyLinkPatchSchema>;
+
+export interface CompanyLinkRecord extends CompanyLinkInput {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ------------------------------------------------- attendance policy (P5)
 
 export const WEEK_DAY_LABELS: Record<WeekDay, string> = {

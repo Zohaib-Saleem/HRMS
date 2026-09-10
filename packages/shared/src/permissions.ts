@@ -84,6 +84,27 @@ export const PERMISSIONS = {
   /// an OWN scope, which is what lets them see their own and nothing else.
   PAYSLIP_READ: 'payslip.read',
 
+  // --- Employment paperwork ---
+  /// See employment contracts within your data scope.
+  CONTRACT_READ: 'contract.read',
+  /// Create, renew and terminate employment contracts.
+  CONTRACT_MANAGE: 'contract.manage',
+  /// See company policies and who has acknowledged them.
+  POLICY_READ: 'policy.read',
+  /// Publish policy versions and assign them to employees.
+  POLICY_MANAGE: 'policy.manage',
+
+  // --- Loans ---
+  /// See loans and their repayment schedules within your data scope.
+  LOAN_READ: 'loan.read',
+  /// Apply for a loan for yourself.
+  LOAN_REQUEST: 'loan.request',
+  /// Create loans for others, edit them and cancel them.
+  LOAN_MANAGE: 'loan.manage',
+  /// Approve or reject a loan application. Held separately so the person who
+  /// raises a loan need not be the person who agrees to it.
+  LOAN_APPROVE: 'loan.approve',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -196,6 +217,28 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     ],
   },
   {
+    key: 'paperwork',
+    label: 'Contracts and policies',
+    description: 'Employment contracts and the policies employees sign off.',
+    permissions: [
+      { value: PERMISSIONS.CONTRACT_READ, label: 'View contracts', description: 'See employment contracts within your scope.' },
+      { value: PERMISSIONS.CONTRACT_MANAGE, label: 'Manage contracts', description: 'Create, renew and terminate contracts.' },
+      { value: PERMISSIONS.POLICY_READ, label: 'View policies', description: 'See policies and acknowledgement status.' },
+      { value: PERMISSIONS.POLICY_MANAGE, label: 'Manage policies', description: 'Publish versions and assign them to employees.' },
+    ],
+  },
+  {
+    key: 'loans',
+    label: 'Loans',
+    description: 'Employee loans and salary advances.',
+    permissions: [
+      { value: PERMISSIONS.LOAN_READ, label: 'View loans', description: 'See loans and repayment schedules within your scope.' },
+      { value: PERMISSIONS.LOAN_REQUEST, label: 'Apply for a loan', description: 'Raise and withdraw your own loan application.' },
+      { value: PERMISSIONS.LOAN_MANAGE, label: 'Manage loans', description: 'Create loans for others, edit and cancel them.' },
+      { value: PERMISSIONS.LOAN_APPROVE, label: 'Approve loans', description: 'Approve or reject an application. Grant sparingly.' },
+    ],
+  },
+  {
     key: 'governance',
     label: 'Governance',
     description: 'Audit trail and system settings.',
@@ -287,6 +330,14 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.PAYROLL_MANAGE,
     PERMISSIONS.PAYROLL_APPROVE,
     PERMISSIONS.PAYSLIP_READ,
+    PERMISSIONS.CONTRACT_READ,
+    PERMISSIONS.CONTRACT_MANAGE,
+    PERMISSIONS.POLICY_READ,
+    PERMISSIONS.POLICY_MANAGE,
+    PERMISSIONS.LOAN_READ,
+    PERMISSIONS.LOAN_REQUEST,
+    PERMISSIONS.LOAN_MANAGE,
+    PERMISSIONS.LOAN_APPROVE,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -305,6 +356,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LEAVE_READ,
     PERMISSIONS.LEAVE_REQUEST,
     PERMISSIONS.HOLIDAY_READ,
+    PERMISSIONS.CONTRACT_READ,
+    PERMISSIONS.POLICY_READ,
+    PERMISSIONS.LOAN_READ,
+    PERMISSIONS.LOAN_REQUEST,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -321,6 +376,12 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LEAVE_REQUEST,
     PERMISSIONS.HOLIDAY_READ,
     PERMISSIONS.PAYSLIP_READ,
+    // An OWN data scope narrows all four to the employee's own record: their
+    // contract, the policies they were asked to sign, and their own loans.
+    PERMISSIONS.CONTRACT_READ,
+    PERMISSIONS.POLICY_READ,
+    PERMISSIONS.LOAN_READ,
+    PERMISSIONS.LOAN_REQUEST,
   ],
 };
 

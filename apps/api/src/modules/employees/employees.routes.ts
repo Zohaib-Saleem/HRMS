@@ -9,13 +9,15 @@ import {
   employeeUpdateSchema,
   employeeQuerySchema,
   idParamSchema,
+  isExitStatus,
+  resignEmployeeSchema,
   terminateEmployeeSchema,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { buildMeta, buildOrderBy, toSkipTake } from '../../core/pagination.js';
 import { diff, recordAudit } from '../../core/audit.js';
-import { ConflictError, ForbiddenError, NotFoundError } from '../../core/errors.js';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { restoreUser, suspendUser } from '../users/users.service.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
@@ -328,6 +330,39 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      /**
+       * The exit-status rules, re-checked against the stored record.
+       *
+       * The schema can only judge what the payload carries, so a PATCH that
+       * sends `{ status: 'RESIGNED' }` on its own passes it. Merging here is
+       * what stops a resignation being recorded with no date, and what lets a
+       * caller set the date and the status in either order or in one call.
+       */
+      const mergedStatus = input.status ?? before.status;
+      const mergedResignation =
+        input.resignationDate === undefined
+          ? before.resignationDate
+            ? before.resignationDate.toISOString().slice(0, 10)
+            : null
+          : input.resignationDate;
+      const mergedTermination =
+        input.terminationDate === undefined
+          ? before.terminationDate
+            ? before.terminationDate.toISOString().slice(0, 10)
+            : null
+          : input.terminationDate;
+
+      if (mergedStatus === 'RESIGNED' && !mergedResignation) {
+        throw new ValidationError({
+          resignationDate: ['A resignation date is required when the status is Resigned.'],
+        });
+      }
+      if (mergedStatus === 'TERMINATED' && !mergedTermination) {
+        throw new ValidationError({
+          terminationDate: ['A termination date is required when the status is Terminated.'],
+        });
+      }
+
       let data = toPrismaData({
         ...input,
         employeeNumber: input.employeeNumber ?? before.employeeNumber,
@@ -344,6 +379,44 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         include: DETAIL_INCLUDE,
       });
 
+      /**
+       * A status change made through the form has the same consequences as one
+       * made through the Terminate button.
+       *
+       * Somebody who has left must not keep a working login, and somebody
+       * brought back should get theirs back - and neither should depend on
+       * which control the administrator happened to use. The login is only
+       * restored when the exit is what switched it off; an account suspended
+       * separately by an administrator stays suspended, exactly as the
+       * reactivate endpoint has always behaved.
+       */
+      let accountNote: string | null = null;
+      if (before.userId && input.status && input.status !== before.status) {
+        const wasOut = isExitStatus(before.status);
+        const isOut = isExitStatus(input.status);
+
+        if (!wasOut && isOut) {
+          const outcome = await suspendUser({
+            userId: before.userId,
+            reason: 'EMPLOYMENT_TERMINATED',
+            actorUserId: auth.userId,
+          });
+          if (outcome.changed) {
+            accountNote = `suspended their login and revoked ${outcome.revokedSessions} session(s)`;
+          }
+        } else if (wasOut && !isOut) {
+          const outcome = await restoreUser({
+            userId: before.userId,
+            onlyIfTerminationSuspended: true,
+          });
+          accountNote = outcome.restored
+            ? 'restored their login'
+            : outcome.refusal === 'SUSPENDED_ADMINISTRATIVELY'
+              ? 'left their login suspended, because an administrator suspended it separately'
+              : null;
+        }
+      }
+
       const changes = diff(before as unknown as Record<string, unknown>, data);
       if (changes.changed.length > 0) {
         await recordAudit({
@@ -352,7 +425,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
           action: 'employee.update',
           entityType: 'Employee',
           entityId: id,
-          summary: `Updated ${updated.firstName} ${updated.lastName} (${changes.changed.join(', ')})`.trim(),
+          summary: `Updated ${updated.firstName} ${updated.lastName} (${changes.changed.join(', ')})${accountNote ? `; ${accountNote}` : ''}`.trim(),
           before: changes.before,
           after: changes.after,
           request,
@@ -425,6 +498,96 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  /**
+   * Recording a resignation.
+   *
+   * Deliberately its own endpoint alongside terminate rather than a flag on
+   * it: who ended the employment is a fact people ask about, the dates are
+   * different dates, and a screen that offers "Terminate" for somebody who
+   * handed in their notice puts the wrong word on the record forever.
+   *
+   * Everything the person ever did is kept. Attendance, punches, leave,
+   * payroll lines and payslips are untouched - the row's status changes and
+   * nothing is deleted, which is the same rule termination has always
+   * followed.
+   */
+  app.post(
+    '/:id/resign',
+    { preHandler: requirePermission(PERMISSIONS.EMPLOYEE_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const input = parseOrThrow(resignEmployeeSchema, request.body);
+
+      await assertEmployeeInScope(auth, id);
+
+      const before = await prisma.employee.findFirst({ where: { id, companyId: auth.companyId } });
+      if (!before) throw new NotFoundError('Employee');
+      if (isExitStatus(before.status)) {
+        throw new ConflictError(
+          `That employee is already recorded as ${before.status.toLowerCase()}.`,
+        );
+      }
+
+      const resignationDate = new Date(input.resignationDate);
+      // The last day worked is what payroll and attendance read. When nobody
+      // supplies one, the resignation date is the best answer available.
+      const lastWorkingDate = new Date(input.lastWorkingDate ?? input.resignationDate);
+
+      if (before.hireDate && resignationDate < before.hireDate) {
+        throw new ValidationError({
+          resignationDate: ['A resignation cannot be before the hire date.'],
+        });
+      }
+
+      const updated = await prisma.employee.update({
+        where: { id },
+        data: {
+          status: 'RESIGNED',
+          resignationDate,
+          terminationDate: lastWorkingDate,
+        },
+        include: DETAIL_INCLUDE,
+      });
+
+      // Same account handling as a termination: somebody who has left keeps no
+      // working login, and the reason is recorded so bringing them back can
+      // tell this apart from a deliberate administrative suspension.
+      let accountOutcome: { changed: boolean; revokedSessions: number } | null = null;
+      if (before.userId) {
+        accountOutcome = await suspendUser({
+          userId: before.userId,
+          reason: 'EMPLOYMENT_TERMINATED',
+          actorUserId: auth.userId,
+        });
+      }
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'employee.resign',
+        entityType: 'Employee',
+        entityId: id,
+        summary: `Recorded the resignation of ${updated.firstName} ${updated.lastName} on ${input.resignationDate}${input.reason ? ` - ${input.reason}` : ''}${accountOutcome?.changed ? `; suspended their login and revoked ${accountOutcome.revokedSessions} session(s)` : ''}`.trim(),
+        before: {
+          status: before.status,
+          resignationDate: before.resignationDate,
+          terminationDate: before.terminationDate,
+        },
+        after: {
+          status: 'RESIGNED',
+          resignationDate: input.resignationDate,
+          lastWorkingDate: input.lastWorkingDate ?? input.resignationDate,
+          accountSuspended: accountOutcome?.changed ?? false,
+          sessionsRevoked: accountOutcome?.revokedSessions ?? 0,
+        },
+        request,
+      });
+
+      return reply.send({ data: toDetail(updated, true) });
+    },
+  );
+
   app.post(
     '/:id/reactivate',
     { preHandler: requirePermission(PERMISSIONS.EMPLOYEE_MANAGE) },
@@ -436,13 +599,16 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
 
       const before = await prisma.employee.findFirst({ where: { id, companyId: auth.companyId } });
       if (!before) throw new NotFoundError('Employee');
-      if (before.status !== 'TERMINATED') {
-        throw new ConflictError('That employee is not terminated.');
+      // Reactivation reverses either exit. Somebody who resigned and came back
+      // is exactly as common as somebody reinstated after a termination, and
+      // refusing one of them would leave the record permanently wrong.
+      if (!isExitStatus(before.status)) {
+        throw new ConflictError('That employee has not left.');
       }
 
       const updated = await prisma.employee.update({
         where: { id },
-        data: { status: 'ACTIVE', terminationDate: null },
+        data: { status: 'ACTIVE', terminationDate: null, resignationDate: null },
         include: DETAIL_INCLUDE,
       });
 
@@ -478,7 +644,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
             : accountRefusal
               ? `; login ${accountRefusal}`
               : ''),
-        before: { status: 'TERMINATED' },
+        before: { status: before.status },
         after: { status: 'ACTIVE', accountRestored, accountNote: accountRefusal },
         request,
       });

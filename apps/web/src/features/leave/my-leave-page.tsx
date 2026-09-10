@@ -294,6 +294,8 @@ function LeaveRequestDrawer({ open, onClose }: { open: boolean; onClose: () => v
         endDate: today,
         dayPart: 'FULL_DAY',
         reason: '',
+        documentUrl: null,
+        documentName: null,
       },
     });
 
@@ -387,6 +389,30 @@ function LeaveRequestDrawer({ open, onClose }: { open: boolean; onClose: () => v
             <FormField label="Reason" htmlFor="lr-reason" error={formState.errors.reason?.message} required>
               <Textarea rows={4} {...register('reason')} />
             </FormField>
+
+            {/*
+              Supporting evidence is a link, not an upload: there is no document
+              store here yet, and a link to the drive the company already uses
+              loses nothing. Optional throughout - most leave needs none.
+            */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                label="Supporting document"
+                htmlFor="lr-documentUrl"
+                error={formState.errors.documentUrl?.message}
+                hint="Optional. Paste a link to a certificate or booking."
+              >
+                <Input type="url" placeholder="https://" {...register('documentUrl')} />
+              </FormField>
+              <FormField
+                label="Document name"
+                htmlFor="lr-documentName"
+                error={formState.errors.documentName?.message}
+                hint="Optional. What the link points at."
+              >
+                <Input {...register('documentName')} />
+              </FormField>
+            </div>
           </DialogBody>
 
           <DialogFooter>

@@ -1,7 +1,31 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from './common.js';
 
-export const EMPLOYEE_STATUSES = ['ACTIVE', 'ON_LEAVE', 'SUSPENDED', 'TERMINATED'] as const;
+export const EMPLOYEE_STATUSES = [
+  'ACTIVE',
+  'ON_LEAVE',
+  'SUSPENDED',
+  'INACTIVE',
+  'RESIGNED',
+  'TERMINATED',
+] as const;
+
+/**
+ * Statuses that end the employment.
+ *
+ * Both keep every attendance, leave and payroll record the person ever had -
+ * the row is retained and the status changes, which is the whole reason there
+ * is no delete. What they share operationally is that the linked login is
+ * switched off and the employee stops appearing in "who works here" lists.
+ */
+export const EMPLOYEE_EXIT_STATUSES = ['RESIGNED', 'TERMINATED'] as const;
+
+export type EmployeeExitStatus = (typeof EMPLOYEE_EXIT_STATUSES)[number];
+
+export function isExitStatus(status: string): status is EmployeeExitStatus {
+  return (EMPLOYEE_EXIT_STATUSES as readonly string[]).includes(status);
+}
+
 export const EMPLOYMENT_TYPES = [
   'FULL_TIME',
   'PART_TIME',
@@ -19,7 +43,19 @@ export const EMPLOYEE_STATUS_LABELS: Record<EmployeeStatus, string> = {
   ACTIVE: 'Active',
   ON_LEAVE: 'On leave',
   SUSPENDED: 'Suspended',
+  INACTIVE: 'Inactive',
+  RESIGNED: 'Resigned',
   TERMINATED: 'Terminated',
+};
+
+/** What each status actually means, for the form and the profile header. */
+export const EMPLOYEE_STATUS_DESCRIPTIONS: Record<EmployeeStatus, string> = {
+  ACTIVE: 'Employed and working.',
+  ON_LEAVE: 'Employed and on recorded leave.',
+  SUSPENDED: 'Employed but stood down; the login is switched off.',
+  INACTIVE: 'Employed but not currently working - a sabbatical or a long unpaid break.',
+  RESIGNED: 'Left of their own accord. All history is kept.',
+  TERMINATED: 'Employment ended by the company. All history is kept.',
 };
 
 export const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
@@ -88,6 +124,7 @@ const employeeBaseSchema = z
     hireDate: optionalDate,
     confirmationDate: optionalDate,
     terminationDate: optionalDate,
+    resignationDate: optionalDate,
     sourceOfHire: optionalText(120),
     linkedinUrl: optionalText(300),
     priorExperienceMonths: z.coerce.number().int().min(0).max(1200).nullish(),
@@ -120,6 +157,17 @@ export const employeeInputSchema = employeeBaseSchema
   .refine(
     (v) => v.status !== 'TERMINATED' || v.terminationDate !== null,
     { message: 'A termination date is required when the status is Terminated.', path: ['terminationDate'] },
+  )
+  .refine((v) => v.status !== 'RESIGNED' || v.resignationDate !== null, {
+    message: 'A resignation date is required when the status is Resigned.',
+    path: ['resignationDate'],
+  })
+  .refine(
+    (v) =>
+      v.hireDate === null ||
+      v.resignationDate === null ||
+      Date.parse(v.resignationDate) >= Date.parse(v.hireDate),
+    { message: 'A resignation cannot be before the hire date.', path: ['resignationDate'] },
   )
   .refine(
     (v) =>
@@ -154,6 +202,27 @@ export const employeeUpdateSchema = employeeBaseSchema
       message: 'A termination date is required when the status is Terminated.',
       path: ['terminationDate'],
     },
+  )
+  /**
+   * Same rule for a resignation, and the same reason it is conditional: a
+   * PATCH that only moves someone's team cannot be judged on a status it is
+   * not sending. The route merges against the stored row and re-checks there.
+   */
+  .refine(
+    (v) => v.status !== 'RESIGNED' || (v.resignationDate !== null && v.resignationDate !== undefined),
+    {
+      message: 'A resignation date is required when the status is Resigned.',
+      path: ['resignationDate'],
+    },
+  )
+  .refine(
+    (v) =>
+      v.hireDate === undefined ||
+      v.resignationDate === undefined ||
+      v.hireDate === null ||
+      v.resignationDate === null ||
+      Date.parse(v.resignationDate) >= Date.parse(v.hireDate),
+    { message: 'A resignation cannot be before the hire date.', path: ['resignationDate'] },
   )
   .refine(
     (v) =>
@@ -215,6 +284,31 @@ export const terminateEmployeeSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 });
 
+/**
+ * Recording a resignation.
+ *
+ * Two dates, because they are two different facts: the day notice was given,
+ * and the last day actually worked. Payroll and attendance both read the last
+ * working day; only the paperwork cares about the other one. The last working
+ * day defaults to the resignation date when the employee left immediately.
+ */
+export const resignEmployeeSchema = z
+  .object({
+    resignationDate: z.string().trim().min(1, 'Choose the date the resignation was given.'),
+    lastWorkingDate: z
+      .string()
+      .trim()
+      .nullish()
+      .transform((v) => (v === '' || v === undefined ? null : v)),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .refine(
+    (v) => v.lastWorkingDate === null || Date.parse(v.lastWorkingDate) >= Date.parse(v.resignationDate),
+    { message: 'The last working day cannot be before the resignation date.', path: ['lastWorkingDate'] },
+  );
+
+export type ResignEmployeeInput = z.infer<typeof resignEmployeeSchema>;
+
 // ------------------------------------------------------------- read shapes
 
 export interface EmployeeListItem {
@@ -260,6 +354,7 @@ export interface EmployeeDetail extends EmployeeListItem {
   secondaryManager: { id: string; fullName: string } | null;
   confirmationDate: string | null;
   terminationDate: string | null;
+  resignationDate: string | null;
   sourceOfHire: string | null;
   linkedinUrl: string | null;
   priorExperienceMonths: number | null;

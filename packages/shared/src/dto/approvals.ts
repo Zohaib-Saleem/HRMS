@@ -9,6 +9,7 @@ export const APPROVAL_SUBJECT_TYPES = [
   'SHIFT_CHANGE',
   'TIMESHEET',
   'LEAVE_REQUEST',
+  'LOAN_REQUEST',
 ] as const;
 export type ApprovalSubjectType = (typeof APPROVAL_SUBJECT_TYPES)[number];
 
@@ -24,6 +25,7 @@ export const APPROVAL_SUBJECT_LABELS: Record<ApprovalSubjectType, string> = {
   SHIFT_CHANGE: 'Shift change',
   TIMESHEET: 'Timesheet',
   LEAVE_REQUEST: 'Leave',
+  LOAN_REQUEST: 'Loan',
 };
 
 export const approvalQuerySchema = paginationQuerySchema.extend({
