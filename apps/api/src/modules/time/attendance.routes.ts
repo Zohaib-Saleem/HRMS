@@ -140,6 +140,13 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       AND: [
         { companyId: auth.companyId },
         { employee: scopeFilter },
+        // Narrowing only, applied INSIDE the scope above: the department and
+        // team a caller asks for can never reach an employee the scope filter
+        // has already excluded. The query contract has accepted both for a
+        // while; the list is what they now actually narrow, so the filters on
+        // the attendance page mean the same thing in every view.
+        query.departmentId ? { employee: { departmentId: query.departmentId } } : {},
+        query.teamId ? { employee: teamFilterClause(query.teamId) } : {},
         query.employeeId ? { employeeId: query.employeeId } : {},
         query.status ? { status: query.status } : {},
         query.from ? { date: { gte: toDateOnly(query.from) } } : {},

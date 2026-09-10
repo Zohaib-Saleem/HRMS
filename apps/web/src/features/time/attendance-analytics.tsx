@@ -1,10 +1,8 @@
-import * as React from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   CalendarClock,
   CalendarDays,
   Clock,
-  Download,
   TimerOff,
   TrendingUp,
   UserCheck,
@@ -12,7 +10,6 @@ import {
   Users,
 } from 'lucide-react';
 import {
-  DERIVED_ATTENDANCE_STATUSES,
   DERIVED_ATTENDANCE_STATUS_LABELS,
   type AttendanceAnalyticsResponse,
   type AttendanceDailyTotal,
@@ -22,41 +19,34 @@ import {
   type Paginated,
 } from '@hrms/shared';
 import { api } from '@/lib/api';
-import { useLookups } from '@/lib/lookups';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { NativeSelect } from '@/components/ui/field';
 import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { AttendanceBarChart, AttendanceChartLegend } from './attendance-bar-chart';
-import { CalendarGrid, MonthNav, type CalendarCell } from './attendance-calendar';
+import { CalendarGrid, type CalendarCell } from './attendance-calendar';
+import { monthLabel } from './attendance-view';
 import { LATE_TEXT, STATUS_BADGE, minutesLabel, timeLabel } from './attendance-ui';
 
 /**
- * The attendance bar chart view.
+ * The bar chart and calendar views of attendance.
  *
- * Everything on this screen is one request to `/attendance/analytics/daily`,
- * which returns the month already aggregated - a row per calendar day. The
- * chart, the summary cards and the calendar all read that one response, so
- * there is exactly one source of truth on the page and the three cannot
- * disagree with each other or with the table view beside them.
+ * Both are one request to `/attendance/analytics/daily`, which returns the
+ * month already aggregated - a row per calendar day. The chart, the summary
+ * cards and the calendar all read that one response, so there is exactly one
+ * source of truth behind them and they cannot disagree with each other or with
+ * the table view beside them.
  *
  * The server does the arithmetic for two reasons. It is the only place that
  * knows the attendance rules, and it is the only place that can apply the data
  * scope: what a manager may see is decided before a single day is derived, and
- * the filters below narrow inside that answer rather than widening it.
+ * the filters the page holds narrow inside that answer rather than widening it.
+ *
+ * Neither view owns its month or its filters. The page does, and hands them
+ * down, so switching between them keeps the reader on the same question.
  */
-
-const monthKey = (d: Date) => d.toISOString().slice(0, 7);
-
-const monthLabel = (d: Date) =>
-  d.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
-
-const startOfMonth = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-
-const currentMonth = () => startOfMonth(new Date());
 
 const longDate = (iso: string) =>
   new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, {
@@ -70,205 +60,55 @@ const longDate = (iso: string) =>
 const hoursLabel = (minutes: number | null): string =>
   minutes === null ? '—' : `${(minutes / 60).toFixed(1)}h`;
 
-interface Filters {
-  departmentId: string;
-  teamId: string;
-  employeeId: string;
-  status: string;
+/** Query parameters as the page assembles them. */
+export type AnalyticsParams = Record<string, string | undefined>;
+
+interface ViewProps {
+  month: Date;
+  params: AnalyticsParams;
+  /** True when the employee filter has narrowed the page to one person. */
+  singleEmployee: boolean;
+  /** That person's name, when there is one. */
+  employeeName?: string | null;
+  selectedDate: string | null;
+  /** Toggles the day detail open, or shut when the same day is chosen again. */
+  onSelectDate: (date: string) => void;
+  onClearDate: () => void;
+  /** Narrows the page to one person, from the employee list under the chart. */
+  onSelectEmployee: (employeeId: string) => void;
 }
 
-const NO_FILTERS: Filters = { departmentId: '', teamId: '', employeeId: '', status: '' };
-
-export function AttendanceAnalytics() {
-  const { lookups } = useLookups();
-  const [month, setMonth] = React.useState(currentMonth);
-  const [filters, setFilters] = React.useState<Filters>(NO_FILTERS);
-  const [selectedDate, setSelectedDate] = React.useState<string | null>(null);
-
-  const monthValue = monthKey(month);
-
-  /**
-   * Changing the month closes the open day.
-   *
-   * Otherwise the detail panel would keep showing the 9th of September while
-   * the chart above it moved to October, which is the kind of mismatch nobody
-   * notices until they have acted on it.
-   */
-  const goToMonth = React.useCallback((next: Date) => {
-    setMonth(next);
-    setSelectedDate(null);
-  }, []);
-
-  const shiftMonth = React.useCallback(
-    (delta: number) =>
-      goToMonth(new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + delta, 1))),
-    [goToMonth, month],
-  );
-
-  const update = React.useCallback((patch: Partial<Filters>) => {
-    setFilters((prev) => {
-      const next = { ...prev, ...patch };
-      // A team belongs to a department. Changing the department strands the
-      // team filter on a team that is no longer offered, which silently
-      // narrows the chart to nothing.
-      if (patch.departmentId !== undefined && patch.departmentId !== prev.departmentId) {
-        next.teamId = '';
-      }
-      return next;
-    });
-  }, []);
-
-  /** The query every panel on this screen shares. */
-  const params = React.useMemo(
-    () => ({
-      month: monthValue,
-      departmentId: filters.departmentId || undefined,
-      teamId: filters.teamId || undefined,
-      employeeId: filters.employeeId || undefined,
-      status: filters.status || undefined,
-    }),
-    [monthValue, filters],
-  );
-
-  const query = useQuery({
+/** The one request behind both views. Shared cache key, so switching is free. */
+function useDailyAnalytics(params: AnalyticsParams) {
+  return useQuery({
     queryKey: ['attendance', 'analytics', params],
-    queryFn: () => api.get<AttendanceAnalyticsResponse>('/attendance/analytics/daily', { query: params }),
+    queryFn: () =>
+      api.get<AttendanceAnalyticsResponse>('/attendance/analytics/daily', { query: params }),
     placeholderData: keepPreviousData,
   });
+}
 
+/** The bar chart view: worked hours per day, with the month totalled above it. */
+export function AttendanceChartView({
+  month,
+  params,
+  singleEmployee,
+  employeeName = null,
+  selectedDate,
+  onSelectDate,
+  onClearDate,
+  onSelectEmployee,
+}: ViewProps) {
+  const query = useDailyAnalytics(params);
   const days = query.data?.days ?? [];
-  const summary = query.data?.summary;
-
-  const teamOptions = filters.departmentId
-    ? lookups.teams.filter((t) => t.departmentId === filters.departmentId)
-    : lookups.teams;
-
-  const hasFilters = Object.values(filters).some((v) => v !== '');
-  const isCurrentMonth = monthValue === monthKey(currentMonth());
-
-  /**
-   * The CSV comes from the existing report endpoint, not a new one.
-   *
-   * `daily` is one row per employee per day over the same range with the same
-   * filters, which is precisely the data behind these columns - so the export
-   * is the chart's own numbers, unrolled, rather than a second query that might
-   * answer differently.
-   */
-  const exportHref = React.useMemo(() => {
-    const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(params)) {
-      if (value) search.set(key, String(value));
-    }
-    return `/api/v1/attendance/reports/daily/export?${search.toString()}`;
-  }, [params]);
 
   return (
     <div className="space-y-5">
-      <Card>
-        <CardHeader bordered className="gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
-            <MonthNav onShift={shiftMonth} />
-            <CardTitle className="min-w-[9rem]">{monthLabel(month)}</CardTitle>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => goToMonth(currentMonth())}
-              disabled={isCurrentMonth}
-            >
-              Today
-            </Button>
-            <label className="sr-only" htmlFor="analytics-month">
-              Month
-            </label>
-            <input
-              id="analytics-month"
-              type="month"
-              value={monthValue}
-              onChange={(e) => {
-                // An empty value means the picker was cleared; keep the month
-                // that is on screen rather than jumping to an invalid date.
-                if (!e.target.value) return;
-                goToMonth(new Date(`${e.target.value}-01T00:00:00Z`));
-              }}
-              className="h-8 rounded-md border border-border bg-surface px-2 text-[13px] text-foreground"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            {hasFilters ? (
-              <Button variant="ghost" size="sm" onClick={() => setFilters(NO_FILTERS)}>
-                Clear filters
-              </Button>
-            ) : null}
-            <Button variant="outline" size="sm" asChild>
-              <a href={exportHref} download>
-                <Download />
-                Export CSV
-              </a>
-            </Button>
-          </div>
-        </CardHeader>
-
-        <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Filter label="Department">
-            <NativeSelect
-              value={filters.departmentId}
-              onChange={(e) => update({ departmentId: e.target.value })}
-              aria-label="Filter by department"
-            >
-              <option value="">All departments</option>
-              {lookups.departments.map((o) => (
-                <option key={o.id} value={o.id}>{o.label}</option>
-              ))}
-            </NativeSelect>
-          </Filter>
-
-          <Filter label="Team">
-            <NativeSelect
-              value={filters.teamId}
-              onChange={(e) => update({ teamId: e.target.value })}
-              aria-label="Filter by team"
-            >
-              <option value="">All teams</option>
-              {teamOptions.map((o) => (
-                <option key={o.id} value={o.id}>{o.label}</option>
-              ))}
-            </NativeSelect>
-          </Filter>
-
-          <Filter label="Employee">
-            <NativeSelect
-              value={filters.employeeId}
-              onChange={(e) => update({ employeeId: e.target.value })}
-              aria-label="Filter by employee"
-            >
-              <option value="">All employees</option>
-              {lookups.managers.map((o) => (
-                <option key={o.id} value={o.id}>{o.label}</option>
-              ))}
-            </NativeSelect>
-          </Filter>
-
-          <Filter label="Status">
-            <NativeSelect
-              value={filters.status}
-              onChange={(e) => update({ status: e.target.value })}
-              aria-label="Filter by attendance status"
-            >
-              <option value="">All statuses</option>
-              {DERIVED_ATTENDANCE_STATUSES.map((s) => (
-                <option key={s} value={s}>{DERIVED_ATTENDANCE_STATUS_LABELS[s]}</option>
-              ))}
-            </NativeSelect>
-          </Filter>
-        </CardContent>
-      </Card>
-
-      <SummaryCards summary={summary} loading={query.isLoading} />
+      <SummaryCards summary={query.data?.summary} loading={query.isLoading} />
 
       <Card>
         <CardHeader bordered className="gap-1">
-          <CardTitle>Worked hours by day</CardTitle>
+          <CardTitle>Worked hours by day — {monthLabel(month)}</CardTitle>
           <p className="text-[12.5px] text-muted-foreground">
             Bar height is time actually worked. Overtime is part of that time, not added to it, and
             late minutes are shown beside the bar rather than drawn as hours nobody worked.
@@ -283,8 +123,9 @@ export function AttendanceAnalytics() {
                 days={days}
                 loading={query.isLoading}
                 selectedDate={selectedDate}
-                onSelectDate={(date) => setSelectedDate((prev) => (prev === date ? null : date))}
-                singleEmployee={filters.employeeId !== ''}
+                onSelectDate={onSelectDate}
+                singleEmployee={singleEmployee}
+                employeeName={employeeName}
               />
               <AttendanceChartLegend />
               {query.data?.truncated ? (
@@ -298,50 +139,74 @@ export function AttendanceAnalytics() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Card>
-          <CardHeader bordered>
-            <CardTitle>{monthLabel(month)}</CardTitle>
-            <p className="text-[12.5px] text-muted-foreground">
-              The same days as the chart. Choose one to see who was in and who was not.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <CalendarGrid
-              cells={days.map((day) => calendarCell(day, filters.employeeId !== ''))}
-              loading={query.isLoading}
-              selectedDate={selectedDate}
-              onSelectDate={(date) => setSelectedDate((prev) => (prev === date ? null : date))}
-            />
-          </CardContent>
-        </Card>
-
-        <EmployeeBreakdown
-          params={params}
-          selectedEmployeeId={filters.employeeId}
-          onSelectEmployee={(employeeId) => update({ employeeId })}
-        />
-      </div>
-
+      {/*
+        Directly under the chart, not below the employee list. Choosing a bar
+        has to put something where the reader is already looking; a panel two
+        screens down reads as nothing having happened.
+      */}
       {selectedDate ? (
-        <DayDetail
-          date={selectedDate}
-          params={params}
-          onClose={() => setSelectedDate(null)}
-        />
+        <DayDetail date={selectedDate} params={params} onClose={onClearDate} />
       ) : null}
+
+      <EmployeeBreakdown
+        params={params}
+        selectedEmployeeId={params.employeeId ?? ''}
+        onSelectEmployee={onSelectEmployee}
+      />
     </div>
   );
 }
 
-function Filter({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * The calendar view: the same aggregated days, drawn as a month grid.
+ *
+ * It reads the analytics response rather than `/attendance/summary` so that the
+ * department, team, employee and status filters mean the same thing here as
+ * they do on the chart. `/attendance/summary` only knows about one employee,
+ * which is why the personal calendar still uses it and this does not.
+ */
+export function AttendanceCalendarView({
+  month,
+  params,
+  singleEmployee,
+  selectedDate,
+  onSelectDate,
+  onClearDate,
+}: ViewProps) {
+  const query = useDailyAnalytics(params);
+  const days = query.data?.days ?? [];
+
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </label>
+    <div className="space-y-5">
+      <SummaryCards summary={query.data?.summary} loading={query.isLoading} />
+
+      <Card>
+        <CardHeader bordered className="gap-1">
+          <CardTitle>{monthLabel(month)}</CardTitle>
+          <p className="text-[12.5px] text-muted-foreground">
+            {singleEmployee
+              ? 'Each day is that employee’s status. Choose one to see the detail.'
+              : 'Each day shows how many of the people in scope were in. Choose one to see who.'}
+          </p>
+        </CardHeader>
+        <CardContent>
+          {query.isError ? (
+            <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+          ) : (
+            <CalendarGrid
+              cells={days.map((day) => calendarCell(day, singleEmployee))}
+              loading={query.isLoading}
+              selectedDate={selectedDate}
+              onSelectDate={onSelectDate}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      {selectedDate ? (
+        <DayDetail date={selectedDate} params={params} onClose={onClearDate} />
+      ) : null}
+    </div>
   );
 }
 
@@ -476,21 +341,19 @@ function SummaryCards({
  *
  * Served by the existing monthly report rather than a new endpoint: it is
  * already one row per employee with exactly these figures, already scoped, and
- * already filtered on the same four parameters. Choosing a row filters the
- * chart above to that person, which is how their daily bars are reached.
+ * already filtered on the same four parameters.
  */
 function EmployeeBreakdown({
   params,
   selectedEmployeeId,
   onSelectEmployee,
 }: {
-  params: Record<string, string | undefined>;
+  params: AnalyticsParams;
   selectedEmployeeId: string;
   onSelectEmployee: (employeeId: string) => void;
 }) {
-  // The employee filter is deliberately dropped: the list is how somebody is
-  // chosen, so filtering it to the current choice would leave one row and no
-  // way back to the others.
+  // The employee filter is deliberately dropped: this is the list somebody is
+  // chosen FROM, so narrowing it to the current choice would leave one row.
   const { employeeId: _ignored, ...listParams } = params;
 
   const query = useQuery({
@@ -507,7 +370,7 @@ function EmployeeBreakdown({
       <CardHeader bordered className="gap-1">
         <CardTitle>Employees</CardTitle>
         <p className="text-[12.5px] text-muted-foreground">
-          Choose someone to see their daily bars for this month.
+          Choose someone to narrow every view above to their daily bars.
         </p>
       </CardHeader>
 
@@ -540,11 +403,10 @@ function EmployeeBreakdown({
                 </TR>
               ) : (
                 rows.map((row) => {
-                  const id = String(row.employeeNumber ?? '');
                   const selected = selectedEmployeeId !== '' && row.employeeId === selectedEmployeeId;
                   return (
                     <TR
-                      key={id || String(row.employeeName)}
+                      key={String(row.employeeId ?? row.employeeNumber ?? row.employeeName)}
                       className={cn('cursor-pointer', selected && 'bg-accent/50')}
                       onClick={() =>
                         row.employeeId ? onSelectEmployee(String(row.employeeId)) : undefined
@@ -584,7 +446,9 @@ function EmployeeBreakdown({
  * Opened by clicking a bar or a calendar cell. Served by the existing
  * `/attendance/monthly` endpoint with the range collapsed to a single date and
  * the screen's own filters carried over, so it is the same scope, the same
- * rules and the same figures as everything above it.
+ * rules and the same figures as everything above it. This is also where the
+ * per-employee facts the aggregate cannot carry live: the name, the shift, and
+ * that person's own check-in and check-out.
  */
 function DayDetail({
   date,
@@ -592,7 +456,7 @@ function DayDetail({
   onClose,
 }: {
   date: string;
-  params: Record<string, string | undefined>;
+  params: AnalyticsParams;
   onClose: () => void;
 }) {
   const query = useQuery({

@@ -106,6 +106,14 @@
   --att-holiday-foreground: oklch(0.45 0.16 255);
   --att-holiday-border: oklch(0.72 0.13 252);
 
+  /*
+    Overtime, which is a portion of worked time rather than a status a day can
+    have. It needs its own hue for exactly that reason: on the chart it sits in
+    the same column as ordinary and late worked time, so borrowing the red of
+    absence or the blue of a holiday would put two meanings on one colour.
+  */
+  --att-overtime-border: oklch(0.62 0.15 276);
+
   /* Not a judgement, so no hue - but still a legible grey, not a whisper. */
   --att-weekend: oklch(0.925 0.005 255);
   --att-weekend-foreground: oklch(0.44 0.012 257);
@@ -209,6 +217,8 @@
   --att-holiday-foreground: oklch(0.85 0.1 253);
   --att-holiday-border: oklch(0.51 0.13 253);
 
+  --att-overtime-border: oklch(0.58 0.14 276);
+
   --att-weekend: oklch(0.285 0.014 260);
   --att-weekend-foreground: oklch(0.79 0.012 257);
   --att-weekend-border: oklch(0.375 0.016 260);
@@ -284,6 +294,7 @@
   --color-att-holiday-foreground: var(--att-holiday-foreground);
   --color-att-holiday-border: var(--att-holiday-border);
   --color-att-holiday-hover: var(--att-holiday-hover);
+  --color-att-overtime-border: var(--att-overtime-border);
   --color-att-weekend: var(--att-weekend);
   --color-att-weekend-foreground: var(--att-weekend-foreground);
   --color-att-weekend-border: var(--att-weekend-border);

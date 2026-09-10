@@ -51,7 +51,14 @@ const WORK_SERIES = [
   {
     key: 'overtimeMinutes',
     label: 'Overtime',
-    color: 'var(--att-absent-border)',
+    /**
+     * Its own hue, not the red of absence.
+     *
+     * Overtime is time somebody worked; absence is time nobody did. Drawing
+     * them in the same colour made the tallest, best-attended columns look
+     * like the worst ones.
+     */
+    color: 'var(--att-overtime-border)',
     hint: 'The overtime portion of worked time',
   },
 ] as const satisfies ReadonlyArray<{
@@ -111,6 +118,8 @@ interface ChartProps {
   onSelectDate?: (date: string) => void;
   /** True when exactly one employee is in scope; changes the tooltip wording. */
   singleEmployee?: boolean;
+  /** Who the single employee is, when there is one. Shown in the panel header. */
+  employeeName?: string | null;
   loading?: boolean;
 }
 
@@ -119,26 +128,40 @@ export function AttendanceBarChart({
   selectedDate = null,
   onSelectDate,
   singleEmployee = false,
+  employeeName = null,
   loading = false,
 }: ChartProps) {
   /**
-   * Which day the tooltip is describing.
+   * Which day the panel below is describing.
    *
-   * Hover sets it on a pointer; focus sets it from the keyboard; tapping a bar
-   * on a touch screen selects the day, which also shows it. No figure in this
-   * chart is reachable only by hovering - the day detail below repeats all of
-   * it - but the tooltip is the fast path and it must work without a mouse.
+   * Hover sets it with a pointer and focus sets it from the keyboard, but
+   * neither exists on a phone: iOS does not reliably focus a button on tap and
+   * there is no hover state to leave. So the panel falls back to the SELECTED
+   * day, which a tap always sets - tapping a bar shows its figures, and they
+   * stay on screen instead of vanishing the moment the finger lifts.
+   *
+   * No figure here is reachable only by hovering: the day detail table below
+   * the chart repeats all of it. This is the fast path, not the only one.
    */
-  const [active, setActive] = React.useState<string | null>(null);
+  const [hovered, setHovered] = React.useState<string | null>(null);
+  const shown = hovered ?? selectedDate;
 
   const maxWorked = Math.max(0, ...days.map((d) => d.workedMinutes));
   const ticks = axisTicks(maxWorked);
   const axisTop = Math.max(ticks[ticks.length - 1] ?? 1, 1) * 60;
-  const activeDay = days.find((d) => d.date === active) ?? null;
+  const activeDay = days.find((d) => d.date === shown) ?? null;
 
-  // Below about a fortnight every column can carry its own label; above it,
-  // labels are thinned so they never collide on a phone.
-  const dense = days.length > 16;
+  /**
+   * The narrowest a column may be drawn.
+   *
+   * A month squeezed into a phone gives each day about eight pixels, which is
+   * too narrow to read, too narrow to aim at, and too narrow to carry its own
+   * date. Below this width the plot scrolls sideways instead - the axis stays
+   * put, the columns keep a usable size, and every day keeps its label.
+   */
+  const MIN_COLUMN = 22;
+  const GAP = days.length > 16 ? 3 : 4;
+  const trackWidth = days.length * MIN_COLUMN + (days.length - 1) * GAP;
 
   if (loading) {
     return (
@@ -149,12 +172,12 @@ export function AttendanceBarChart({
   return (
     <div className="space-y-3">
       <div className="flex items-stretch gap-2 sm:gap-3">
-        {/* Y axis: whole hours, so the reader never has to divide by sixty. */}
-        <div
-          className="relative w-9 shrink-0 sm:w-10"
-          style={{ height: 224 }}
-          aria-hidden
-        >
+        {/*
+          The y axis sits OUTSIDE the scroller on purpose. A scale that slides
+          away with the bars stops being a scale, and on a phone it would be
+          off screen for most of the month.
+        */}
+        <div className="relative w-9 shrink-0 sm:w-10" style={{ height: 224 }} aria-hidden>
           {ticks.map((tick) => (
             <span
               key={tick}
@@ -166,64 +189,82 @@ export function AttendanceBarChart({
           ))}
         </div>
 
-        <div className="relative min-w-0 flex-1">
-          {/* Gridlines, one shade off the surface so they never compete. */}
-          <div className="pointer-events-none absolute inset-x-0 top-0" style={{ height: 224 }}>
-            {ticks.map((tick) => (
-              <div
-                key={tick}
-                className="absolute h-px w-full bg-chart-grid"
-                style={{ bottom: `${((tick * 60) / axisTop) * 100}%` }}
-              />
-            ))}
-          </div>
+        {/*
+          Scrolls only when it has to. `min-width` on the track means a desktop
+          card wider than the track draws the whole month at once with no
+          scrollbar, and a phone scrolls a month of readable columns rather
+          than showing thirty slivers.
+        */}
+        <div className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain pb-1">
+          <div className="relative" style={{ minWidth: trackWidth }}>
+            {/* Gridlines, one shade off the surface so they never compete. */}
+            <div className="pointer-events-none absolute inset-x-0 top-0" style={{ height: 224 }}>
+              {ticks.map((tick) => (
+                <div
+                  key={tick}
+                  className="absolute h-px w-full bg-chart-grid"
+                  style={{ bottom: `${((tick * 60) / axisTop) * 100}%` }}
+                />
+              ))}
+            </div>
 
-          <div
-            className={cn('relative flex items-end', dense ? 'gap-[2px] sm:gap-[3px]' : 'gap-1')}
-            style={{ height: 224 }}
-            role="list"
-            aria-label="Worked hours per day"
-          >
-            {days.map((day) => (
-              <DayColumn
-                key={day.date}
-                day={day}
-                axisTop={axisTop}
-                selected={day.date === selectedDate}
-                onSelect={onSelectDate}
-                onActive={setActive}
-              />
-            ))}
-          </div>
+            <div
+              className="relative flex items-end"
+              style={{ height: 224, gap: GAP }}
+              role="list"
+              aria-label="Worked hours per day"
+            >
+              {days.map((day) => (
+                <DayColumn
+                  key={day.date}
+                  day={day}
+                  axisTop={axisTop}
+                  minWidth={MIN_COLUMN}
+                  selected={day.date === selectedDate}
+                  onSelect={onSelectDate}
+                  onHover={setHovered}
+                />
+              ))}
+            </div>
 
-          {/* The state ribbon: who was in what state, on the same axis. */}
-          <div className={cn('mt-1 flex', dense ? 'gap-[2px] sm:gap-[3px]' : 'gap-1')}>
-            {days.map((day) => (
-              <StateRibbon key={day.date} day={day} />
-            ))}
-          </div>
+            {/* The state ribbon: who was in what state, on the same axis. */}
+            <div className="mt-1 flex" style={{ gap: GAP }}>
+              {days.map((day) => (
+                <StateRibbon key={day.date} day={day} minWidth={MIN_COLUMN} />
+              ))}
+            </div>
 
-          {/* X axis: the day of the month. */}
-          <div className={cn('mt-1.5 flex', dense ? 'gap-[2px] sm:gap-[3px]' : 'gap-1')}>
-            {days.map((day, index) => (
-              <span
-                key={day.date}
-                className={cn(
-                  'tabular min-w-0 flex-1 truncate text-center text-[10px] leading-none sm:text-[10.5px]',
-                  day.date === selectedDate
-                    ? 'font-semibold text-foreground'
-                    : 'text-muted-foreground',
-                )}
-              >
-                {/* On a dense month, every other day - readable on a phone. */}
-                {!dense || index % 2 === 0 || day.date === selectedDate ? dayNumber(day.date) : ''}
-              </span>
-            ))}
+            {/*
+              X axis. Every day carries its own number - that is what the
+              minimum column width buys, and thinning the labels was only ever
+              a workaround for columns too narrow to hold one.
+            */}
+            <div className="mt-1.5 flex" style={{ gap: GAP }}>
+              {days.map((day) => (
+                <span
+                  key={day.date}
+                  className={cn(
+                    'tabular flex-1 truncate text-center text-[10px] leading-none sm:text-[10.5px]',
+                    day.date === selectedDate
+                      ? 'font-semibold text-foreground'
+                      : 'text-muted-foreground',
+                  )}
+                  style={{ minWidth: MIN_COLUMN }}
+                >
+                  {dayNumber(day.date)}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
-      <DayTooltip day={activeDay} singleEmployee={singleEmployee} />
+      <DayTooltip
+        day={activeDay}
+        singleEmployee={singleEmployee}
+        employeeName={employeeName}
+        opened={activeDay !== null && activeDay.date === selectedDate}
+      />
     </div>
   );
 }
@@ -231,12 +272,14 @@ export function AttendanceBarChart({
 interface ColumnProps {
   day: AttendanceDailyTotal;
   axisTop: number;
+  /** Never drawn narrower than this; the plot scrolls instead. */
+  minWidth: number;
   selected: boolean;
   onSelect?: ((date: string) => void) | undefined;
-  onActive: (date: string | null) => void;
+  onHover: (date: string | null) => void;
 }
 
-function DayColumn({ day, axisTop, selected, onSelect, onActive }: ColumnProps) {
+function DayColumn({ day, axisTop, minWidth, selected, onSelect, onHover }: ColumnProps) {
   const segments = WORK_SERIES.map((series) => ({
     ...series,
     value: day[series.key] as number,
@@ -253,6 +296,7 @@ function DayColumn({ day, axisTop, selected, onSelect, onActive }: ColumnProps) 
     day.workedMinutes > 0 ? `${hours(day.workedMinutes)} worked` : 'no hours worked',
     ...segments.map((s) => `${s.label} ${hours(s.value)}`),
     day.lateMinutes > 0 ? `${day.lateMinutes} minutes late` : '',
+    day.earlyLeaveMinutes > 0 ? `${day.earlyLeaveMinutes} minutes early leave` : '',
     day.present > 0 ? `${day.present} present` : '',
     day.absent > 0 ? `${day.absent} absent` : '',
     day.onLeave > 0 ? `${day.onLeave} on leave` : '',
@@ -267,10 +311,17 @@ function DayColumn({ day, axisTop, selected, onSelect, onActive }: ColumnProps) 
     <div
       role="listitem"
       className={cn(
-        'group relative flex h-full min-w-0 flex-1 flex-col-reverse justify-start rounded-t-[3px]',
+        'group relative flex h-full flex-1 flex-col-reverse justify-start rounded-t-[3px]',
         selected && 'bg-accent/45',
       )}
+      style={{ minWidth }}
     >
+      {/*
+        The whole column is one hit target, floor to ceiling, not just the
+        coloured part of it. A three-pixel weekend marker is impossible to tap
+        on a phone; the full-height button is comfortably reachable and is what
+        makes every day selectable regardless of how tall its bar is.
+      */}
       <button
         type="button"
         className={cn(
@@ -280,10 +331,10 @@ function DayColumn({ day, axisTop, selected, onSelect, onActive }: ColumnProps) 
         aria-label={label}
         aria-pressed={interactive ? selected : undefined}
         onClick={() => onSelect?.(day.date)}
-        onMouseEnter={() => onActive(day.date)}
-        onMouseLeave={() => onActive(null)}
-        onFocus={() => onActive(day.date)}
-        onBlur={() => onActive(null)}
+        onMouseEnter={() => onHover(day.date)}
+        onMouseLeave={() => onHover(null)}
+        onFocus={() => onHover(day.date)}
+        onBlur={() => onHover(null)}
       />
 
       {segments.length === 0 ? (
@@ -379,11 +430,17 @@ function EmptyDayMarker({ day }: { day: AttendanceDailyTotal }) {
  * With a single employee selected the ribbon is one solid block - that person's
  * status for the day - which is exactly the right reading.
  */
-function StateRibbon({ day }: { day: AttendanceDailyTotal }) {
+function StateRibbon({ day, minWidth }: { day: AttendanceDailyTotal; minWidth: number }) {
   const total = day.employeeCount;
 
   if (total === 0) {
-    return <div className="h-1.5 min-w-0 flex-1 rounded-full bg-transparent" aria-hidden />;
+    return (
+      <div
+        className="h-1.5 flex-1 rounded-full bg-transparent"
+        style={{ minWidth }}
+        aria-hidden
+      />
+    );
   }
 
   const parts = STATE_SERIES.map((series) => ({
@@ -394,9 +451,10 @@ function StateRibbon({ day }: { day: AttendanceDailyTotal }) {
   return (
     <div
       className={cn(
-        'flex h-1.5 min-w-0 flex-1 overflow-hidden rounded-full',
+        'flex h-1.5 flex-1 overflow-hidden rounded-full',
         day.dayState === 'UPCOMING' && 'border border-dashed border-att-upcoming-border',
       )}
+      style={{ minWidth }}
       aria-hidden
     >
       {parts.map((part) => (
@@ -421,14 +479,19 @@ function StateRibbon({ day }: { day: AttendanceDailyTotal }) {
 function DayTooltip({
   day,
   singleEmployee,
+  employeeName,
+  opened,
 }: {
   day: AttendanceDailyTotal | null;
   singleEmployee: boolean;
+  employeeName: string | null;
+  /** True when this day's per-employee detail is already open below. */
+  opened: boolean;
 }) {
   if (!day) {
     return (
       <p className="rounded-lg border border-dashed border-border px-3 py-2 text-[12.5px] text-muted-foreground">
-        Hover, focus or tap a bar for that day&apos;s figures.
+        Tap or hover a bar for that day&apos;s figures.
       </p>
     );
   }
@@ -444,7 +507,17 @@ function DayTooltip({
       aria-live="polite"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <span className="text-[13px] font-semibold">{longDate(day.date)}</span>
+        <span className="text-[13px] font-semibold">
+          {longDate(day.date)}
+          {/*
+            Whose day it is, when the answer is one person. With several people
+            in scope no single name is true of the column, so the panel says how
+            many instead and the day detail table below names them one by one.
+          */}
+          {singleEmployee && employeeName ? (
+            <span className="ml-2 font-normal text-muted-foreground">{employeeName}</span>
+          ) : null}
+        </span>
         <span className="text-[12px] text-muted-foreground">
           {day.holidayName ??
             (day.dayState === 'WORKING' ? 'Working day' : DAY_STATE_LABEL[day.dayState])}
@@ -465,7 +538,7 @@ function DayTooltip({
         <Figure
           label="Present"
           value={day.employeeCount > 0 ? `${day.present + day.halfDay}` : '—'}
-          hint={day.halfDay > 0 ? `${day.halfDay} half day` : undefined}
+          hint={day.halfDay > 0 ? `incl. ${day.halfDay} half` : undefined}
         />
         <Figure label="Worked" value={day.workedMinutes > 0 ? hours(day.workedMinutes) : '—'} />
         <Figure
@@ -476,12 +549,16 @@ function DayTooltip({
         <Figure
           label="Late"
           value={day.lateMinutes > 0 ? minutesLabel(day.lateMinutes) : '—'}
-          hint={day.lateCount > 0 ? `${day.lateCount} day(s)` : undefined}
+          hint={day.lateCount > 0 ? `over ${day.lateCount} day(s)` : undefined}
+        />
+        <Figure
+          label="Early leave"
+          value={day.earlyLeaveMinutes > 0 ? minutesLabel(day.earlyLeaveMinutes) : '—'}
         />
         <Figure
           label="Overtime"
           value={day.overtimeMinutes > 0 ? minutesLabel(day.overtimeMinutes) : '—'}
-          hint={day.overtimeCount > 0 ? `${day.overtimeCount} day(s)` : undefined}
+          hint={day.overtimeCount > 0 ? `over ${day.overtimeCount} day(s)` : undefined}
         />
         <Figure label="First in" value={orDash(day.firstCheckInAt && timeLabel(day.firstCheckInAt))} />
         <Figure
@@ -492,6 +569,18 @@ function DayTooltip({
         {day.onLeave > 0 ? <Figure label="On leave" value={String(day.onLeave)} /> : null}
         {day.halfDay > 0 ? <Figure label="Half day" value={String(day.halfDay)} /> : null}
       </dl>
+
+      {/*
+        Shift is a property of a person's day, not of the column: on a mixed day
+        there are as many shifts as there are rosters. The day detail table
+        below names the shift per employee, so the panel points at it rather
+        than inventing a single answer.
+      */}
+      <p className="mt-2 text-[11.5px] text-muted-foreground">
+        {opened
+          ? 'Every employee on this day is listed below, with their shift, check-in and check-out.'
+          : 'Select the bar to list every employee on this day with their shift, check-in and check-out.'}
+      </p>
     </div>
   );
 }
