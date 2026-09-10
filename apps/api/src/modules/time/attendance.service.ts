@@ -1,5 +1,10 @@
 import type { AttendanceSource, WeekDay } from '@prisma/client';
-import type { AttendanceFlag, DerivedAttendanceStatus } from '@hrms/shared';
+import type {
+  AttendanceFlag,
+  AttendanceMonthlyTotals,
+  AttendanceTotals,
+  DerivedAttendanceStatus,
+} from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { ForbiddenError, ValidationError } from '../../core/errors.js';
 import { toDateOnly } from '../leave/leave.service.js';
@@ -408,6 +413,139 @@ export async function deriveRange(
 
   const byEmployee = await deriveRangeForEmployees(companyId, [employee], from, to);
   return byEmployee.get(employeeId) ?? [];
+}
+
+// ------------------------------------------------------------------- tallying
+
+/**
+ * Everything the tally reads, and nothing else.
+ *
+ * Spelled out as a `Pick` rather than taking a whole `DerivedDay` so that the
+ * DTO-shaped `AttendanceDay` the routes hand around is accepted too - and so
+ * the signature itself says which seven values a total is made of.
+ */
+type TallyableDay = Pick<
+  DerivedDay,
+  | 'status'
+  | 'flags'
+  | 'workedMinutes'
+  | 'expectedMinutes'
+  | 'lateMinutes'
+  | 'earlyLeaveMinutes'
+  | 'overtimeMinutes'
+>;
+
+export const emptyTotals = (): AttendanceTotals => ({
+  present: 0,
+  halfDay: 0,
+  absent: 0,
+  onLeave: 0,
+  holiday: 0,
+  weekend: 0,
+  upcoming: 0,
+  offDay: 0,
+  workedMinutes: 0,
+  expectedMinutes: 0,
+  lateMinutes: 0,
+  overtimeMinutes: 0,
+});
+
+export const emptyMonthlyTotals = (): AttendanceMonthlyTotals => ({
+  ...emptyTotals(),
+  late: 0,
+  earlyLeave: 0,
+  overtime: 0,
+  missingPunch: 0,
+  irregular: 0,
+  manual: 0,
+  earlyLeaveMinutes: 0,
+  attendancePercentage: null,
+});
+
+/**
+ * Headline numbers for a set of derived days.
+ *
+ * The one place days become totals. It lives beside the derivation rather than
+ * in any screen's own file because three screens and the 360 profile all show
+ * "this month" and none of them may reach a different answer from the same
+ * days - which is exactly what happened when the correction centre and the
+ * summary endpoint each kept their own adder.
+ *
+ * It counts; it decides nothing. Every value it reads - status, flags, worked,
+ * expected, late, early, overtime - was already settled by the policy, so no
+ * threshold, grace period or overtime rule appears anywhere below.
+ *
+ * The attendance percentage counts present and half days against the working
+ * days that were actually scored, so a month half elapsed reads as the
+ * attendance so far rather than as half the staff missing. A day still to come
+ * is never in the denominator.
+ */
+export function tallyDerived(days: readonly TallyableDay[]): AttendanceMonthlyTotals {
+  const totals = emptyMonthlyTotals();
+  let scored = 0;
+  let attended = 0;
+
+  for (const day of days) {
+    switch (day.status) {
+      case 'PRESENT':
+        totals.present += 1;
+        break;
+      case 'HALF_DAY':
+        totals.halfDay += 1;
+        break;
+      case 'ABSENT':
+        totals.absent += 1;
+        break;
+      case 'ON_LEAVE':
+        totals.onLeave += 1;
+        break;
+      case 'HOLIDAY':
+        totals.holiday += 1;
+        break;
+      case 'WEEKEND':
+        totals.weekend += 1;
+        break;
+      case 'OFF_DAY':
+        totals.offDay += 1;
+        break;
+      default:
+        // A working day that has not arrived is counted separately and is
+        // never treated as absence.
+        totals.upcoming += 1;
+        break;
+    }
+
+    totals.workedMinutes += day.workedMinutes ?? 0;
+    totals.expectedMinutes += day.expectedMinutes ?? 0;
+    totals.lateMinutes += day.lateMinutes ?? 0;
+    totals.earlyLeaveMinutes += day.earlyLeaveMinutes ?? 0;
+    totals.overtimeMinutes += day.overtimeMinutes ?? 0;
+
+    for (const flag of day.flags) {
+      if (flag === 'LATE') totals.late += 1;
+      else if (flag === 'EARLY_LEAVE') totals.earlyLeave += 1;
+      else if (flag === 'OVERTIME') totals.overtime += 1;
+      else if (flag === 'MISSING_PUNCH') totals.missingPunch += 1;
+      else if (flag === 'IRREGULAR') totals.irregular += 1;
+      else if (flag === 'MANUAL') totals.manual += 1;
+    }
+
+    // Weekends, holidays, off days and days still ahead are not attendance
+    // anybody was expected to produce.
+    const countable =
+      day.status === 'PRESENT' ||
+      day.status === 'HALF_DAY' ||
+      day.status === 'ABSENT' ||
+      day.status === 'ON_LEAVE';
+    if (countable) {
+      scored += 1;
+      if (day.status === 'PRESENT') attended += 1;
+      else if (day.status === 'HALF_DAY') attended += 0.5;
+    }
+  }
+
+  totals.attendancePercentage = scored > 0 ? Math.round((attended / scored) * 1000) / 10 : null;
+  return totals;
 }
 
 /**

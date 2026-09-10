@@ -232,6 +232,7 @@ export const attendanceReportRoutes: FastifyPluginAsync = async (app) => {
         upcoming: bucket.upcomingDays,
         offDay: bucket.offDays,
         workedMinutes: bucket.workedMinutes,
+        expectedMinutes: bucket.expectedMinutes,
         lateMinutes: bucket.lateMinutes,
         overtimeMinutes: bucket.overtimeMinutes,
         late: bucket.lateCount,

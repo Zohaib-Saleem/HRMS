@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   Briefcase,
   Building2,
-  GraduationCap,
   Lock,
   Mail,
   MapPin,
@@ -21,12 +20,15 @@ import {
   EMPLOYMENT_TYPE_LABELS,
   PERMISSIONS,
   type EmployeeDetail,
+  type EmployeeProfileSummary,
   type EmployeeStatus,
 } from '@hrms/shared';
 import { api, errorMessage } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmployeeCompensation } from './employee-compensation';
+import { EmployeeEducation } from './employee-education';
+import { EmployeeProfileSummaryCards } from './employee-profile-summary';
 import { Avatar } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -36,6 +38,11 @@ import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { Can, usePermissions } from '@/features/auth/session-context';
 import { EmployeeFormDrawer } from './employee-form-drawer';
 import { EmployeeContracts } from '@/features/employment/employee-contracts';
+import { EmployeePolicies } from '@/features/employment/employee-policies';
+import { EmployeeLoans } from '@/features/loans/employee-loans';
+import { EmployeeLeave } from '@/features/leave/employee-leave';
+import { EmployeePayrollHistory } from '@/features/payroll/employee-payroll-history';
+import { EmployeeAttendanceViews } from '@/features/time/employee-attendance-views';
 import { cn } from '@/lib/utils';
 
 const STATUS_TONE: Record<EmployeeStatus, 'success' | 'warning' | 'destructive' | 'neutral'> = {
@@ -47,7 +54,30 @@ const STATUS_TONE: Record<EmployeeStatus, 'success' | 'warning' | 'destructive' 
   TERMINATED: 'neutral',
 };
 
-const TABS = ['Overview', 'Personal', 'Contracts', 'Compensation', 'Experience', 'Reports'] as const;
+/**
+ * Employee 360: one profile, every record HR holds about a person.
+ *
+ * The order is the order somebody actually reads a person in - who they are,
+ * then their personal details, then what they did (attendance, leave), then
+ * what it cost (loans, pay), then the paperwork, then their background. Each
+ * tab mounts a component that owns that module's data and its own endpoint;
+ * this page composes, it does not re-implement. Nothing here calculates an
+ * attendance figure, a leave balance, an overtime amount or a deduction.
+ *
+ * Only the selected tab is mounted, so opening a profile costs the detail
+ * request and the summary strip - not every module's queries at once.
+ */
+const TABS = [
+  'Overview',
+  'Personal',
+  'Attendance',
+  'Leave',
+  'Loans',
+  'Salary & Payroll',
+  'Contracts & Policies',
+  'Education & Experience',
+  'Reports',
+] as const;
 type Tab = (typeof TABS)[number];
 
 export function EmployeeDetailPage() {
@@ -62,6 +92,19 @@ export function EmployeeDetailPage() {
   const query = useQuery({
     queryKey: ['employees', id],
     queryFn: () => api.get<EmployeeDetail>(`/employees/${id}`),
+    enabled: id !== '',
+  });
+
+  /**
+   * The 360 summary, shared with the headline strip.
+   *
+   * Same query key, so the strip and the Overview tab's PunchCode field are one
+   * request between them rather than two. Its failure is not this page's
+   * failure: the strip hides itself and Overview simply omits the field.
+   */
+  const summary = useQuery({
+    queryKey: ['employees', id, 'profile-summary'],
+    queryFn: () => api.get<EmployeeProfileSummary>(`/employees/${id}/profile-summary`),
     enabled: id !== '',
   });
 
@@ -191,13 +234,22 @@ export function EmployeeDetailPage() {
         </CardContent>
       </Card>
 
+      <EmployeeProfileSummaryCards employeeId={employee.id} />
+
       <div className="mb-5 overflow-x-auto border-b border-border">
         <nav className="flex min-w-max gap-1" aria-label="Employee sections">
           {TABS.filter((item) => {
             // A tab whose contents the caller cannot read is not shown empty;
             // it is not shown at all, so the row says what is actually here.
-            if (item === 'Compensation') return has(PERMISSIONS.PAYROLL_READ);
-            if (item === 'Contracts') return has(PERMISSIONS.CONTRACT_READ);
+            if (item === 'Attendance') return has(PERMISSIONS.ATTENDANCE_READ);
+            if (item === 'Leave') return has(PERMISSIONS.LEAVE_READ);
+            if (item === 'Loans') return has(PERMISSIONS.LOAN_READ);
+            if (item === 'Salary & Payroll') {
+              return has(PERMISSIONS.PAYROLL_READ) || has(PERMISSIONS.PAYSLIP_READ);
+            }
+            if (item === 'Contracts & Policies') {
+              return has(PERMISSIONS.CONTRACT_READ) || has(PERMISSIONS.POLICY_READ);
+            }
             return true;
           }).map((item) => (
             <button
@@ -222,15 +274,28 @@ export function EmployeeDetailPage() {
         </nav>
       </div>
 
-      {tab === 'Overview' ? <OverviewTab employee={employee} /> : null}
+      {tab === 'Overview' ? <OverviewTab employee={employee} summary={summary.data} /> : null}
       {tab === 'Personal' ? <PersonalTab employee={employee} canSeeRestricted={has(PERMISSIONS.EMPLOYEE_SENSITIVE_READ)} /> : null}
-      {tab === 'Contracts' ? (
-        <EmployeeContracts employeeId={employee.id} employeeName={employee.fullName} />
+      {tab === 'Attendance' ? (
+        <EmployeeAttendanceViews employeeId={employee.id} employeeName={employee.fullName} />
       ) : null}
-      {tab === 'Compensation' ? (
-        <EmployeeCompensation employeeId={employee.id} employeeName={employee.fullName} />
+      {tab === 'Leave' ? <EmployeeLeave employeeId={employee.id} /> : null}
+      {tab === 'Loans' ? (
+        <EmployeeLoans employeeId={employee.id} employeeName={employee.fullName} />
       ) : null}
-      {tab === 'Experience' ? <ExperienceTab employee={employee} /> : null}
+      {tab === 'Salary & Payroll' ? (
+        <div className="space-y-5">
+          <EmployeeCompensation employeeId={employee.id} employeeName={employee.fullName} />
+          <EmployeePayrollHistory employeeId={employee.id} />
+        </div>
+      ) : null}
+      {tab === 'Contracts & Policies' ? (
+        <div className="space-y-5">
+          <EmployeeContracts employeeId={employee.id} employeeName={employee.fullName} />
+          <EmployeePolicies employeeId={employee.id} />
+        </div>
+      ) : null}
+      {tab === 'Education & Experience' ? <ExperienceTab employee={employee} /> : null}
       {tab === 'Reports' ? <ReportsTab employee={employee} onOpen={(rid) => navigate(`/people/${rid}`)} /> : null}
 
       <EmployeeFormDrawer open={editing} employee={employee} onClose={() => setEditing(false)} />
@@ -247,7 +312,13 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function OverviewTab({ employee }: { employee: EmployeeDetail }) {
+function OverviewTab({
+  employee,
+  summary,
+}: {
+  employee: EmployeeDetail;
+  summary: EmployeeProfileSummary | undefined;
+}) {
   return (
     <div className="grid gap-5 lg:grid-cols-2">
       <Card>
@@ -259,6 +330,22 @@ function OverviewTab({ employee }: { employee: EmployeeDetail }) {
         </CardHeader>
         <CardContent>
           <dl className="grid gap-4 sm:grid-cols-2">
+            <Field label="Employee ID" value={<span className="font-mono">{employee.employeeNumber}</span>} />
+            {/*
+              The PunchCode the terminals know this person by, for display only.
+              Read from the mapping the device module owns; changing it is done
+              there, on the screen that also re-attributes the punches, because
+              editing it here would silently change whose attendance is whose.
+              Absent for a caller without device.read, and for anyone not
+              enrolled on a terminal.
+            */}
+            {summary?.punchCodes && summary.punchCodes.length > 0 ? (
+              <Field
+                label={summary.punchCodes.length > 1 ? 'PunchCodes' : 'PunchCode'}
+                value={<span className="font-mono">{summary.punchCodes.join(', ')}</span>}
+              />
+            ) : null}
+            <Field label="Status" value={EMPLOYEE_STATUS_LABELS[employee.status]} />
             <Field label="Designation" value={employee.designation?.name} />
             <Field label="Employment type" value={EMPLOYMENT_TYPE_LABELS[employee.employmentType]} />
             <Field label="Hire date" value={formatDate(employee.hireDate)} />
@@ -479,39 +566,7 @@ function ExperienceTab({ employee }: { employee: EmployeeDetail }) {
         )}
       </Card>
 
-      <Card>
-        <CardHeader bordered>
-          <CardTitle>Education</CardTitle>
-        </CardHeader>
-        {employee.education.length === 0 ? (
-          <EmptyState
-            icon={GraduationCap}
-            title="No qualifications recorded"
-            description="Degrees and diplomas appear here once added."
-          />
-        ) : (
-          <ul className="divide-y divide-border">
-            {employee.education.map((entry) => (
-              <li key={entry.id} className="px-5 py-4">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <p className="text-[13.5px] font-medium">{entry.degree ?? entry.level}</p>
-                  {/* The year is optional on this record, so the column is left
-                      empty rather than filled with a placeholder date. */}
-                  {entry.yearCompleted !== null ? (
-                    <p className="tabular text-[12.5px] text-muted-foreground">{entry.yearCompleted}</p>
-                  ) : null}
-                </div>
-                {entry.degree ? (
-                  <p className="text-[13px] text-muted-foreground">{entry.level}</p>
-                ) : null}
-                {entry.institution ? (
-                  <p className="mt-1 text-[12.5px] text-muted-foreground">{entry.institution}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      <EmployeeEducation employeeId={employee.id} education={employee.education} />
     </div>
   );
 }

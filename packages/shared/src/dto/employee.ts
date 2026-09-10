@@ -282,6 +282,27 @@ export const workExperienceInputSchema = z.object({
 
 export type WorkExperienceInput = z.infer<typeof workExperienceInputSchema>;
 
+/**
+ * A qualification, as the Education panel writes one.
+ *
+ * `level` is free text rather than an enum for the same reason the column is:
+ * qualification systems differ by country, and a fixed list would make the
+ * roster import discard anything it did not anticipate.
+ */
+export const educationInputSchema = z.object({
+  level: z.string().trim().min(1, 'Give the qualification a level.').max(80),
+  degree: optionalText(160),
+  institution: optionalText(200),
+  yearCompleted: z.coerce
+    .number()
+    .int()
+    .min(1900, 'That year is too early.')
+    .max(2100, 'That year is too late.')
+    .nullish(),
+});
+
+export type EducationInput = z.infer<typeof educationInputSchema>;
+
 export const terminateEmployeeSchema = z.object({
   terminationDate: z.string().trim().min(1, 'Choose a termination date.'),
   reason: z.string().trim().max(500).optional(),
@@ -395,6 +416,75 @@ export interface EmployeeDetail extends EmployeeListItem {
     visaNumber: string | null;
     visaExpiry: string | null;
     bankAccountNumber: string | null;
+  };
+}
+
+/**
+ * The headline strip on the Employee 360 profile.
+ *
+ * One request behind the summary cards, so opening a profile does not fan out
+ * into five calls that each have to survive their own permission failure. Every
+ * block is OPTIONAL and is omitted - never nulled or zeroed - when the caller
+ * lacks the permission that block's own module requires. A zero would read as
+ * "no loans"; an absent key reads as "not yours to see", which is the truth.
+ *
+ * Nothing here is calculated by this endpoint. Attendance comes from the
+ * central attendance engine, leave from the same balance service the leave
+ * screens use, loans from the loan schedule, salary from the salary records.
+ * The summary is a projection of those, never a second opinion about them.
+ */
+export interface EmployeeProfileSummary {
+  employeeId: string;
+
+  /**
+   * Device PINs currently mapped to this employee, for display only.
+   *
+   * A list because one person may punch on several terminals under different
+   * PINs. Needs `device.read`, which is what the mapping module itself needs;
+   * without it the key is absent.
+   */
+  punchCodes?: string[];
+
+  /** The month the attendance block covers, as yyyy-MM. */
+  attendance?: {
+    month: string;
+    present: number;
+    halfDay: number;
+    absent: number;
+    onLeave: number;
+    late: number;
+    earlyLeave: number;
+    missingPunch: number;
+    irregular: number;
+    workedMinutes: number;
+    expectedMinutes: number;
+    overtimeMinutes: number;
+    attendancePercentage: number | null;
+  };
+
+  /** Totalled across every active leave type for the year. */
+  leave?: {
+    year: number;
+    entitlementDays: number;
+    usedDays: number;
+    pendingDays: number;
+    availableDays: number;
+  };
+
+  loans?: {
+    activeCount: number;
+    /** Still to be repaid across active loans. */
+    outstandingAmount: number;
+    /** What payroll will collect next month across those loans. */
+    monthlyDeduction: number;
+    currency: string;
+  };
+
+  salary?: {
+    amount: number;
+    currency: string;
+    effectiveFrom: string | null;
+    nextIncrementDueDate: string | null;
   };
 }
 

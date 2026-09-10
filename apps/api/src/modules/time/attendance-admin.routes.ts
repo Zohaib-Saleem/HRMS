@@ -12,7 +12,6 @@ import {
   type AttendanceDashboardGroup,
   type AttendanceDashboardPerson,
   type AttendanceMonthlyRow,
-  type AttendanceMonthlyTotals,
   type DerivedAttendanceStatus,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
@@ -24,7 +23,12 @@ import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import { resolveAttendancePolicy } from './attendance-policy.js';
-import { deriveRangeForEmployees, type DerivedDay } from './attendance.service.js';
+import {
+  deriveRangeForEmployees,
+  emptyMonthlyTotals,
+  tallyDerived,
+  type DerivedDay,
+} from './attendance.service.js';
 import {
   ADJUSTMENT_INCLUDE,
   applyCorrection,
@@ -94,102 +98,6 @@ function assertUsableRange(from: Date, to: Date): void {
       to: [`Ask for at most ${MAX_RANGE_DAYS} days at a time; this range is ${days}.`],
     });
   }
-}
-
-const emptyMonthlyTotals = (): AttendanceMonthlyTotals => ({
-  present: 0,
-  halfDay: 0,
-  absent: 0,
-  onLeave: 0,
-  holiday: 0,
-  weekend: 0,
-  upcoming: 0,
-  offDay: 0,
-  workedMinutes: 0,
-  lateMinutes: 0,
-  overtimeMinutes: 0,
-  late: 0,
-  earlyLeave: 0,
-  overtime: 0,
-  missingPunch: 0,
-  irregular: 0,
-  manual: 0,
-  earlyLeaveMinutes: 0,
-  attendancePercentage: null,
-});
-
-/**
- * Headline numbers for a set of days.
- *
- * The attendance percentage counts present and half days against the working
- * days that were actually scored - so a month half elapsed reads as the
- * attendance so far, not as half the staff missing. A day still to come is
- * never in the denominator.
- */
-function tallyMonthly(days: readonly DerivedDay[]): AttendanceMonthlyTotals {
-  const totals = emptyMonthlyTotals();
-  let scored = 0;
-  let attended = 0;
-
-  for (const day of days) {
-    switch (day.status) {
-      case 'PRESENT':
-        totals.present += 1;
-        break;
-      case 'HALF_DAY':
-        totals.halfDay += 1;
-        break;
-      case 'ABSENT':
-        totals.absent += 1;
-        break;
-      case 'ON_LEAVE':
-        totals.onLeave += 1;
-        break;
-      case 'HOLIDAY':
-        totals.holiday += 1;
-        break;
-      case 'WEEKEND':
-        totals.weekend += 1;
-        break;
-      case 'OFF_DAY':
-        totals.offDay += 1;
-        break;
-      default:
-        totals.upcoming += 1;
-        break;
-    }
-
-    totals.workedMinutes += day.workedMinutes ?? 0;
-    totals.lateMinutes += day.lateMinutes ?? 0;
-    totals.earlyLeaveMinutes += day.earlyLeaveMinutes ?? 0;
-    totals.overtimeMinutes += day.overtimeMinutes ?? 0;
-
-    for (const flag of day.flags) {
-      if (flag === 'LATE') totals.late += 1;
-      else if (flag === 'EARLY_LEAVE') totals.earlyLeave += 1;
-      else if (flag === 'OVERTIME') totals.overtime += 1;
-      else if (flag === 'MISSING_PUNCH') totals.missingPunch += 1;
-      else if (flag === 'IRREGULAR') totals.irregular += 1;
-      else if (flag === 'MANUAL') totals.manual += 1;
-    }
-
-    // Weekends, holidays, off days and days still ahead are not attendance
-    // anybody was expected to produce.
-    const countable =
-      day.status === 'PRESENT' ||
-      day.status === 'HALF_DAY' ||
-      day.status === 'ABSENT' ||
-      day.status === 'ON_LEAVE';
-    if (countable) {
-      scored += 1;
-      if (day.status === 'PRESENT') attended += 1;
-      else if (day.status === 'HALF_DAY') attended += 0.5;
-    }
-  }
-
-  totals.attendancePercentage =
-    scored > 0 ? Math.round((attended / scored) * 1000) / 10 : null;
-  return totals;
 }
 
 const emptyCounts = (): AttendanceDashboardCounts => ({
@@ -392,7 +300,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({
       data: rows,
       meta: buildMeta(query.page, query.limit, total),
-      totals: tallyMonthly(kept),
+      totals: tallyDerived(kept),
       range: { from: dateKey(from), to: dateKey(to) },
     });
   });

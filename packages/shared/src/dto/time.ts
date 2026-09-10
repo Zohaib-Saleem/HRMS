@@ -535,6 +535,14 @@ export interface AttendanceTotals {
   /** Days the employee's shift does not work. */
   offDay: number;
   workedMinutes: number;
+  /**
+   * Rostered minutes across the range - "normal working hours".
+   *
+   * The engine's own `expectedMinutes` per day, summed here rather than
+   * anywhere downstream, so a screen that shows worked against normal is
+   * comparing two figures the same policy produced.
+   */
+  expectedMinutes: number;
   lateMinutes: number;
   overtimeMinutes: number;
 }
@@ -579,7 +587,7 @@ export interface TeamAttendanceRow {
   teamName: string | null;
   shiftName: string | null;
   days: AttendanceDay[];
-  totals: AttendanceTotals;
+  totals: AttendanceMonthlyTotals;
 }
 
 /**

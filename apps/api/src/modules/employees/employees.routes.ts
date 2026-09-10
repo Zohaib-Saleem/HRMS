@@ -5,6 +5,7 @@ import {
   EMPLOYEE_SORT_FIELDS,
   PERMISSIONS,
   type EmployeeTreeNode,
+  educationInputSchema,
   employeeInputSchema,
   employeeUpdateSchema,
   employeeQuerySchema,
@@ -21,6 +22,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { restoreUser, suspendUser } from '../users/users.service.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
+import { employeeProfileSummary } from './employee-profile.service.js';
 import {
   DETAIL_INCLUDE,
   LIST_INCLUDE,
@@ -260,6 +262,34 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return reply.send({ data: toDetail(row, canSeeRestricted) });
+  });
+
+  /**
+   * The Employee 360 header, in one request.
+   *
+   * Read-only and derived: attendance from the central engine, leave from the
+   * leave service, loans from the loan schedule, salary from the salary
+   * records. It writes nothing and calculates nothing of its own - see
+   * `employee-profile.service.ts`.
+   *
+   * Guarded by employee.read and the employee data scope like every other
+   * route here; each block inside is then gated on its own module's permission
+   * and omitted when the caller lacks it, so this can never widen what
+   * somebody may see.
+   */
+  app.get('/:id/profile-summary', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const { id } = parseOrThrow(idParamSchema, request.params);
+
+    await assertEmployeeInScope(auth, id);
+
+    const exists = await prisma.employee.findFirst({
+      where: { id, companyId: auth.companyId },
+      select: { id: true },
+    });
+    if (!exists) throw new NotFoundError('Employee');
+
+    return reply.send({ data: await employeeProfileSummary(auth, id) });
   });
 
   app.post(
@@ -740,25 +770,13 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
 
   // --- education (repeating sub-records) -----------------------------------
 
-  /**
-   * `level` is free text on purpose. Qualification systems differ by country,
-   * and an enum here would force the roster import to discard anything it did
-   * not anticipate rather than record what the source actually said.
-   */
-  const educationBody = z.object({
-    level: z.string().trim().min(1).max(80),
-    degree: z.string().trim().max(160).nullish(),
-    institution: z.string().trim().max(200).nullish(),
-    yearCompleted: z.coerce.number().int().min(1900).max(2100).nullish(),
-  });
-
   app.post(
     '/:id/education',
     { preHandler: requirePermission(PERMISSIONS.EMPLOYEE_MANAGE) },
     async (request, reply) => {
       const auth = requireAuthContext(request);
       const { id } = parseOrThrow(idParamSchema, request.params);
-      const input = parseOrThrow(educationBody, request.body);
+      const input = parseOrThrow(educationInputSchema, request.body);
 
       await assertEmployeeInScope(auth, id);
 
@@ -790,6 +808,50 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return reply.status(201).send({ data: { id: created.id } });
+    },
+  );
+
+  app.patch(
+    '/:id/education/:entryId',
+    { preHandler: requirePermission(PERMISSIONS.EMPLOYEE_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id, entryId } = parseOrThrow(
+        z.object({ id: z.string().min(1), entryId: z.string().min(1) }),
+        request.params,
+      );
+      const input = parseOrThrow(educationInputSchema, request.body);
+
+      await assertEmployeeInScope(auth, id);
+
+      const entry = await prisma.employeeEducation.findFirst({
+        where: { id: entryId, employeeId: id, employee: { companyId: auth.companyId } },
+      });
+      if (!entry) throw new NotFoundError('Education entry');
+
+      const updated = await prisma.employeeEducation.update({
+        where: { id: entryId },
+        data: {
+          level: input.level,
+          degree: input.degree ?? null,
+          institution: input.institution ?? null,
+          yearCompleted: input.yearCompleted ?? null,
+        },
+      });
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'employee.education.update',
+        entityType: 'Employee',
+        entityId: id,
+        summary: `Updated qualification ${updated.level}`,
+        before: { level: entry.level, degree: entry.degree, institution: entry.institution, yearCompleted: entry.yearCompleted },
+        after: input as unknown as Record<string, unknown>,
+        request,
+      });
+
+      return reply.send({ data: { id: updated.id } });
     },
   );
 

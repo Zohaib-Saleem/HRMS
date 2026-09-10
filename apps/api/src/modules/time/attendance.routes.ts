@@ -41,7 +41,9 @@ import {
   assertCheckInLocationAllowed,
   deriveRange,
   deriveRangeForEmployees,
+  emptyMonthlyTotals as emptyTotals,
   shiftOnDate,
+  tallyDerived as tally,
 } from './attendance.service.js';
 import {
   computeAttendance,
@@ -52,40 +54,6 @@ import { markAbsencesForDate } from './absence.service.js';
 
 const displayName = (e: { firstName: string; lastName: string; displayName: string | null }) =>
   e.displayName ?? `${e.firstName} ${e.lastName}`.trim();
-
-const emptyTotals = (): AttendanceTotals => ({
-  present: 0,
-  halfDay: 0,
-  absent: 0,
-  onLeave: 0,
-  holiday: 0,
-  weekend: 0,
-  upcoming: 0,
-  offDay: 0,
-  workedMinutes: 0,
-  lateMinutes: 0,
-  overtimeMinutes: 0,
-});
-
-/** One place that turns derived days into headline numbers. */
-function tally(days: readonly AttendanceDay[]): AttendanceTotals {
-  return days.reduce<AttendanceTotals>((acc, d) => {
-    if (d.status === 'PRESENT') acc.present += 1;
-    else if (d.status === 'HALF_DAY') acc.halfDay += 1;
-    else if (d.status === 'ABSENT') acc.absent += 1;
-    else if (d.status === 'ON_LEAVE') acc.onLeave += 1;
-    else if (d.status === 'HOLIDAY') acc.holiday += 1;
-    else if (d.status === 'WEEKEND') acc.weekend += 1;
-    // A working day that has not arrived is counted separately, never as absence.
-    else if (d.status === 'UPCOMING') acc.upcoming += 1;
-    else if (d.status === 'OFF_DAY') acc.offDay += 1;
-
-    acc.workedMinutes += d.workedMinutes ?? 0;
-    acc.lateMinutes += d.lateMinutes ?? 0;
-    acc.overtimeMinutes += d.overtimeMinutes ?? 0;
-    return acc;
-  }, emptyTotals());
-}
 
 /** A range longer than this is a report, not a screen. */
 const MAX_RANGE_DAYS = 62;
