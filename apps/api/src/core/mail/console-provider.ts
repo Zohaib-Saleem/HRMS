@@ -14,10 +14,11 @@ import type { EmailMessage, EmailProvider, EmailResult } from './email-provider.
  * still recorded, which is what makes "did this notification fire?" answerable
  * without also making it exploitable.
  *
- * Env validation refuses to boot with this provider under NODE_ENV=production,
- * so the withheld case is reachable only in `test` or a misconfigured staging
- * environment. It is written defensively anyway, because the cost of being
- * wrong here is a leaked credential.
+ * Env validation refuses to boot with this provider under NODE_ENV=production
+ * unless MAIL_REQUIRE_SMTP=false has waived that rule, so the withheld case is
+ * reachable in `test`, in a misconfigured staging environment, and in a
+ * production system waiting on a relay. Withholding the body is what keeps that
+ * last case safe, because the cost of being wrong here is a leaked credential.
  */
 export class ConsoleEmailProvider implements EmailProvider {
   readonly name = 'console';

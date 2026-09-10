@@ -61,6 +61,104 @@ describe('mail configuration validation', () => {
     });
   });
 
+  describe('MAIL_REQUIRE_SMTP waives the production rule, and only that rule', () => {
+    it('lets production boot on the console provider when set to false', () => {
+      const result = validateEnv({
+        ...BASE,
+        NODE_ENV: 'production',
+        MAIL_PROVIDER: 'console',
+        MAIL_REQUIRE_SMTP: 'false',
+      });
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.MAIL_REQUIRE_SMTP).toBe(false);
+      expect(result.data.MAIL_PROVIDER).toBe('console');
+    });
+
+    it('lets production boot with MAIL_PROVIDER unset when set to false', () => {
+      // The default provider is console, so the waiver has to cover the
+      // omission and not only the explicit value.
+      const result = validateEnv({
+        ...BASE,
+        NODE_ENV: 'production',
+        MAIL_REQUIRE_SMTP: 'false',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('still refuses production on the console provider when set to true', () => {
+      const result = validateEnv({
+        ...BASE,
+        NODE_ENV: 'production',
+        MAIL_PROVIDER: 'console',
+        MAIL_REQUIRE_SMTP: 'true',
+      });
+
+      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toContain('MAIL_PROVIDER');
+    });
+
+    it('defaults to true, so an absent setting keeps the strict behaviour', () => {
+      const result = validateEnv({ ...BASE, NODE_ENV: 'production', MAIL_PROVIDER: 'console' });
+
+      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toContain('MAIL_PROVIDER');
+
+      const development = validateEnv({ ...BASE });
+      expect(development.success).toBe(true);
+      if (!development.success) return;
+      expect(development.data.MAIL_REQUIRE_SMTP).toBe(true);
+    });
+
+    it('points at the waiver in the failure message', () => {
+      const result = validateEnv({ ...BASE, NODE_ENV: 'production', MAIL_PROVIDER: 'console' });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      const message = result.error.issues.map((i) => i.message).join(' ');
+      expect(message).toContain('MAIL_REQUIRE_SMTP=false');
+    });
+
+    it('rejects a value that is neither true nor false', () => {
+      const result = validateEnv({ ...BASE, MAIL_REQUIRE_SMTP: 'maybe' });
+
+      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toContain('MAIL_REQUIRE_SMTP');
+    });
+
+    it('does not waive an incomplete SMTP transport', () => {
+      // The waiver is about booting without a relay, not about booting with a
+      // broken one.
+      const result = validateEnv({
+        ...BASE,
+        NODE_ENV: 'production',
+        MAIL_REQUIRE_SMTP: 'false',
+        MAIL_PROVIDER: 'smtp',
+        SMTP_PORT: '587',
+      });
+
+      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toContain('SMTP_HOST');
+    });
+
+    it('does not waive a username without a password', () => {
+      const result = validateEnv({
+        ...BASE,
+        NODE_ENV: 'production',
+        MAIL_REQUIRE_SMTP: 'false',
+        MAIL_PROVIDER: 'smtp',
+        SMTP_HOST: 'smtp.example.com',
+        SMTP_PORT: '587',
+        SMTP_USER: 'mailer@example.com',
+      });
+
+      expect(result.success).toBe(false);
+      expect(failedPaths(result)).toContain('SMTP_PASSWORD');
+    });
+  });
+
   describe('console stays available outside production', () => {
     it('accepts console in development', () => {
       expect(validateEnv({ ...BASE, NODE_ENV: 'development', MAIL_PROVIDER: 'console' }).success).toBe(true);

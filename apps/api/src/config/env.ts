@@ -69,6 +69,27 @@ const schema = z.object({
   // variables below; the refinement further down enforces that, so a
   // half-configured mail setup fails at boot rather than at first send.
   MAIL_PROVIDER: z.enum(['console', 'smtp']).default('console'),
+
+  /**
+   * Whether a production boot insists on a real SMTP transport.
+   *
+   * `true` - the default, and the safe one - keeps the rule below: production
+   * on the console provider refuses to start, because it delivers no mail and
+   * writes password reset links to the log.
+   *
+   * `false` is a deliberate, temporary escape hatch for a production system
+   * that has no relay yet. The API boots, mail features stay wired up but
+   * deliver nothing, and `verifyEmailProvider` logs an error on every start so
+   * the state is visible. Set it back to `true` once SMTP is configured.
+   *
+   * Only this rule is affected. A half-configured SMTP transport, and a
+   * username without its password, still stop the boot either way.
+   */
+  MAIL_REQUIRE_SMTP: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((value) => value === 'true'),
+
   MAIL_FROM: z.string().default('HRMS <no-reply@hrms.local>'),
   /// Base URL the web app is reachable at, used to build links inside emails.
   APP_URL: z.string().url().default('http://localhost:5173'),
@@ -97,19 +118,25 @@ const schema = z.object({
  *     body to the log and delivers nothing, so a production system running on
  *     it silently drops every password reset and approval while printing live
  *     reset links to disk. It is a development tool and the only safe thing to
- *     do with it in production is refuse to start.
+ *     do with it in production is refuse to start - unless the operator has
+ *     explicitly set MAIL_REQUIRE_SMTP=false, which waives this one rule while
+ *     a relay is being arranged.
  *   - a username with no password, or a password with no username. Nodemailer
  *     would authenticate with an empty string and the relay would reject every
  *     message, which reads in the logs like a network fault rather than a
  *     typo in the environment.
  */
 const schemaWithMailRules = schema.superRefine((value, ctx) => {
-  if (value.NODE_ENV === 'production' && value.MAIL_PROVIDER === 'console') {
+  if (
+    value.NODE_ENV === 'production' &&
+    value.MAIL_REQUIRE_SMTP &&
+    value.MAIL_PROVIDER === 'console'
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['MAIL_PROVIDER'],
       message:
-        'MAIL_PROVIDER=console cannot be used when NODE_ENV=production: it delivers no mail and writes password reset links to the log. Set MAIL_PROVIDER=smtp and supply SMTP_HOST and SMTP_PORT.',
+        'MAIL_PROVIDER=console cannot be used when NODE_ENV=production: it delivers no mail and writes password reset links to the log. Set MAIL_PROVIDER=smtp and supply SMTP_HOST and SMTP_PORT, or set MAIL_REQUIRE_SMTP=false to boot without mail until a relay is available.',
     });
   }
 

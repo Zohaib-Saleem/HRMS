@@ -33,18 +33,22 @@ const PLACEHOLDER_MAIL_FROM = 'HRMS <no-reply@hrms.local>';
  *
  * The two configuration warnings below are deliberately not fatal for the same
  * reason. The one genuinely unsafe combination - the console provider under
- * NODE_ENV=production - is rejected by env validation before this runs, so it
- * cannot reach here; the check is repeated anyway because a provider that
- * silently delivers nothing is exactly the failure this function exists to
- * make visible.
+ * NODE_ENV=production - is normally rejected by env validation before this
+ * runs; it reaches here only when MAIL_REQUIRE_SMTP=false has waived that rule,
+ * and the error below is then the single visible record, on every boot, that
+ * no mail is leaving the server.
  */
 export async function verifyEmailProvider(logger: FastifyBaseLogger): Promise<void> {
   const active = resolveEmailProvider(logger);
 
   if (active.name === 'console' && env.NODE_ENV !== 'development') {
     logger.error(
-      { provider: active.name, nodeEnv: env.NODE_ENV },
-      'mail is set to the console provider outside development: NO email will be delivered. Set MAIL_PROVIDER=smtp.',
+      {
+        provider: active.name,
+        nodeEnv: env.NODE_ENV,
+        mailRequireSmtp: env.MAIL_REQUIRE_SMTP,
+      },
+      'mail is set to the console provider outside development: NO email will be delivered, so password reset is unavailable. Set MAIL_PROVIDER=smtp with SMTP_HOST and SMTP_PORT, then MAIL_REQUIRE_SMTP=true.',
     );
   }
 
