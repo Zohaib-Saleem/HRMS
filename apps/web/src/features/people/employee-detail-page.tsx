@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Briefcase,
   Building2,
+  GraduationCap,
   Lock,
   Mail,
   MapPin,
@@ -262,6 +263,7 @@ function OverviewTab({ employee }: { employee: EmployeeDetail }) {
             <Field label="Employment type" value={EMPLOYMENT_TYPE_LABELS[employee.employmentType]} />
             <Field label="Hire date" value={formatDate(employee.hireDate)} />
             <Field label="Confirmation date" value={formatDate(employee.confirmationDate)} />
+            <Field label="Next increment due" value={formatDate(employee.nextIncrementDueDate)} />
             {employee.status === 'TERMINATED' ? (
               <Field label="Termination date" value={formatDate(employee.terminationDate)} />
             ) : null}
@@ -444,37 +446,73 @@ function PersonalTab({
 
 function ExperienceTab({ employee }: { employee: EmployeeDetail }) {
   return (
-    <Card>
-      <CardHeader bordered>
-        <CardTitle>Previous employment</CardTitle>
-      </CardHeader>
-      {employee.workExperience.length === 0 ? (
-        <EmptyState
-          icon={Briefcase}
-          title="No previous employment recorded"
-          description="Earlier roles appear here once added."
-        />
-      ) : (
-        <ul className="divide-y divide-border">
-          {employee.workExperience.map((entry) => (
-            <li key={entry.id} className="px-5 py-4">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-[13.5px] font-medium">{entry.companyName}</p>
-                <p className="tabular text-[12.5px] text-muted-foreground">
-                  {formatDate(entry.fromDate)} – {entry.toDate ? formatDate(entry.toDate) : 'Present'}
-                </p>
-              </div>
-              {entry.jobTitle ? (
-                <p className="text-[13px] text-muted-foreground">{entry.jobTitle}</p>
-              ) : null}
-              {entry.description ? (
-                <p className="mt-1 text-[12.5px] text-muted-foreground">{entry.description}</p>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
+    <div className="grid gap-5 lg:grid-cols-2">
+      <Card>
+        <CardHeader bordered>
+          <CardTitle>Previous employment</CardTitle>
+        </CardHeader>
+        {employee.workExperience.length === 0 ? (
+          <EmptyState
+            icon={Briefcase}
+            title="No previous employment recorded"
+            description="Earlier roles appear here once added."
+          />
+        ) : (
+          <ul className="divide-y divide-border">
+            {employee.workExperience.map((entry) => (
+              <li key={entry.id} className="px-5 py-4">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="text-[13.5px] font-medium">{entry.companyName}</p>
+                  <p className="tabular text-[12.5px] text-muted-foreground">
+                    {formatDate(entry.fromDate)} – {entry.toDate ? formatDate(entry.toDate) : 'Present'}
+                  </p>
+                </div>
+                {entry.jobTitle ? (
+                  <p className="text-[13px] text-muted-foreground">{entry.jobTitle}</p>
+                ) : null}
+                {entry.description ? (
+                  <p className="mt-1 text-[12.5px] text-muted-foreground">{entry.description}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader bordered>
+          <CardTitle>Education</CardTitle>
+        </CardHeader>
+        {employee.education.length === 0 ? (
+          <EmptyState
+            icon={GraduationCap}
+            title="No qualifications recorded"
+            description="Degrees and diplomas appear here once added."
+          />
+        ) : (
+          <ul className="divide-y divide-border">
+            {employee.education.map((entry) => (
+              <li key={entry.id} className="px-5 py-4">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <p className="text-[13.5px] font-medium">{entry.degree ?? entry.level}</p>
+                  {/* The year is optional on this record, so the column is left
+                      empty rather than filled with a placeholder date. */}
+                  {entry.yearCompleted !== null ? (
+                    <p className="tabular text-[12.5px] text-muted-foreground">{entry.yearCompleted}</p>
+                  ) : null}
+                </div>
+                {entry.degree ? (
+                  <p className="text-[13px] text-muted-foreground">{entry.level}</p>
+                ) : null}
+                {entry.institution ? (
+                  <p className="mt-1 text-[12.5px] text-muted-foreground">{entry.institution}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
   );
 }
 

@@ -123,6 +123,9 @@ const employeeBaseSchema = z
     status: z.enum(EMPLOYEE_STATUSES).default('ACTIVE'),
     hireDate: optionalDate,
     confirmationDate: optionalDate,
+    // When the next increment falls due, not when the last one happened. The
+    // latter is a SalaryRevision; this is a date somebody has to act on.
+    nextIncrementDueDate: optionalDate,
     terminationDate: optionalDate,
     resignationDate: optionalDate,
     sourceOfHire: optionalText(120),
@@ -332,6 +335,16 @@ export interface EmployeeListItem {
   hasLogin: boolean;
 }
 
+export interface EmployeeEducationRecord {
+  id: string;
+  /** "Bachelors", "Masters" and so on - free text, as the source records it. */
+  level: string;
+  degree: string | null;
+  institution: string | null;
+  /** Year only. The rosters this comes from do not record a full date. */
+  yearCompleted: number | null;
+}
+
 export interface EmployeeWorkExperienceRecord {
   id: string;
   companyName: string;
@@ -353,6 +366,7 @@ export interface EmployeeDetail extends EmployeeListItem {
   personalPhone: string | null;
   secondaryManager: { id: string; fullName: string } | null;
   confirmationDate: string | null;
+  nextIncrementDueDate: string | null;
   terminationDate: string | null;
   resignationDate: string | null;
   sourceOfHire: string | null;
@@ -372,6 +386,7 @@ export interface EmployeeDetail extends EmployeeListItem {
   createdAt: string;
   updatedAt: string;
   workExperience: EmployeeWorkExperienceRecord[];
+  education: EmployeeEducationRecord[];
   directReports: Array<{ id: string; fullName: string; jobTitle: string | null }>;
   restricted?: {
     nationalId: string | null;

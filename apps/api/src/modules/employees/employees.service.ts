@@ -21,6 +21,9 @@ export const DETAIL_INCLUDE = {
   ...LIST_INCLUDE,
   secondaryManager: { select: { id: true, firstName: true, lastName: true } },
   workExperience: { orderBy: { fromDate: 'desc' } },
+  // Newest qualification first, like work experience. A year is optional on
+  // this model, so rows without one sort to the bottom rather than the top.
+  education: { orderBy: { yearCompleted: { sort: 'desc', nulls: 'last' } } },
   reports: {
     // People who have left are not current direct reports. Both exit statuses
     // are excluded, so a resignation removes somebody from the org chart the
@@ -83,6 +86,7 @@ export function toDetail(row: DetailRow, includeRestricted: boolean): EmployeeDe
         }
       : null,
     confirmationDate: isoDate(row.confirmationDate),
+    nextIncrementDueDate: isoDate(row.nextIncrementDueDate),
     terminationDate: isoDate(row.terminationDate),
     resignationDate: isoDate(row.resignationDate),
     sourceOfHire: row.sourceOfHire,
@@ -108,6 +112,13 @@ export function toDetail(row: DetailRow, includeRestricted: boolean): EmployeeDe
       fromDate: isoDate(w.fromDate),
       toDate: isoDate(w.toDate),
       description: w.description,
+    })),
+    education: row.education.map((e) => ({
+      id: e.id,
+      level: e.level,
+      degree: e.degree,
+      institution: e.institution,
+      yearCompleted: e.yearCompleted,
     })),
     directReports: row.reports.map((r) => ({
       id: r.id,
@@ -266,6 +277,7 @@ export function toPrismaData(
   const dateFields = [
     'hireDate',
     'confirmationDate',
+    'nextIncrementDueDate',
     'terminationDate',
     'resignationDate',
     'dateOfBirth',

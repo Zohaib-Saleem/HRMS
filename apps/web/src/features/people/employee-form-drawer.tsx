@@ -90,6 +90,7 @@ export function EmployeeFormDrawer({
       status: employee?.status ?? 'ACTIVE',
       hireDate: employee?.hireDate ?? '',
       confirmationDate: employee?.confirmationDate ?? '',
+      nextIncrementDueDate: employee?.nextIncrementDueDate ?? '',
       terminationDate: employee?.terminationDate ?? '',
       resignationDate: employee?.resignationDate ?? '',
       sourceOfHire: employee?.sourceOfHire ?? '',
@@ -277,6 +278,9 @@ export function EmployeeFormDrawer({
                 </FormField>
                 <FormField label="Confirmation date" htmlFor="emp-confirmationDate" error={formState.errors.confirmationDate?.message}>
                   <Input type="date" {...register('confirmationDate')} />
+                </FormField>
+                <FormField label="Next increment due" htmlFor="emp-nextIncrementDueDate" error={formState.errors.nextIncrementDueDate?.message} hint="When the next salary review falls due.">
+                  <Input type="date" {...register('nextIncrementDueDate')} />
                 </FormField>
                 <FormField label="Resignation date" htmlFor="emp-resignationDate" error={formState.errors.resignationDate?.message} hint="Required when status is Resigned.">
                   <Input type="date" {...register('resignationDate')} />

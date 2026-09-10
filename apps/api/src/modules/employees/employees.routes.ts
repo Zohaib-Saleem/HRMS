@@ -738,6 +738,94 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // --- education (repeating sub-records) -----------------------------------
+
+  /**
+   * `level` is free text on purpose. Qualification systems differ by country,
+   * and an enum here would force the roster import to discard anything it did
+   * not anticipate rather than record what the source actually said.
+   */
+  const educationBody = z.object({
+    level: z.string().trim().min(1).max(80),
+    degree: z.string().trim().max(160).nullish(),
+    institution: z.string().trim().max(200).nullish(),
+    yearCompleted: z.coerce.number().int().min(1900).max(2100).nullish(),
+  });
+
+  app.post(
+    '/:id/education',
+    { preHandler: requirePermission(PERMISSIONS.EMPLOYEE_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const input = parseOrThrow(educationBody, request.body);
+
+      await assertEmployeeInScope(auth, id);
+
+      const employee = await prisma.employee.findFirst({
+        where: { id, companyId: auth.companyId },
+        select: { id: true },
+      });
+      if (!employee) throw new NotFoundError('Employee');
+
+      const created = await prisma.employeeEducation.create({
+        data: {
+          employeeId: id,
+          level: input.level,
+          degree: input.degree ?? null,
+          institution: input.institution ?? null,
+          yearCompleted: input.yearCompleted ?? null,
+        },
+      });
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'employee.education.create',
+        entityType: 'Employee',
+        entityId: id,
+        summary: `Added qualification ${input.level}`,
+        after: input as unknown as Record<string, unknown>,
+        request,
+      });
+
+      return reply.status(201).send({ data: { id: created.id } });
+    },
+  );
+
+  app.delete(
+    '/:id/education/:entryId',
+    { preHandler: requirePermission(PERMISSIONS.EMPLOYEE_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id, entryId } = parseOrThrow(
+        z.object({ id: z.string().min(1), entryId: z.string().min(1) }),
+        request.params,
+      );
+
+      await assertEmployeeInScope(auth, id);
+
+      const entry = await prisma.employeeEducation.findFirst({
+        where: { id: entryId, employeeId: id, employee: { companyId: auth.companyId } },
+      });
+      if (!entry) throw new NotFoundError('Education entry');
+
+      await prisma.employeeEducation.delete({ where: { id: entryId } });
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'employee.education.delete',
+        entityType: 'Employee',
+        entityId: id,
+        summary: `Removed qualification ${entry.level}`,
+        request,
+      });
+
+      return reply.send({ data: { id: entryId } });
+    },
+  );
+
   /**
    * Deliberately absent: DELETE /employees/:id.
    * HR records are terminated and retained, never destroyed. This handler
