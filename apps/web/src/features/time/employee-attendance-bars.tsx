@@ -41,8 +41,21 @@ import { minutesLabel, timeLabel } from './attendance-ui';
  * status from times, thresholds or shift rules.
  */
 
-/** Never narrower than this; below it the plot scrolls sideways instead. */
-const MIN_COLUMN = 22;
+/**
+ * The narrowest a day may be drawn. NOT its width.
+ *
+ * Columns share the plot out between them - `flex: 1 1 0` each - so a month
+ * fills whatever room the card gives it. This floor only decides when there is
+ * no longer enough room to be legible, at which point the track stops shrinking
+ * and scrolls sideways instead. Giving a column a fixed `width` here is what
+ * previously pinned a 30-day month to 750px inside a 1500px card.
+ *
+ * 18, not 22, so that a 31-day month clears a tablet's content column without
+ * scrolling: 31 columns and 30 gaps come to 648px against roughly 690px there.
+ * On a phone the month scrolls whatever this is, and the hit target stays the
+ * full height of the plot rather than the width of the bar.
+ */
+const MIN_COLUMN = 18;
 const GAP = 3;
 const PLOT_HEIGHT = 224;
 
@@ -175,7 +188,9 @@ export function EmployeeAttendanceBars({
     );
   }
 
-  const trackWidth = bars.length * (MIN_COLUMN + GAP);
+  // The width below which the plot scrolls rather than shrinks: every column at
+  // its floor, plus the gaps between them.
+  const trackWidth = bars.length * MIN_COLUMN + Math.max(0, bars.length - 1) * GAP;
 
   return (
     <div className="space-y-3">
@@ -194,7 +209,7 @@ export function EmployeeAttendanceBars({
         </div>
 
         <div className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain pb-1">
-          <div className="relative" style={{ minWidth: trackWidth }}>
+          <div className="relative w-full" style={{ minWidth: trackWidth }}>
             <div
               className="pointer-events-none absolute inset-x-0 top-0"
               style={{ height: PLOT_HEIGHT }}
@@ -209,7 +224,7 @@ export function EmployeeAttendanceBars({
             </div>
 
             <div
-              className="relative flex items-end"
+              className="relative flex w-full items-end"
               style={{ height: PLOT_HEIGHT, gap: GAP }}
               role="list"
               aria-label={`Worked hours per day for ${employeeName}`}
@@ -228,7 +243,7 @@ export function EmployeeAttendanceBars({
             </div>
 
             {/* The x axis: the day of the month under each bar. */}
-            <div className="mt-1.5 flex" style={{ gap: GAP }}>
+            <div className="mt-1.5 flex w-full" style={{ gap: GAP }}>
               {bars.map((bar) => (
                 <span
                   key={bar.key}
@@ -238,7 +253,7 @@ export function EmployeeAttendanceBars({
                       ? 'font-semibold text-foreground'
                       : 'text-muted-foreground',
                   )}
-                  style={{ minWidth: MIN_COLUMN, width: MIN_COLUMN }}
+                  style={{ minWidth: MIN_COLUMN, flex: '1 1 0' }}
                 >
                   {dayNumber(bar.day.date)}
                 </span>
@@ -296,7 +311,7 @@ function BarColumn({
         'group relative flex h-full flex-col-reverse justify-start rounded-t-[3px]',
         selected && 'bg-accent/45',
       )}
-      style={{ minWidth: MIN_COLUMN, width: MIN_COLUMN }}
+      style={{ minWidth: MIN_COLUMN, flex: '1 1 0' }}
     >
       {/*
         The whole column is the hit target, floor to ceiling. A three-pixel

@@ -354,6 +354,56 @@ describe('the bars', () => {
     expect(within(chart()!).getAllByRole('listitem')).toHaveLength(1);
   });
 
+  /**
+   * The chart used to paint `days x 25px` and stop, leaving half a wide card
+   * empty. Columns must SHARE the plot, so none of them may carry a width of
+   * its own - only a floor, below which the track scrolls instead.
+   */
+  it('lets the columns share the full width rather than fixing each one', async () => {
+    days = [day({ date: '2026-09-01' }), day({ date: '2026-09-02' })];
+    await showBars();
+
+    for (const bar of within(chart()!).getAllByRole('listitem')) {
+      expect(bar.style.flex).toBe('1 1 0px');
+      expect(bar.style.width).toBe('');
+      expect(bar.style.maxWidth).toBe('');
+      expect(bar.style.minWidth).toBe('18px');
+    }
+  });
+
+  it('keeps the day labels on the same footing as the bars they name', async () => {
+    days = [day({ date: '2026-09-01' }), day({ date: '2026-09-02' })];
+    await showBars();
+
+    // Labels drift out from under their bars the moment the two disagree.
+    // Scoped to the axis row: "1" also appears in the month totals above.
+    const axisRow = chart()!.nextElementSibling as HTMLElement;
+    const labels = [...axisRow.children] as HTMLElement[];
+    expect(labels).toHaveLength(2);
+    for (const label of labels) {
+      expect(label.style.flex).toBe('1 1 0px');
+      expect(label.style.width).toBe('');
+    }
+  });
+
+  it('keeps a scrollable floor so a phone does not squash the month', async () => {
+    days = Array.from({ length: 30 }, (_, i) =>
+      day({ date: `2026-09-${String(i + 1).padStart(2, '0')}` }));
+    await showBars();
+
+    const track = chart()!.parentElement!;
+    // 30 columns at the 22px floor plus 29 three-pixel gaps.
+    expect(track.style.minWidth).toBe(`${30 * 18 + 29 * 3}px`);
+    expect(track).toHaveClass('w-full');
+  });
+
+  it('does not change the plot height to fill horizontal space', async () => {
+    days = [day({ date: '2026-09-01', workedMinutes: 480 })];
+    await showBars();
+    // Height still comes from worked minutes against the axis, not from layout.
+    expect(heights(within(chart()!).getAllByRole('listitem')[0]!)[0]).toBe('100%');
+  });
+
   it('says so plainly when the month is empty', async () => {
     days = [];
     renderViews();
