@@ -1,0 +1,99 @@
+# HRMS - independent stack.
+#
+# Deliberately shares nothing with the GamEmpiresBI project except the edge
+# Caddy's network: separate containers, separate volume, separate database, its
+# own bridge network. `hrms-db` is reachable ONLY on hrms_internal, so nothing
+# on the BI network can route to it.
+#
+# The BI compose file is not modified and its containers are not restarted.
+#
+# Services are named hrms-* rather than db/api/web on purpose. Compose adds the
+# SERVICE NAME as a DNS alias on every network the service joins, and the BI
+# project already publishes `db`, `backend` and `frontend` on the shared
+# network. A service called `db` here would put a second `db` record on that
+# network and make which database a container reaches a matter of DNS ordering.
+
+services:
+  hrms-db:
+    image: postgres:16-alpine
+    container_name: hrms-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - hrms_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hrms_internal
+    expose:
+      - "5432"
+
+  hrms-api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+    image: hrms-api:latest
+    container_name: hrms-api
+    restart: unless-stopped
+    depends_on:
+      hrms-db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      # Bind all interfaces INSIDE the container. Nothing is published to the
+      # host, so the only route in is the two container networks.
+      API_HOST: 0.0.0.0
+      API_PORT: "4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - hrms_internal
+      - edge
+    expose:
+      - "4000"
+
+  hrms-web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    image: hrms-web:latest
+    container_name: hrms-web
+    restart: unless-stopped
+    depends_on:
+      - hrms-api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - edge
+    expose:
+      - "80"
+
+volumes:
+  hrms_db_data:
+    name: hrms_db_data
+
+networks:
+  # Private to HRMS. The database lives only here.
+  hrms_internal:
+    name: hrms_internal
+  # The existing BI network, joined as external so the edge Caddy can reach
+  # hrms-api and hrms-web by name. Declared external precisely so Compose will
+  # never create, modify or remove it.
+  edge:
+    external: true
+    name: gamempiresbi_default

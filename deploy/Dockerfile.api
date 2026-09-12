@@ -1,0 +1,60 @@
+# HRMS API - Fastify + Prisma
+#
+# Debian slim rather than Alpine: @node-rs/argon2 and the Prisma query engine
+# both ship glibc builds, and musl variants are a known source of runtime
+# surprises for exactly these two packages.
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /build
+
+# openssl is required by the Prisma engine at generate time.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Manifests first so a source-only change does not reinstall the world.
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/zkteco/package.json packages/zkteco/
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY apps/connector/package.json apps/connector/
+
+# The web and connector workspaces are declared but never built here;
+# installing them anyway keeps the lockfile authoritative, which `npm ci`
+# requires.
+RUN npm ci
+
+COPY packages/shared packages/shared
+COPY packages/zkteco packages/zkteco
+COPY apps/api apps/api
+
+RUN npm run packages:build \
+    && npm -w @hrms/api run db:generate --if-present || npx --workspace @hrms/api prisma generate --schema apps/api/prisma/schema.prisma
+RUN npm -w @hrms/api run build
+
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS runner
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends openssl curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV NODE_ENV=production
+
+COPY --from=builder /build/node_modules ./node_modules
+COPY --from=builder /build/package.json ./package.json
+COPY --from=builder /build/packages/shared ./packages/shared
+COPY --from=builder /build/packages/zkteco ./packages/zkteco
+COPY --from=builder /build/apps/api/dist ./apps/api/dist
+COPY --from=builder /build/apps/api/prisma ./apps/api/prisma
+COPY --from=builder /build/apps/api/package.json ./apps/api/package.json
+
+# Run unprivileged. The image's own `node` user already exists.
+USER node
+
+WORKDIR /app/apps/api
+
+EXPOSE 4000
+
+CMD ["node", "dist/main.js"]
