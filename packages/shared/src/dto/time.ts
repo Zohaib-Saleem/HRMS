@@ -510,6 +510,17 @@ export interface AttendanceDay {
   earlyLeaveMinutes: number | null;
   /** The portion of workedMinutes past the overtime threshold, never extra. */
   overtimeMinutes: number | null;
+  /**
+   * The break the attendance policy deducted from the day.
+   *
+   * The engine's own deduction, reported rather than recomputed, so a screen
+   * can show it beside `workedMinutes` without subtracting anything itself.
+   * Zero when the company's shift window already contains the break, which is
+   * the default. Null - or absent, from an older response - when the day was
+   * not scored by the engine: no record, or figures an administrator set by
+   * hand.
+   */
+  breakMinutes?: number | null;
   irregular: boolean;
   mode: string | null;
   shiftId: string | null;

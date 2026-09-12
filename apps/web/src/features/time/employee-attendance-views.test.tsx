@@ -112,8 +112,18 @@ const lastQuery = () => [...seen].reverse().find((r) => r.path === '/attendance/
 const heights = (bar: HTMLElement): string[] =>
   [...bar.querySelectorAll<HTMLElement>('div[style*="height"]')].map((el) => el.style.height);
 
+/** The same heights as fractions of the plot, for comparing one bar to another. */
+const shares = (bar: HTMLElement): number[] =>
+  heights(bar).map((h) => Number.parseFloat(h) / 100);
+
+/** The y axis labels, in the order they are drawn. */
+const axisLabels = (): string[] =>
+  [...document.querySelectorAll<HTMLElement>('span.tabular.absolute')]
+    .map((el) => el.textContent ?? '')
+    .filter((t) => /^\d+:\d\d$/.test(t));
+
 /**
- * The value of one labelled figure in the detail panel.
+ * The value of one labelled figure in the tooltip.
  *
  * By label rather than by text, because several values legitimately repeat -
  * "Late" is both a status and a figure's name - and a bare text query cannot
@@ -236,6 +246,74 @@ describe('the bars', () => {
     await waitFor(() => expect(chart()).toBeInTheDocument());
   };
 
+  /** What a finger does on a phone, where there is no hover to rely on. */
+  const tap = (index: number) =>
+    userEvent.pointer({
+      target: within(chart()!).getAllByRole('listitem')[index]!.querySelector('button')!,
+      keys: '[TouchA]',
+    });
+
+  /** What a mouse does on a desktop. */
+  const hover = (index: number) =>
+    userEvent.hover(within(chart()!).getAllByRole('listitem')[index]!.querySelector('button')!);
+
+  it('labels the y axis in hours and minutes, not in percentages', async () => {
+    days = [day({ workedMinutes: 539 })];
+    await showBars();
+
+    const labels = axisLabels();
+    expect(labels[0]).toBe('0:00');
+    expect(labels).toHaveLength(axisTicks(539).length);
+    for (const label of labels) expect(label).toMatch(/^\d+:[0-5]\d$/);
+  });
+
+  it('shows the day under the pointer without needing a tap', async () => {
+    days = [day({ date: '2026-09-01' }), day({ date: '2026-09-02' })];
+    await showBars();
+
+    await hover(1);
+    expect(within(await screen.findByRole('status')).getByText('02-Sep')).toBeInTheDocument();
+
+    await userEvent.unhover(
+      within(chart()!).getAllByRole('listitem')[1]!.querySelector('button')!,
+    );
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+  });
+
+  /**
+   * Real maxima from the attendance data, and the axis each one produces.
+   *
+   * Pinned because "sensible intervals" is the whole requirement and it is the
+   * kind of thing that decays into 0:00, 0:50, 1:40 the moment somebody
+   * reaches for a round decimal. Every tick here is a readable clock duration
+   * and the top of each axis clears its own tallest day.
+   */
+  it.each([
+    [539, ['0:00', '1:30', '3:00', '4:30', '6:00', '7:30', '9:00', '10:30']],
+    [737, ['0:00', '2:00', '4:00', '6:00', '8:00', '10:00', '12:00', '14:00']],
+    [240, ['0:00', '1:00', '2:00', '3:00', '4:00', '5:00']],
+  ])('divides an axis for a %i-minute day into readable steps', async (max, expected) => {
+    days = [day({ workedMinutes: max })];
+    await showBars();
+    expect(axisLabels()).toEqual(expected);
+  });
+
+  it('names every calendar day on the x axis', async () => {
+    days = [
+      day({ date: '2026-09-01' }),
+      day({ date: '2026-09-02' }),
+      day({ date: '2026-09-30' }),
+    ];
+    await showBars();
+
+    const axisRow = chart()!.nextElementSibling as HTMLElement;
+    expect([...axisRow.children].map((el) => el.textContent)).toEqual([
+      '01-Sep',
+      '02-Sep',
+      '30-Sep',
+    ]);
+  });
+
   it('draws one bar per day', async () => {
     days = [day({ date: '2026-09-01' }), day({ date: '2026-09-02' }), day({ date: '2026-09-03' })];
     await showBars();
@@ -248,9 +326,19 @@ describe('the bars', () => {
     await showBars();
     const bars = within(chart()!).getAllByRole('listitem');
 
-    // The axis rounds up to 8h, so 480 of 480 minutes is 100% of it.
-    expect(heights(bars[0]!)[0]).toBe('100%');
-    expect(heights(bars[1]!)[0]).toBe('50%');
+    // Against whatever ceiling the axis chose, half the minutes is half the
+    // bar. The ratio is the claim; the ceiling is the axis's business.
+    expect(shares(bars[1]!)[0]!).toBeCloseTo(shares(bars[0]!)[0]! / 2, 6);
+    expect(shares(bars[0]!)[0]!).toBeLessThanOrEqual(1);
+  });
+
+  it('leaves the tallest day a little air rather than pinning it to the ceiling', async () => {
+    days = [day({ workedMinutes: 539 })];
+    await showBars();
+
+    const top = axisTicks(539).at(-1)!;
+    expect(top).toBeGreaterThan(539);
+    expect(shares(within(chart()!).getAllByRole('listitem')[0]!)[0]!).toBeLessThan(1);
   });
 
   it('carves overtime out of the bar rather than stacking it on top', async () => {
@@ -259,13 +347,18 @@ describe('the bars', () => {
     const segments = heights(within(chart()!).getAllByRole('listitem')[0]!);
 
     // 360 worked + 120 overtime = the 480 the engine reported, not 600.
-    expect(segments).toEqual(['75%', '25%']);
+    const bar = within(chart()!).getAllByRole('listitem')[0]!;
+    const top = axisTicks(480).at(-1)!;
+    expect(segments).toHaveLength(2);
+    expect(shares(bar)[0]!).toBeCloseTo(360 / top, 6);
+    expect(shares(bar)[1]!).toBeCloseTo(120 / top, 6);
+    expect(shares(bar)[0]! + shares(bar)[1]!).toBeCloseTo(480 / top, 6);
   });
 
   it('never lets a bar leave its own plot', () => {
     // A nine-hour day against a four-hour step used to stop the axis at eight.
     for (const minutes of [1, 59, 60, 510, 540, 720, 1440, 2000]) {
-      const top = axisTicks(minutes).at(-1)! * 60;
+      const top = axisTicks(minutes).at(-1)!;
       expect(minutes / top).toBeLessThanOrEqual(1);
     }
   });
@@ -290,7 +383,7 @@ describe('the bars', () => {
     expect(barMeaning(day({ status: 'PRESENT', flags: [] }))).toBe('Present');
   });
 
-  it('shows the whole day in the detail panel when a bar is tapped', async () => {
+  it('shows the whole day in the tooltip when a bar is tapped', async () => {
     days = [
       day({
         date: '2026-09-03',
@@ -299,6 +392,7 @@ describe('the bars', () => {
         checkInAt: '2026-09-03T09:25:00.000Z',
         checkOutAt: '2026-09-03T19:00:00.000Z',
         workedMinutes: 500,
+        breakMinutes: 0,
         lateMinutes: 25,
         earlyLeaveMinutes: 0,
         overtimeMinutes: 60,
@@ -306,17 +400,64 @@ describe('the bars', () => {
       }),
     ];
     await showBars();
-    await userEvent.click(within(chart()!).getAllByRole('listitem')[0]!.querySelector('button')!);
+    await tap(0);
 
-    const panel = await screen.findByRole('status');
-    expect(within(panel).getByText('Abdul Rehman')).toBeInTheDocument();
-    expect(figure(panel, 'Status')).toBe('Late');
-    expect(figure(panel, 'Shift')).toBe('General');
-    expect(figure(panel, 'Late')).toMatch(/25/);
-    expect(figure(panel, 'Overtime')).toMatch(/1h|60/);
-    expect(figure(panel, 'Check in')).not.toBe('--');
-    expect(figure(panel, 'Check out')).not.toBe('--');
-    expect(figure(panel, 'Worked')).toMatch(/8h/);
+    const tip = await screen.findByRole('status');
+    expect(within(tip).getByText('03-Sep')).toBeInTheDocument();
+    expect(figure(tip, 'Status')).toBe('Late');
+    expect(figure(tip, 'Shift')).toBe('General');
+    expect(figure(tip, 'Late')).toBe('0:25');
+    expect(figure(tip, 'Overtime')).toBe('1:00');
+    expect(figure(tip, 'Time In')).not.toBe('--');
+    expect(figure(tip, 'Time Out')).not.toBe('--');
+    expect(figure(tip, 'Break Hrs')).toBe('0:00');
+    expect(figure(tip, 'Remote Hrs')).toBe('0:00');
+    // 500 minutes as the engine reported them - never checkOut - checkIn,
+    // which would have said 9:35.
+    expect(figure(tip, 'Total Worked Hrs')).toBe('8:20');
+  });
+
+  it('quotes the engine minutes rather than the gap between the punches', async () => {
+    // The span is nine hours; the engine took an hour of it off as break and
+    // said eight. Eight is what the tooltip must say.
+    days = [
+      day({
+        checkInAt: '2026-09-03T09:00:00.000Z',
+        checkOutAt: '2026-09-03T18:00:00.000Z',
+        workedMinutes: 480,
+        breakMinutes: 60,
+      }),
+    ];
+    await showBars();
+    await tap(0);
+
+    const tip = await screen.findByRole('status');
+    expect(figure(tip, 'Total Worked Hrs')).toBe('8:00');
+    expect(figure(tip, 'Break Hrs')).toBe('1:00');
+  });
+
+  it('calls a remote day remote, on the engine mode alone', async () => {
+    days = [day({ mode: 'REMOTE', workedMinutes: 480 })];
+    await showBars();
+    await tap(0);
+    expect(figure(await screen.findByRole('status'), 'Remote Hrs')).toBe('8:00');
+  });
+
+  it('moves the tooltip to the next bar tapped, and closes on a second tap', async () => {
+    days = [
+      day({ date: '2026-09-01', workedMinutes: 480 }),
+      day({ date: '2026-09-02', workedMinutes: 240 }),
+    ];
+    await showBars();
+
+    await tap(0);
+    expect(within(await screen.findByRole('status')).getByText('01-Sep')).toBeInTheDocument();
+
+    await tap(1);
+    expect(within(await screen.findByRole('status')).getByText('02-Sep')).toBeInTheDocument();
+
+    await tap(1);
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
   });
 
   it('keeps working for a day with no shift and no check-out', async () => {
@@ -333,13 +474,40 @@ describe('the bars', () => {
       }),
     ];
     await showBars();
-    await userEvent.click(within(chart()!).getAllByRole('listitem')[0]!.querySelector('button')!);
+    await tap(0);
 
-    const panel = await screen.findByRole('status');
-    expect(figure(panel, 'Shift')).toBe('Unassigned');
-    expect(figure(panel, 'Check out')).toBe('Missing');
-    expect(figure(panel, 'Late')).toBe('--');
-    expect(figure(panel, 'Overtime')).toBe('--');
+    const tip = await screen.findByRole('status');
+    expect(figure(tip, 'Shift')).toBe('Unassigned');
+    expect(figure(tip, 'Time Out')).toBe('Missing');
+    // A figure the engine had no answer for is a dash, never a zero.
+    expect(figure(tip, 'Total Worked Hrs')).toBe('--');
+    expect(figure(tip, 'Break Hrs')).toBe('--');
+    // Nothing to say about lateness or overtime, so nothing is said.
+    expect(within(tip).queryByText('Overtime')).not.toBeInTheDocument();
+  });
+
+  it('gives a day nobody worked its place on the axis and no height', async () => {
+    days = [
+      day({ date: '2026-09-05', status: 'WEEKEND', checkInAt: null, checkOutAt: null, workedMinutes: null, hasRecord: false, recordId: null, source: null, mode: null }),
+      day({ date: '2026-09-06', status: 'ON_LEAVE', leaveTypeName: 'Annual leave', checkInAt: null, checkOutAt: null, workedMinutes: null, hasRecord: false, recordId: null, source: null, mode: null }),
+      day({ date: '2026-09-07', status: 'UPCOMING', checkInAt: null, checkOutAt: null, workedMinutes: null, hasRecord: false, recordId: null, source: null, mode: null }),
+      day({ date: '2026-09-08', workedMinutes: 480 }),
+    ];
+    await showBars();
+
+    const bars = within(chart()!).getAllByRole('listitem');
+    expect(bars).toHaveLength(4);
+    // A marker in pixels, not a share of the plot: no hours are claimed.
+    for (const bar of bars.slice(0, 3)) {
+      for (const h of heights(bar)) expect(h).not.toMatch(/%$/);
+    }
+    expect(heights(bars[3]!)[0]).toMatch(/%$/);
+
+    await tap(2);
+    const tip = await screen.findByRole('status');
+    expect(figure(tip, 'Status')).toBe('Upcoming');
+    expect(figure(tip, 'Total Worked Hrs')).toBe('--');
+    expect(figure(tip, 'Remote Hrs')).toBe('--');
   });
 
   it('draws a day whose flags array never arrived, rather than crashing', async () => {
@@ -392,8 +560,9 @@ describe('the bars', () => {
     await showBars();
 
     const track = chart()!.parentElement!;
-    // 30 columns at the 22px floor plus 29 three-pixel gaps.
-    expect(track.style.minWidth).toBe(`${30 * 18 + 29 * 3}px`);
+    // 30 columns at the 18px floor, 29 three-pixel gaps, and the lead the
+    // turned date labels need in front of the first column.
+    expect(track.style.minWidth).toBe(`${30 * 18 + 29 * 3 + 20}px`);
     expect(track).toHaveClass('w-full');
   });
 
@@ -401,7 +570,8 @@ describe('the bars', () => {
     days = [day({ date: '2026-09-01', workedMinutes: 480 })];
     await showBars();
     // Height still comes from worked minutes against the axis, not from layout.
-    expect(heights(within(chart()!).getAllByRole('listitem')[0]!)[0]).toBe('100%');
+    const top = axisTicks(480).at(-1)!;
+    expect(shares(within(chart()!).getAllByRole('listitem')[0]!)[0]!).toBeCloseTo(480 / top, 6);
   });
 
   it('says so plainly when the month is empty', async () => {
@@ -505,9 +675,12 @@ describe('nothing in the views hard-codes a rule', () => {
   });
 
   it('scales the axis to the data, not to a fixed working day', () => {
-    // A 6-hour company and a 12-hour company both get a full-height tallest bar.
-    expect(axisTicks(360).at(-1)! * 60).toBeGreaterThanOrEqual(360);
-    expect(axisTicks(720).at(-1)! * 60).toBeGreaterThanOrEqual(720);
-    expect(axisTicks(540).at(-1)! * 60).toBeGreaterThanOrEqual(540);
+    // A 6-hour company and a 12-hour company both get a tallest bar that fits.
+    expect(axisTicks(360).at(-1)!).toBeGreaterThanOrEqual(360);
+    expect(axisTicks(720).at(-1)!).toBeGreaterThanOrEqual(720);
+    expect(axisTicks(540).at(-1)!).toBeGreaterThanOrEqual(540);
+
+    // And the ceiling follows the data rather than sitting at some fixed day.
+    expect(axisTicks(360).at(-1)!).toBeLessThan(axisTicks(720).at(-1)!);
   });
 });

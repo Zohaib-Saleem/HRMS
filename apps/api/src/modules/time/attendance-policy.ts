@@ -814,6 +814,16 @@ export interface AttendanceComputation {
   /** The rostered length of the day the record was measured against. */
   expectedMinutes: number;
   /**
+   * The break the policy took OFF the day, in minutes.
+   *
+   * Not a new figure - it is the deduction this function has always applied on
+   * the line below, reported instead of being thrown away, so a screen can say
+   * what came off the span without subtracting anything of its own. Zero when
+   * `breakIncludedInWindow` is true, which is the default: the shift window
+   * already accounts for the break and nothing is deducted.
+   */
+  breakMinutes: number;
+  /**
    * How much the day's own times can be trusted. IMPLAUSIBLE is the one that
    * suppresses figures: the day is reported with no hours rather than with
    * hours nobody worked.
@@ -1014,6 +1024,7 @@ export function computeAttendance(input: {
     irregular,
     scheduledMinutes,
     expectedMinutes: expectedMinutesFor(shift, policy),
+    breakMinutes,
     integrity,
     spanMinutes: rawMinutes,
   };

@@ -62,6 +62,16 @@ export interface DerivedDay {
   lateMinutes: number | null;
   earlyLeaveMinutes: number | null;
   overtimeMinutes: number | null;
+  /**
+   * The break the policy deducted from the day, as the engine computed it.
+   *
+   * Reported, never re-derived: it is `computeAttendance`'s own deduction, so a
+   * screen showing "break" and a screen showing "worked" are quoting the same
+   * arithmetic. Null for a day the engine did not score - no record, or a
+   * record an administrator corrected by hand, whose figures are a human
+   * decision rather than a deduction anybody can restate.
+   */
+  breakMinutes?: number | null;
   irregular: boolean;
   /**
    * How far the day's own times can be trusted. Carried so a caller can tell
@@ -370,6 +380,7 @@ export async function deriveRangeForEmployees(
         lateMinutes,
         earlyLeaveMinutes,
         overtimeMinutes,
+        breakMinutes: computed ? computed.breakMinutes : null,
         irregular,
         integrity,
         mode: record?.mode ?? null,

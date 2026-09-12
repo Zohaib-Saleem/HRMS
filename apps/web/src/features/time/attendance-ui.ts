@@ -114,6 +114,35 @@ export const minutesLabel = (minutes: number | null | undefined): string =>
 export const timeLabel = (iso: string | null | undefined): string =>
   iso ? new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '--';
 
+/**
+ * The same instant as `timeLabel`, written the way a clock is read: "9:13 am".
+ *
+ * Same Date, same zone, same locale - only the padding and the case differ - so
+ * a tooltip and the table row behind it can never name two different times for
+ * one punch. A locale that keeps a 24-hour clock has no am/pm to lower-case and
+ * simply comes back as "09:13".
+ */
+export const clockLabel = (iso: string | null | undefined): string =>
+  iso
+    ? new Date(iso)
+        .toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+        .replace(/\s*([AP])\.?M\.?/i, (_m, half: string) => ` ${half.toLowerCase()}m`)
+    : '--';
+
+/**
+ * A duration as a clock reads it: "8:59", "0:00".
+ *
+ * For axis ticks and for the worked/break/remote figures beside them, where
+ * "8h 59m" is too wide to stack thirty of and too noisy to compare at a glance.
+ * Never negative - a duration that came back below zero is a data fault, not a
+ * figure to render as one.
+ */
+export const durationLabel = (minutes: number | null | undefined): string => {
+  if (minutes === null || minutes === undefined) return '--';
+  const total = Math.max(0, Math.round(minutes));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+};
+
 
 /**
  * Flag badges.
