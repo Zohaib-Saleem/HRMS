@@ -39,3 +39,6 @@ coverage/
 
 # Database dumps taken before imports/migrations. Contain employee PII.
 backups/
+
+# Plaintext login credentials and password plans. Never commit.
+credentials/
