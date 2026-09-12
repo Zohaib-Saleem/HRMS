@@ -340,6 +340,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/loans': 'Loans',
   '/reports/employee-master': 'Employee Master Report',
   '/settings/attendance-policies': 'Policy overrides',
+  '/settings/loan-policy': 'Loan policy',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',
 };

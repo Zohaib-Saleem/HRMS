@@ -24,6 +24,8 @@ import {
 } from '@/components/ui/dialog';
 import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { isoMonth, money, thisMonthLocal } from '@/features/employment/employment-shared';
+import { LoanEligibilityPanel } from './loan-eligibility-panel';
+import { useLoanEligibility } from './use-loan-eligibility';
 
 /**
  * Creating a loan, and applying for one.
@@ -363,6 +365,25 @@ export function LoanApplyDialog({
     },
   });
 
+  /*
+   * The server's answer, asked for as the form is filled in.
+   *
+   * It is advisory here and authoritative on submit: `POST /loans/apply` runs
+   * the same evaluation again and refuses on its own result. This exists so an
+   * employee finds out what they can borrow before typing a number, not so the
+   * browser can decide anything.
+   */
+  const watchedAmount = Number(form.watch('principalAmount'));
+  const watchedInstallments = Number(form.watch('installmentCount'));
+  const eligibility = useLoanEligibility({
+    principalAmount: Number.isFinite(watchedAmount) && watchedAmount > 0 ? watchedAmount : undefined,
+    installmentCount:
+      Number.isFinite(watchedInstallments) && watchedInstallments > 0
+        ? watchedInstallments
+        : undefined,
+    enabled: open,
+  });
+
   React.useEffect(() => {
     if (open) {
       form.reset({
@@ -432,6 +453,14 @@ export function LoanApplyDialog({
                 {formError}
               </p>
             ) : null}
+
+            {/* Above the form on purpose: a refusal is worth reading before
+                filling anything in, and the ceiling is worth knowing before
+                choosing an amount. */}
+            <LoanEligibilityPanel
+              result={eligibility.data}
+              loading={eligibility.isPending}
+            />
 
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField
@@ -513,7 +542,17 @@ export function LoanApplyDialog({
             <Button type="button" variant="ghost" onClick={onClose} disabled={apply.isPending}>
               Cancel
             </Button>
-            <Button type="submit" loading={apply.isPending}>
+            {/*
+              * Disabled while the server says no, and enabled while the answer
+              * is still unknown - a button that stays dead because a request
+              * failed is worse than one that submits and is refused by the
+              * endpoint, which is the real gate either way.
+              */}
+            <Button
+              type="submit"
+              loading={apply.isPending}
+              disabled={eligibility.data ? !eligibility.data.eligible : false}
+            >
               Submit application
             </Button>
           </DialogFooter>

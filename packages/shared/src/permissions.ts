@@ -104,6 +104,14 @@ export const PERMISSIONS = {
   /// Approve or reject a loan application. Held separately so the person who
   /// raises a loan need not be the person who agrees to it.
   LOAN_APPROVE: 'loan.approve',
+  /// See the company-wide loan policy - the eligibility rules an application is
+  /// measured against. Separate from LOAN_READ because the rules are company
+  /// configuration, not somebody's loan.
+  LOAN_POLICY_READ: 'loan.policy.read',
+  /// Change the loan policy. Super Admin only by default: moving the maximum
+  /// loan from one month's salary to two is a financial decision, not an
+  /// administrative one.
+  LOAN_POLICY_MANAGE: 'loan.policy.manage',
 
   // --- Governance ---
   AUDIT_READ: 'audit.read',
@@ -236,6 +244,8 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.LOAN_REQUEST, label: 'Apply for a loan', description: 'Raise and withdraw your own loan application.' },
       { value: PERMISSIONS.LOAN_MANAGE, label: 'Manage loans', description: 'Create loans for others, edit and cancel them.' },
       { value: PERMISSIONS.LOAN_APPROVE, label: 'Approve loans', description: 'Approve or reject an application. Grant sparingly.' },
+      { value: PERMISSIONS.LOAN_POLICY_READ, label: 'View loan policy', description: 'See the eligibility rules applications are measured against.' },
+      { value: PERMISSIONS.LOAN_POLICY_MANAGE, label: 'Manage loan policy', description: 'Change the company loan rules. Grant to Super Admin only.' },
     ],
   },
   {
@@ -338,6 +348,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LOAN_REQUEST,
     PERMISSIONS.LOAN_MANAGE,
     PERMISSIONS.LOAN_APPROVE,
+    // Read, not manage. HR decides loan applications and has to be able to
+    // explain a refusal, which means seeing the rule that caused it. Changing
+    // the rule is Super Admin's.
+    PERMISSIONS.LOAN_POLICY_READ,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.

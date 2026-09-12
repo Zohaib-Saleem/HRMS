@@ -160,6 +160,17 @@ export const loanCreateSchema = z.object({
    * so the schedule exists and payroll ignores it until somebody releases it.
    */
   activate: z.boolean().default(true),
+  /**
+   * An authorised user's decision to grant a loan the eligibility rules
+   * refuse.
+   *
+   * Its ABSENCE is meaningful, which is why it is optional rather than
+   * nullable-with-a-default: omit it and there is no override, so an
+   * ineligible employee is refused exactly as they would be on their own
+   * application. Send it - even empty - and an override is being attempted,
+   * which the policy may forbid outright or require a reason for.
+   */
+  overrideReason: z.string().trim().max(1000).optional(),
 });
 
 export type LoanCreateInput = z.infer<typeof loanCreateSchema>;

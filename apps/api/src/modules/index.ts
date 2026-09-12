@@ -46,6 +46,7 @@ import { salaryRevisionRoutes } from './payroll/salary-revisions.routes.js';
 import { contractRoutes } from './employment/contracts.routes.js';
 import { policyAssignmentRoutes, policyRoutes } from './employment/policies.routes.js';
 import { loanRoutes } from './loans/loans.routes.js';
+import { loanEligibilityRoutes, loanPolicyRoutes } from './loans/loan-policy.routes.js';
 import { reportRoutes } from './reports/reports.routes.js';
 import {
   payrollDashboardRoutes,
@@ -125,6 +126,10 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/policy-assignments', plugin: policyAssignmentRoutes },
   { prefix: '/payroll/salary-revisions', plugin: salaryRevisionRoutes },
   { prefix: '/loans', plugin: loanRoutes },
+  // Both sit on the /loans prefix and both are static segments, so Fastify
+  // matches them ahead of `/loans/:id` regardless of registration order.
+  { prefix: '/loans/policy', plugin: loanPolicyRoutes },
+  { prefix: '/loans', plugin: loanEligibilityRoutes },
   { prefix: '/reports', plugin: reportRoutes },
 
   // --- phase 5+ ---------------------------------------------------------

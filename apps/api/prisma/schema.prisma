@@ -334,6 +334,7 @@ model Company {
   salaryRevisions   SalaryRevision[]
   employeeLoans     EmployeeLoan[]
   loanInstallments  EmployeeLoanInstallment[]
+  loanPolicies      LoanPolicy[]
 
   @@map("companies")
 }
@@ -1414,7 +1415,7 @@ model LeaveType {
   carryForwardCapDays Decimal? @db.Decimal(6, 2)
 
   /// Unpaid leave still consumes a balance but is flagged for payroll later.
-  isPaid   Boolean @default(true)
+  isPaid Boolean @default(true)
 
   /// Whether payroll deducts this leave even though it is paid.
   ///
@@ -2248,7 +2249,7 @@ model PayrollProfile {
 
   /// Null inherits the company setting, like every other override here.
   shortHoursDeductionMode PayrollShortHoursMode?
-  shortHoursDeductionRate Decimal?              @db.Decimal(14, 4)
+  shortHoursDeductionRate Decimal?               @db.Decimal(14, 4)
   shortHoursGraceMinutes  Int?
 
   /// Free text: bank, cash, cheque. Not a payment integration, just a note on
@@ -3085,4 +3086,77 @@ model EmployeeLoanInstallment {
   @@index([companyId, status, dueMonth])
   @@index([payrollRunId])
   @@map("employee_loan_installments")
+}
+
+/// The company-wide loan policy, as one immutable version.
+///
+/// Rows are never edited. Saving a change writes a NEW row with its own
+/// `effectiveFrom`, and the policy in force at an instant is the newest row at
+/// or before it. Three things fall out of that, and each is the reason for it:
+///
+///   - An existing loan stays explicable. The rules that governed an
+///     application are the version in force when it was submitted, and that
+///     version is still on file, unedited, however often the policy has moved
+///     since. Nothing here ever rewrites a schedule or an installment.
+///   - The change history needs no second table. It is this table read in
+///     order, with the field-level difference between neighbours derived on
+///     read - so the log cannot disagree with the values it describes.
+///   - A change can be announced before it bites, by giving it a future
+///     `effectiveFrom`.
+///
+/// Every threshold is configuration. Nothing in the eligibility engine carries
+/// a literal for any of these.
+model LoanPolicy {
+  id        String @id @default(cuid())
+  companyId String
+
+  // --- eligibility ----------------------------------------------------------
+  /// Ceiling on the principal, as a multiple of monthly salary. Never stored
+  /// against an employee: the maximum is recomputed from the salary in force
+  /// and the policy in force each time it is asked for.
+  maxSalaryMultiplier Decimal @default(1) @db.Decimal(6, 2)
+  minEmploymentMonths Int     @default(3)
+  allowProbation      Boolean @default(false)
+  minSalary           Decimal @default(0) @db.Decimal(14, 2)
+
+  // --- attendance -----------------------------------------------------------
+  minAttendancePercent  Decimal @default(90) @db.Decimal(5, 2)
+  maxUnapprovedAbsences Int     @default(3)
+  maxLateDays           Int     @default(10)
+  maxMissingPunches     Int     @default(3)
+  /// How many COMPLETED calendar months the attendance rules look back over.
+  /// Completed on purpose: a part-finished month is not evidence of anything.
+  evaluationMonths      Int     @default(3)
+
+  // --- loan shape -----------------------------------------------------------
+  maxMonthlyDeductionPercent Decimal @default(30) @db.Decimal(5, 2)
+  maxTenureMonths            Int     @default(12)
+  maxInstallments            Int     @default(12)
+  oneActiveLoan              Boolean @default(true)
+  onePendingLoan             Boolean @default(true)
+
+  // --- employment status ----------------------------------------------------
+  blockTerminated Boolean @default(true)
+  blockResigned   Boolean @default(true)
+
+  // --- override -------------------------------------------------------------
+  allowHrOverride       Boolean @default(true)
+  requireOverrideReason Boolean @default(true)
+
+  /// When this version starts. The seeded first version uses the epoch so that
+  /// every application ever made has a policy in force behind it.
+  effectiveFrom DateTime
+
+  createdAt DateTime @default(now())
+  /// Null for the version seeded on first read, which nobody authored.
+  createdBy String?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// One version per instant per company. Two administrators saving at once
+  /// cannot produce two policies in force at the same moment - the second
+  /// write fails rather than making "the current policy" a matter of ordering.
+  @@unique([companyId, effectiveFrom])
+  @@index([companyId, effectiveFrom])
+  @@map("loan_policies")
 }

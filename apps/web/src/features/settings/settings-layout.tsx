@@ -3,6 +3,7 @@ import {
   Building2,
   Clock,
   Fingerprint,
+  HandCoins,
   KeyRound,
   Layers3,
   ScrollText,
@@ -48,6 +49,15 @@ export const TABS: SettingsTab[] = [
     label: 'Device user mapping',
     icon: Fingerprint,
     permission: PERMISSIONS.DEVICE_READ,
+  },
+  {
+    // The company's loan rules. Gated on loan.policy.read, which HR holds and
+    // an employee does not - changing them needs loan.policy.manage, which is
+    // Super Admin's alone.
+    to: '/settings/loan-policy',
+    label: 'Loan policy',
+    icon: HandCoins,
+    permission: PERMISSIONS.LOAN_POLICY_READ,
   },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },

@@ -102,6 +102,10 @@ const PayrollPreviewPage = lazyPage(
   'PayrollPreviewPage',
 );
 const LoansPage = lazyPage(() => import('@/features/loans/loans-page'), 'LoansPage');
+const LoanPolicyPage = lazyPage(
+  () => import('@/features/settings/loan-policy-page'),
+  'LoanPolicyPage',
+);
 const EmployeeMasterReportPage = lazyPage(
   () => import('@/features/reports/employee-master-report-page'),
   'EmployeeMasterReportPage',
@@ -398,7 +402,14 @@ export function AppRoutes() {
           element={
             <RequirePermission
               mode="any"
-              permission={[PERMISSIONS.COMPANY_READ, PERMISSIONS.ROLE_READ, PERMISSIONS.AUDIT_READ]}
+              permission={[
+                PERMISSIONS.COMPANY_READ,
+                PERMISSIONS.ROLE_READ,
+                PERMISSIONS.AUDIT_READ,
+                // Without this, a role granted only the loan policy would see
+                // the tab and be turned away by the section gate above it.
+                PERMISSIONS.LOAN_POLICY_READ,
+              ]}
             />
           }
         >
@@ -414,6 +425,12 @@ export function AppRoutes() {
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.DEVICE_READ} />}>
               <Route path="device-mapping" element={<DeviceMappingPage />} />
+            </Route>
+            {/* Readable with loan.policy.read, which HR holds; the form is
+                read-only without loan.policy.manage, and the endpoint is the
+                real gate either way. */}
+            <Route element={<RequirePermission permission={PERMISSIONS.LOAN_POLICY_READ} />}>
+              <Route path="loan-policy" element={<LoanPolicyPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
               <Route path="users" element={<UsersPage />} />

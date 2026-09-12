@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
@@ -27,6 +27,8 @@ import {
   resolveDefaultApprovers,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow } from '../time/helpers.js';
+import { evaluateLoanEligibility } from './loan-eligibility.service.js';
+import { currentLoanPolicy } from './loan-policy.service.js';
 import {
   LOAN_INCLUDE,
   completeIfSettled,
@@ -96,6 +98,76 @@ async function assertNoActiveLoan(employeeId: string, excludeLoanId?: string): P
       ],
     });
   }
+}
+
+/**
+ * Refuse an application the loan policy does not allow.
+ *
+ * The gate, and the only one that counts. The browser runs the same evaluation
+ * to draw its form, but nothing it sends is trusted here: the subject, the
+ * salary, the attendance and every threshold are re-read from the database
+ * inside `evaluateLoanEligibility`, so a forged eligibility response, an edited
+ * maximum or a hand-rolled POST all meet the same answer.
+ *
+ * It sits in FRONT of the existing application flow and changes nothing behind
+ * it. A loan that passes is created exactly as it always was - same schedule,
+ * same approval chain, same statuses, same payroll collector.
+ *
+ * `override` is how an authorised user allows an application the rules refused.
+ * It is refused in turn unless the policy permits overrides, and the reason is
+ * mandatory when the policy says so: an unexplained exception to a financial
+ * control is worth less than no exception at all.
+ */
+async function assertLoanAllowed(input: {
+  companyId: string;
+  employeeId: string;
+  principalAmount: number;
+  installmentCount: number;
+  override?: { by: string; reason: string | null; request: FastifyRequest } | null;
+}): Promise<void> {
+  const result = await evaluateLoanEligibility({
+    companyId: input.companyId,
+    employeeId: input.employeeId,
+    requestedAmount: input.principalAmount,
+    requestedInstallments: input.installmentCount,
+  });
+
+  if (result.eligible) return;
+
+  const override = input.override ?? null;
+  if (!override) {
+    throw new ValidationError({ principalAmount: result.reasons });
+  }
+
+  const policy = await currentLoanPolicy(input.companyId);
+  if (!policy.allowHrOverride) {
+    throw new ForbiddenError('The loan policy does not allow eligibility to be overridden.');
+  }
+  if (policy.requireOverrideReason && !override.reason) {
+    throw new ValidationError({
+      overrideReason: ['Give a reason for overriding the eligibility rules.'],
+    });
+  }
+
+  // The exception, on the record. Who allowed it, when, why, and exactly which
+  // rules were set aside - so the decision can be read back later by somebody
+  // who was not in the room.
+  await recordAudit({
+    companyId: input.companyId,
+    actorId: override.by,
+    action: 'loan.eligibility.override',
+    entityType: 'Employee',
+    entityId: input.employeeId,
+    summary: `Overrode ${result.failedRules.length} loan eligibility rule(s): ${result.failedRules.join(', ')}`,
+    after: {
+      failedRules: result.failedRules,
+      reasons: result.reasons,
+      reason: override.reason,
+      principalAmount: input.principalAmount,
+      installmentCount: input.installmentCount,
+    },
+    request: override.request,
+  });
 }
 
 export const loanRoutes: FastifyPluginAsync = async (app) => {
@@ -193,6 +265,27 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
 
       await assertNoActiveLoan(input.employeeId);
 
+      /*
+       * The same gate, with the override an authorised user is allowed.
+       *
+       * Creating a loan for somebody is the route HR uses to grant one the
+       * rules would refuse - a hardship case, a board decision - so the
+       * refusal is offered as something to override rather than a wall. What
+       * it is not is a way around the rules by accident: without an
+       * `overrideReason` in the body there is no override, and the application
+       * is refused exactly as the employee's own would be.
+       */
+      await assertLoanAllowed({
+        companyId: auth.companyId,
+        employeeId: input.employeeId,
+        principalAmount: input.principalAmount,
+        installmentCount: input.installmentCount,
+        override:
+          input.overrideReason === undefined
+            ? null
+            : { by: auth.userId, reason: input.overrideReason ?? null, request },
+      });
+
       const currency = input.currency ?? company.currency;
       const now = new Date();
 
@@ -278,6 +371,22 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
 
       const self = await callerEmployeeOrThrow(auth);
       await assertNoActiveLoan(self.id);
+
+      /*
+       * The policy gate.
+       *
+       * No override is offered here and none can be passed: this is the
+       * employee's own application, and an employee allowing themselves past
+       * the rules is not an override, it is the absence of a rule. An
+       * authorised user who wants to make an exception does it through
+       * `POST /loans`, where the decision carries their name.
+       */
+      await assertLoanAllowed({
+        companyId: auth.companyId,
+        employeeId: self.id,
+        principalAmount: input.principalAmount,
+        installmentCount: input.installmentCount,
+      });
 
       const company = await prisma.company.findUniqueOrThrow({
         where: { id: auth.companyId },

@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PERMISSIONS, type Permission } from '@hrms/shared';
+import { LOAN_POLICY_DEFAULTS, PERMISSIONS, type Permission } from '@hrms/shared';
 
 /**
  * The employee side of the loans module.
@@ -20,8 +20,20 @@ import { PERMISSIONS, type Permission } from '@hrms/shared';
  */
 
 const db = vi.hoisted(() => ({
-  employee: { findFirst: vi.fn(), findMany: vi.fn() },
+  employee: { findFirst: vi.fn(), findMany: vi.fn(), findUniqueOrThrow: vi.fn() },
   company: { findUniqueOrThrow: vi.fn() },
+  // Everything the loan policy gate reads. They are here so the REAL
+  // eligibility engine runs against these tests rather than a stub of it: a
+  // boundary test whose gate is faked is a test of a route that does not exist.
+  loanPolicy: { findFirst: vi.fn(), upsert: vi.fn() },
+  employeeSalary: { findFirst: vi.fn() },
+  payrollSettings: { findUnique: vi.fn() },
+  attendanceRecord: { findMany: vi.fn(), count: vi.fn() },
+  attendancePolicyAssignment: { findMany: vi.fn() },
+  attendanceRegularizationRequest: { findMany: vi.fn() },
+  employeeShiftAssignment: { findMany: vi.fn() },
+  leaveRequest: { findMany: vi.fn() },
+  holiday: { findMany: vi.fn() },
   employeeLoan: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn() },
   employeeLoanInstallment: { createMany: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
   approvalRequest: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn() },
@@ -85,12 +97,75 @@ let app: FastifyInstance | null = null;
 beforeEach(() => {
   vi.clearAllMocks();
 
-  db.company.findUniqueOrThrow.mockResolvedValue({ currency: 'PKR' });
+  /*
+   * One company row serves both readers: the loans routes take `currency`, and
+   * `resolveAttendancePolicy` takes the timezone and thresholds. The mock
+   * ignores `select`, so a single object answers both.
+   */
+  db.company.findUniqueOrThrow.mockResolvedValue({
+    currency: 'PKR',
+    timezone: 'Asia/Karachi',
+    weekendDays: ['SATURDAY', 'SUNDAY'],
+    graceMinutes: 10,
+    halfDayMinutes: 240,
+    fullDayMinutes: 480,
+  });
+
+  /*
+   * The loan policy the gate measures against: the shipped defaults.
+   *
+   * At a 1x multiple and a 30% deduction ceiling, the 60,000-over-6-months
+   * application below is comfortably eligible - so these tests exercise the
+   * real gate and still assert what they were written to assert.
+   */
+  db.loanPolicy.findFirst.mockResolvedValue({
+    id: 'pol-1',
+    companyId: 'company-1',
+    ...LOAN_POLICY_DEFAULTS,
+    effectiveFrom: new Date(0),
+    createdAt: new Date(0),
+    createdBy: null,
+  });
+  db.employeeSalary.findFirst.mockResolvedValue({
+    amount: 100_000,
+    currency: 'PKR',
+    salaryType: 'MONTHLY',
+  });
+  db.employee.findUniqueOrThrow.mockResolvedValue({ id: 'emp-self', locationId: null });
+
+  // No attendance in the window. The engine reports it as unmeasured and
+  // applies no attendance rule, which is the documented behaviour for somebody
+  // with nothing on record - not a silent pass.
+  db.attendanceRecord.findMany.mockResolvedValue([]);
+  // No records at all, so the window holds no evidence and the attendance
+  // rules are reported as unmeasured rather than scored at 0%.
+  db.attendanceRecord.count.mockResolvedValue(0);
+  db.attendancePolicyAssignment.findMany.mockResolvedValue([]);
+  db.attendanceRegularizationRequest.findMany.mockResolvedValue([]);
+  db.employeeShiftAssignment.findMany.mockResolvedValue([]);
+  db.leaveRequest.findMany.mockResolvedValue([]);
+  db.holiday.findMany.mockResolvedValue([]);
+  db.payrollSettings.findUnique.mockResolvedValue(null);
+
+  /*
+   * One employee row, serving two readers again: the loans routes want the
+   * name and the approval chain, the eligibility engine wants the employment
+   * facts. Kept complete rather than minimal - `isOnProbation` reads
+   * `contracts` and is deliberately strict about it, because a policy control
+   * that silently treats a missing field as "not on probation" is worse than
+   * one that fails loudly.
+   */
   db.employee.findFirst.mockResolvedValue({
     ...SELF,
     managerId: 'emp-manager',
     secondaryManagerId: null,
     department: { headEmployeeId: 'emp-head' },
+    status: 'ACTIVE',
+    hireDate: new Date('2020-01-01T00:00:00Z'),
+    confirmationDate: new Date('2020-07-01T00:00:00Z'),
+    confirmationStatus: 'Permanent',
+    locationId: null,
+    contracts: [],
   });
   db.employee.findMany.mockResolvedValue([]);
 
@@ -153,6 +228,45 @@ describe('POST /loans/apply', () => {
     expect(approval.data.requesterEmployeeId).toBe('emp-self');
     // The applicant is never an approver of their own application.
     expect(approval.data.steps.create.map((s) => s.approverEmployeeId)).toEqual(['emp-manager']);
+  });
+
+  /*
+   * The gate is real in this file, not stubbed.
+   *
+   * These two prove it: the same fixtures that produce a 201 above produce a
+   * refusal when the policy or the employee moves. Without them, a future
+   * change that quietly removed `assertLoanAllowed` from the route would leave
+   * every other test in this file passing.
+   */
+  it('is refused when the amount exceeds what the policy allows', async () => {
+    app = await appAs(EMPLOYEE);
+
+    // Salary 100,000 at a 1x multiple: 150,000 is over the ceiling.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/loans/apply',
+      payload: { ...APPLICATION, principalAmount: 150_000 },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.body).toContain('The most you can borrow');
+    expect(db.employeeLoan.create).not.toHaveBeenCalled();
+    expect(db.approvalRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('is refused when the repayment would exceed the deduction ceiling', async () => {
+    app = await appAs(EMPLOYEE);
+
+    // 90,000 over 2 months is 45,000 a month; 30% of 100,000 is 30,000.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/loans/apply',
+      payload: { ...APPLICATION, principalAmount: 90_000, installmentCount: 2 },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.body).toContain('The most that can be deducted');
+    expect(db.employeeLoan.create).not.toHaveBeenCalled();
   });
 
   it('refuses an application from a login with no employee record', async () => {
