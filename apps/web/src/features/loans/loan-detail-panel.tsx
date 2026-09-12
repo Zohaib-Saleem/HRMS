@@ -105,6 +105,8 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
   const loan = query.data;
   if (!loan) return null;
 
+  const collecting = loan.installments.find((row) => row.status === 'PENDING_PAYROLL') ?? null;
+
   const repaidPercent =
     loan.principalAmount > 0
       ? Math.min(100, Math.round((loan.paidAmount / loan.principalAmount) * 100))
@@ -186,6 +188,14 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
             {LOAN_STATUS_DESCRIPTIONS[loan.status]}
           </p>
 
+          {collecting ? (
+            <p className="rounded-md bg-accent/50 px-3 py-2 text-[12.5px]">
+              Installment {collecting.sequence} of {loan.installmentCount} (
+              {money(collecting.amount, loan.currency)}) is in an unfinalized payroll run for{' '}
+              {isoMonth(collecting.dueMonth)}. It counts as repaid once that run is finalized.
+            </p>
+          ) : null}
+
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <dt className="text-xs uppercase tracking-wide text-muted-foreground">Loan amount</dt>
@@ -199,7 +209,8 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
                 {money(loan.paidAmount, loan.currency)}
               </dd>
               <dd className="text-[11px] text-muted-foreground">
-                {loan.paidInstallments} of {loan.installmentCount} installments
+                {loan.paidInstallments} of {loan.installmentCount} installments ·{' '}
+                {loan.installmentCount - loan.paidInstallments} left
               </dd>
             </div>
             <div>
@@ -242,6 +253,12 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
               </dt>
               <dd className="text-sm font-medium">{isoMonth(loan.startMonth)}</dd>
             </div>
+            {loan.activatedAt ? (
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-muted-foreground">Released</dt>
+                <dd className="text-sm">{formatDateTime(loan.activatedAt)}</dd>
+              </div>
+            ) : null}
             {loan.reference ? (
               <div>
                 <dt className="text-xs uppercase tracking-wide text-muted-foreground">Reference</dt>

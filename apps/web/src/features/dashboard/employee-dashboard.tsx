@@ -16,6 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { AttendanceToday } from '@/features/time/attendance-today';
 import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
+import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { useEmployeeDashboard, type LeaveRequestView } from './employee-dashboard-data';
 
 /**
@@ -160,12 +161,13 @@ export function EmployeeDashboard() {
         />
       </div>
 
-      {/* Self-service, above the reference cards below: a correction is
-          something an employee comes here to DO, rather than to read. The
-          card renders itself away when the permission behind it is absent, so
-          a narrow role gets a shorter dashboard rather than a broken one. */}
+      {/* Self-service, above the reference cards below: these are the two
+          things an employee comes here to DO, rather than to read. Each card
+          renders itself away when the permission behind it is absent, so a
+          narrow role gets a shorter dashboard rather than a broken one. */}
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <MyCorrectionsCard />
+        <MyLoansCard />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">

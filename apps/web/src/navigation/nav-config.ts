@@ -14,6 +14,7 @@ import {
   Cpu,
   FileText,
   Fingerprint,
+  HandCoins,
   LayoutDashboard,
   LifeBuoy,
   ClipboardPen,
@@ -238,6 +239,17 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
+        // Alongside Payslips rather than inside Payroll, and for the same
+        // reason: a member of staff holds loan.read with an OWN scope and
+        // opens this to find their own loans, without going near Payroll.
+        label: 'Loans',
+        to: '/loans',
+        icon: HandCoins,
+        permission: PERMISSIONS.LOAN_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
         label: 'Performance',
         to: '/performance',
         icon: TrendingUp,
@@ -313,6 +325,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/settings/device-mapping': 'Device user mapping',
   '/payroll/preview': 'Payroll preview',
   '/payroll/salaries': 'Salary management',
+  '/loans': 'Loans',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',

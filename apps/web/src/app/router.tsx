@@ -101,6 +101,7 @@ const PayrollPreviewPage = lazyPage(
   () => import('@/features/payroll/payroll-preview-page'),
   'PayrollPreviewPage',
 );
+const LoansPage = lazyPage(() => import('@/features/loans/loans-page'), 'LoansPage');
 const PayslipsPage = lazyPage(() => import('@/features/payroll/payslips-page'), 'PayslipsPage');
 const PayslipPage = lazyPage(() => import('@/features/payroll/payslip-page'), 'PayslipPage');
 const HelpHomePage = lazyPage(() => import('@/features/help/help-home-page'), 'HelpHomePage');
@@ -332,6 +333,13 @@ export function AppRoutes() {
         <Route element={<RequirePermission permission={PERMISSIONS.PAYSLIP_READ} />}>
           <Route path="payslips" element={<PayslipsPage />} />
           <Route path="payslips/:id" element={<PayslipPage />} />
+        </Route>
+
+        {/* loan.read only: the page hides the actions the caller cannot use,
+            and every endpoint behind them re-checks the permission itself. An
+            employee with an OWN scope opens this and finds their own loans. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.LOAN_READ} />}>
+          <Route path="loans" element={<LoansPage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.SHIFT_READ} />}>
