@@ -20,6 +20,7 @@
     "db:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/setup-db.ps1",
     "db:migrate": "npm -w @hrms/api run db:migrate",
     "db:seed": "npm -w @hrms/api run db:seed",
+    "db:sync-permissions": "npm run packages:build && npm -w @hrms/api run db:sync-permissions",
     "db:reset": "npm -w @hrms/api run db:reset",
     "db:studio": "npm -w @hrms/api run db:studio",
     "connector:build": "npm run packages:build && npm -w @hrms/connector run build"

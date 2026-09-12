@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { env } from './config/env.js';
 import { assertDatabaseConnection, prisma } from './core/db.js';
 import { useLogger } from './core/logger.js';
+import { syncPermissionCatalogueAtBoot } from './core/permission-catalogue.js';
 import { pruneExpiredSessions } from './auth/session.js';
 import { pruneExpiredResetTokens } from './auth/password-reset.service.js';
 import { markAbsencesForPreviousDay } from './modules/time/absence.service.js';
@@ -20,6 +21,18 @@ async function main(): Promise<void> {
   // A broken mail configuration is reported but never blocks startup - in-app
   // notifications keep working regardless.
   await verifyEmailProvider(app.log);
+
+  /**
+   * Bring the permission catalogue up to date with this build, before the
+   * first request is served.
+   *
+   * Migrations have already run by the time the process starts - the deploy
+   * applies them against a one-off container - so the tables are whatever this
+   * release expects. Additive only: it inserts the permissions the code
+   * defines and grants system roles the defaults they lack, and revokes
+   * nothing. Idempotent, so every subsequent boot is a no-op.
+   */
+  await syncPermissionCatalogueAtBoot(app.log);
 
   // Housekeeping: clear long-expired sessions and reset tokens at boot, then
   // once a day.
