@@ -13,6 +13,7 @@ import {
   Clock,
   Cpu,
   FileText,
+  FileSpreadsheet,
   Fingerprint,
   HandCoins,
   LayoutDashboard,
@@ -250,6 +251,17 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
+        // The consolidated HR view: one row per employee, every module's figure
+        // for that person. Gated on employee.read; the columns a reader may
+        // fill are decided per block by the module that owns them.
+        label: 'Employee Master Report',
+        to: '/reports/employee-master',
+        icon: FileSpreadsheet,
+        permission: PERMISSIONS.EMPLOYEE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
         label: 'Performance',
         to: '/performance',
         icon: TrendingUp,
@@ -326,6 +338,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/payroll/preview': 'Payroll preview',
   '/payroll/salaries': 'Salary management',
   '/loans': 'Loans',
+  '/reports/employee-master': 'Employee Master Report',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',

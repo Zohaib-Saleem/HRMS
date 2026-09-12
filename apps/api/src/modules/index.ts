@@ -46,6 +46,7 @@ import { salaryRevisionRoutes } from './payroll/salary-revisions.routes.js';
 import { contractRoutes } from './employment/contracts.routes.js';
 import { policyAssignmentRoutes, policyRoutes } from './employment/policies.routes.js';
 import { loanRoutes } from './loans/loans.routes.js';
+import { reportRoutes } from './reports/reports.routes.js';
 import {
   payrollDashboardRoutes,
   payrollReconciliationRoutes,
@@ -124,6 +125,7 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/policy-assignments', plugin: policyAssignmentRoutes },
   { prefix: '/payroll/salary-revisions', plugin: salaryRevisionRoutes },
   { prefix: '/loans', plugin: loanRoutes },
+  { prefix: '/reports', plugin: reportRoutes },
 
   // --- phase 5+ ---------------------------------------------------------
   // { prefix: '/documents', plugin: documentRoutes },

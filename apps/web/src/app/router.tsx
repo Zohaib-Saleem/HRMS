@@ -102,6 +102,10 @@ const PayrollPreviewPage = lazyPage(
   'PayrollPreviewPage',
 );
 const LoansPage = lazyPage(() => import('@/features/loans/loans-page'), 'LoansPage');
+const EmployeeMasterReportPage = lazyPage(
+  () => import('@/features/reports/employee-master-report-page'),
+  'EmployeeMasterReportPage',
+);
 const PayslipsPage = lazyPage(() => import('@/features/payroll/payslips-page'), 'PayslipsPage');
 const PayslipPage = lazyPage(() => import('@/features/payroll/payslip-page'), 'PayslipPage');
 const HelpHomePage = lazyPage(() => import('@/features/help/help-home-page'), 'HelpHomePage');
@@ -340,6 +344,13 @@ export function AppRoutes() {
             employee with an OWN scope opens this and finds their own loans. */}
         <Route element={<RequirePermission permission={PERMISSIONS.LOAN_READ} />}>
           <Route path="loans" element={<LoansPage />} />
+        </Route>
+
+        {/* employee.read is the whole gate. Each block inside a row - pay,
+            leave, loans, attendance - is gated again server-side, so a reader
+            without payroll.read gets rows with no salary rather than a 403. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.EMPLOYEE_READ} />}>
+          <Route path="reports/employee-master" element={<EmployeeMasterReportPage />} />
         </Route>
 
         <Route element={<RequirePermission permission={PERMISSIONS.SHIFT_READ} />}>
