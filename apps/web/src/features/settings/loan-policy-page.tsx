@@ -183,17 +183,25 @@ export function LoanPolicyPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
 
+  /*
+   * `api.get` already unwraps the `{ data }` envelope, so the generic is the
+   * INNER type and there is nothing left to read a `.data` off. Unwrapping a
+   * second time yields undefined, which react-query rejects outright - the
+   * screen then fails with "data is undefined" against a request that returned
+   * 200. The history endpoint answers with `meta` alongside `data`, so it needs
+   * `getPage`, which hands back the whole envelope.
+   */
   const query = useQuery({
     queryKey: LOAN_POLICY_KEY,
-    queryFn: () => api.get<{ data: LoanPolicyView }>('/loans/policy').then((r) => r.data),
+    queryFn: () => api.get<LoanPolicyView>('/loans/policy'),
   });
 
   const history = useQuery({
     queryKey: LOAN_POLICY_HISTORY_KEY,
     queryFn: () =>
       api
-        .get<{ data: LoanPolicyHistoryEntry[] }>('/loans/policy/history?limit=20')
-        .then((r) => r.data),
+        .getPage<LoanPolicyHistoryEntry>('/loans/policy/history', { query: { limit: 20 } })
+        .then((page) => page.data),
   });
 
   // Both gates are checked. The server's `canManage` is the real answer; the

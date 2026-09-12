@@ -35,17 +35,30 @@ vi.mock('@/features/auth/session-context', async (importOriginal) => {
   };
 });
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>();
-  return {
-    ...actual,
-    api: { ...actual.api, get: vi.fn(), put: vi.fn() },
-  };
-});
-
-import { api } from '@/lib/api';
+/*
+ * `fetch` is mocked here, NOT `@/lib/api`.
+ *
+ * The bug this file failed to catch lived between the two: `api.get` unwraps
+ * the `{ data }` envelope itself, the page unwrapped it a second time, and the
+ * result was undefined against a request that had returned 200. Mocking the
+ * api client hid that completely - the test handed the page whatever shape the
+ * test author believed in, so the test and the bug agreed with each other and
+ * both were wrong.
+ *
+ * Feeding raw envelopes to the real client is the only version of this test
+ * that can fail when the contract is misread.
+ */
 import { ConfirmProvider } from '@/components/feedback/confirm-dialog';
 import { LoanPolicyPage, changedFields, toFormValues } from './loan-policy-page';
+
+/** Exactly what the API sends, byte for byte. */
+function respond(body: unknown, status = 200) {
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    text: () => Promise.resolve(JSON.stringify(body)),
+  } as Response);
+}
 
 const POLICY = {
   id: 'pol-1',
@@ -73,17 +86,23 @@ function renderPage() {
   );
 }
 
+let fetchMock: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
   permissions = new Set<string>();
-  vi.mocked(api.get).mockImplementation((url: string) =>
-    url.includes('history')
-      ? Promise.resolve({ data: [] } as never)
-      : Promise.resolve({ data: view(true) } as never),
+  // The real server envelopes: `{ data }` for the policy, `{ data, meta }` for
+  // the paginated history.
+  fetchMock = vi.fn((url: string) =>
+    String(url).includes('history')
+      ? respond({ data: [], meta: { page: 1, limit: 20, total: 0, pages: 1 } })
+      : respond({ data: view(true) }),
   );
+  vi.stubGlobal('fetch', fetchMock);
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -121,10 +140,10 @@ describe('the policy form', () => {
 
   it('gives a reader without manage a form with no save button', async () => {
     permissions = new Set([PERMISSIONS.LOAN_POLICY_READ]);
-    vi.mocked(api.get).mockImplementation((url: string) =>
-      url.includes('history')
-        ? Promise.resolve({ data: [] } as never)
-        : Promise.resolve({ data: view(false) } as never),
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes('history')
+        ? respond({ data: [], meta: { page: 1, limit: 20, total: 0, pages: 1 } })
+        : respond({ data: view(false) }),
     );
     renderPage();
 

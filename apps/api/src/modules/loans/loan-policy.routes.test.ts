@@ -160,7 +160,19 @@ beforeEach(() => {
   vi.clearAllMocks();
 
   db.company.findUniqueOrThrow.mockResolvedValue({ currency: 'PKR' });
-  db.loanPolicy.findFirst.mockResolvedValue(policyRow());
+  /*
+   * Discriminates the way the real queries do.
+   *
+   * `currentLoanPolicy` asks for `effectiveFrom <= now` and
+   * `scheduledLoanPolicy` asks for `> now`; a single mockResolvedValue answers
+   * both and invents a scheduled version that does not exist. Reading the
+   * clause keeps the fixture honest about which question is being asked.
+   */
+  db.loanPolicy.findFirst.mockImplementation((args: { where: { effectiveFrom?: unknown } }) => {
+    const clause = args.where.effectiveFrom as { gt?: Date; lte?: Date } | undefined;
+    if (clause?.gt) return Promise.resolve(null);
+    return Promise.resolve(policyRow());
+  });
   db.loanPolicy.upsert.mockResolvedValue(policyRow());
   db.loanPolicy.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
     Promise.resolve({ ...policyRow(), id: 'pol-2', ...data }),
@@ -246,6 +258,77 @@ describe('who may see and change the policy', () => {
     const { data } = response.json();
     expect(data.canManage).toBe(true);
     expect(data.policy.maxSalaryMultiplier).toBe(1);
+  });
+
+  it('answers in the envelope the web client expects, with every field the view needs', async () => {
+    app = await appAs(SUPER_ADMIN);
+
+    const response = await app.inject({ method: 'GET', url: '/loans/policy' });
+    const body = response.json();
+
+    /*
+     * The top level is `{ data }` and nothing else.
+     *
+     * `api.get` on the web side unwraps exactly this one level, so a `meta` or
+     * `totals` sibling appearing here later would silently strip itself on the
+     * way to the screen. Asserting the envelope keeps the two halves of the
+     * contract written down in one place.
+     */
+    expect(Object.keys(body)).toEqual(['data']);
+
+    // Every field LoanPolicyView declares, present and of the right kind.
+    expect(Object.keys(body.data).sort()).toEqual(['canManage', 'currency', 'policy', 'scheduled']);
+    expect(typeof body.data.canManage).toBe('boolean');
+    expect(typeof body.data.currency).toBe('string');
+    expect(body.data.scheduled).toBeNull();
+
+    const policy = body.data.policy;
+    for (const field of [
+      'id',
+      'maxSalaryMultiplier',
+      'minEmploymentMonths',
+      'allowProbation',
+      'minAttendancePercent',
+      'maxUnapprovedAbsences',
+      'maxLateDays',
+      'maxMissingPunches',
+      'evaluationMonths',
+      'maxMonthlyDeductionPercent',
+      'oneActiveLoan',
+      'onePendingLoan',
+      'blockTerminated',
+      'blockResigned',
+      'minSalary',
+      'maxTenureMonths',
+      'maxInstallments',
+      'allowHrOverride',
+      'requireOverrideReason',
+      'effectiveFrom',
+      'createdAt',
+      'createdByName',
+      'isCurrent',
+    ]) {
+      expect(policy, `policy.${field} is missing`).toHaveProperty(field);
+    }
+
+    // Decimals come back as numbers, not Prisma Decimal objects or strings -
+    // the form binds them to number inputs.
+    expect(typeof policy.maxSalaryMultiplier).toBe('number');
+    expect(typeof policy.minAttendancePercent).toBe('number');
+    expect(typeof policy.minSalary).toBe('number');
+  });
+
+  it('answers the history in a paginated envelope, not a bare array', async () => {
+    app = await appAs(SUPER_ADMIN);
+
+    const response = await app.inject({ method: 'GET', url: '/loans/policy/history' });
+    const body = response.json();
+
+    // `data` has a `meta` sibling here, which is why the web side reads this
+    // one with `getPage` rather than `get`.
+    expect(Object.keys(body).sort()).toEqual(['data', 'meta']);
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.meta).toMatchObject({ page: 1, limit: expect.any(Number) });
   });
 
   it('lets HR read it but not change it', async () => {

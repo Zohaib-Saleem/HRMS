@@ -35,10 +35,9 @@ export function useLoanEligibility(input?: {
 
   return useQuery({
     queryKey: ['loans', 'eligibility', qs],
-    queryFn: () =>
-      api
-        .get<{ data: LoanEligibilityResult }>(`/loans/eligibility${qs ? `?${qs}` : ''}`)
-        .then((r) => r.data),
+    // `api.get` unwraps the `{ data }` envelope itself; the generic is the
+    // value inside it, not the envelope around it.
+    queryFn: () => api.get<LoanEligibilityResult>(`/loans/eligibility${qs ? `?${qs}` : ''}`),
     enabled: input?.enabled ?? true,
     placeholderData: keepPreviousData,
     // Eligibility moves with attendance and with other people's decisions, so
