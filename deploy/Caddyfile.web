@@ -1,19 +1,63 @@
 # Internal static file server for the HRMS SPA.
 #
 # Listens on plain HTTP on the container network only - TLS and the public
-# hostname are handled by the edge Caddy. `try_files` sends unknown paths to
-# index.html because client-side routing owns them; without it a refresh on
-# /employees would 404.
+# hostname are handled by the edge Caddy.
+#
+# Two routes, and they are deliberately separate `handle` blocks rather than one
+# rule with exceptions, because the two halves of a hashed-asset deploy need
+# opposite behaviour and mixing them caused both of the bugs this replaces:
+#
+#   /assets/*  immutable, and served ONLY if the file exists. A request for a
+#              hashed filename that this build does not contain is a stale
+#              client, and the honest answer is 404.
+#   everything the SPA document, revalidated every time, because client-side
+#   else       routing owns the path and only index.html knows which bundle is
+#              current.
 :80 {
 	root * /srv
 	encode zstd gzip
 
-	# Hashed asset filenames are immutable; index.html must never be cached or
-	# a deploy leaves browsers pinned to a stale bundle.
+	# Hashed filenames are content-addressed: the name changes when the bytes
+	# do, so the file behind one can be cached forever.
+	#
+	# `handle` and not `try_files`: the SPA fallback must NOT apply here. With
+	# it, a browser holding a stale index.html asks for a chunk this build
+	# deleted and gets index.html back - HTML, with a 200, where a script was
+	# expected - and the page dies on a module parse error that names neither
+	# the cache nor the deploy. A 404 says what actually happened.
 	@assets path /assets/*
-	header @assets Cache-Control "public, max-age=31536000, immutable"
-	header /index.html Cache-Control "no-cache"
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
 
-	try_files {path} /index.html
-	file_server
+	# The document, however it was asked for.
+	#
+	# `no-cache` means revalidate, not "never store": the browser still gets a
+	# 304 when nothing changed. It has to apply to the REQUEST path rather than
+	# to /index.html, because everyone arrives at `/` or at a client-side route
+	# like /settings/loan-policy, and `try_files` rewrites to index.html
+	# internally - after matching. A rule written against /index.html therefore
+	# matches almost nothing anybody types, which left `/` with no cache header
+	# at all and browsers pinned to a bundle two deploys old.
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	# An error must never inherit the immutable header above.
+	#
+	# That header is set before the file is looked up, so a 404 would otherwise
+	# be served as cacheable for a year - and a browser that asked for a chunk
+	# during the seconds a deploy was swapping files would remember the miss
+	# until 2027. `no-store` keeps a transient failure transient.
+	handle_errors {
+		# `>` replaces rather than appends: a plain `header` line here would sit
+		# alongside the immutable value already set, and a delete-then-set pair
+		# resolves with the delete winning, leaving the response with no
+		# cache-control at all.
+		header >Cache-Control "no-store"
+		respond "{err.status_code} {err.status_text}" {err.status_code}
+	}
 }
