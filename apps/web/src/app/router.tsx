@@ -119,6 +119,10 @@ const AttendanceCorrectionsPage = lazyPage(
   () => import('@/features/time/attendance-corrections-page'),
   'AttendanceCorrectionsPage',
 );
+const MyCorrectionsPage = lazyPage(
+  () => import('@/features/time/my-corrections'),
+  'MyCorrectionsPage',
+);
 const AttendanceReportsPage = lazyPage(
   () => import('@/features/time/attendance-reports-page'),
   'AttendanceReportsPage',
@@ -295,6 +299,11 @@ export function AppRoutes() {
           {/* Readable with attendance.read; the correction form itself needs
               attendance.manage, and the endpoint enforces that regardless. */}
           <Route path="attendance/corrections" element={<AttendanceCorrectionsPage />} />
+          {/* Self-service. attendance.read is the whole gate, because every
+              request behind it is bounded by the caller's own employee record:
+              the list is scoped server-side and the form carries no employee
+              id at all. */}
+          <Route path="attendance/my-corrections" element={<MyCorrectionsPage />} />
           <Route path="attendance/reports" element={<AttendanceReportsPage />} />
         </Route>
 

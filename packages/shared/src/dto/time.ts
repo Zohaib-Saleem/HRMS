@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from './common.js';
+import { APPROVAL_STATUSES, type ApprovalStatus } from './approvals.js';
 
 /** Notifications, attendance, shifts and timesheets. */
 
@@ -213,16 +214,140 @@ export const attendanceUpsertSchema = z.object({
   notes: z.string().trim().max(500).optional().nullable(),
 });
 
-export const regularizationCreateSchema = z.object({
-  attendanceDate: isoDate,
-  requestedCheckInAt: z.string().trim().optional().nullable(),
-  requestedCheckOutAt: z.string().trim().optional().nullable(),
-  requestedStatus: z.enum(ATTENDANCE_STATUSES).optional().nullable(),
-  reason: z.string().trim().min(3, 'Give a reason for the correction.').max(1000),
+/**
+ * What the employee says went wrong with the day.
+ *
+ * Recorded alongside the times rather than inferred from them: "I forgot to
+ * scan out" and "the terminal recorded the wrong time" both arrive as a
+ * requested check-out, and a reviewer deciding between them should be reading
+ * the complaint the person actually made.
+ */
+export const ATTENDANCE_CORRECTION_ISSUES = [
+  'MISSING_PUNCH',
+  'INCORRECT_CHECK_IN',
+  'INCORRECT_CHECK_OUT',
+  'OTHER',
+] as const;
+
+export type AttendanceCorrectionIssue = (typeof ATTENDANCE_CORRECTION_ISSUES)[number];
+
+export const ATTENDANCE_CORRECTION_ISSUE_LABELS: Record<AttendanceCorrectionIssue, string> = {
+  MISSING_PUNCH: 'Missing punch',
+  INCORRECT_CHECK_IN: 'Incorrect check-in',
+  INCORRECT_CHECK_OUT: 'Incorrect check-out',
+  OTHER: 'Other attendance issue',
+};
+
+export const ATTENDANCE_CORRECTION_ISSUE_HINTS: Record<AttendanceCorrectionIssue, string> = {
+  MISSING_PUNCH: 'A punch never reached the system. Give the time or times that are missing.',
+  INCORRECT_CHECK_IN: 'The recorded arrival is wrong. Give the time you actually arrived.',
+  INCORRECT_CHECK_OUT: 'The recorded departure is wrong. Give the time you actually left.',
+  OTHER: 'Anything else about the day. Explain it in the reason.',
+};
+
+/** Which time fields a given issue expects the employee to fill in. */
+export const ATTENDANCE_CORRECTION_ISSUE_FIELDS: Record<
+  AttendanceCorrectionIssue,
+  { checkIn: boolean; checkOut: boolean }
+> = {
+  MISSING_PUNCH: { checkIn: true, checkOut: true },
+  INCORRECT_CHECK_IN: { checkIn: true, checkOut: false },
+  INCORRECT_CHECK_OUT: { checkIn: false, checkOut: true },
+  OTHER: { checkIn: true, checkOut: true },
+};
+
+/**
+ * A requested time.
+ *
+ * Two accepted shapes, and the difference matters. `HH:mm` is a wall-clock
+ * reading the server resolves against the attendance date in the COMPANY's
+ * timezone - which is the only interpretation that survives an employee filing
+ * a correction from another country. A full ISO instant is still accepted so
+ * anything already integrated against this endpoint keeps working.
+ */
+const requestedTime = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
+  z
+    .string()
+    .trim()
+    .refine(
+      (v) => /^([01]\d|2[0-3]):[0-5]\d$/.test(v) || !Number.isNaN(Date.parse(v)),
+      'Enter a time as HH:mm.',
+    )
+    .nullish(),
+);
+
+export const regularizationCreateSchema = z
+  .object({
+    attendanceDate: isoDate,
+    issueType: z.enum(ATTENDANCE_CORRECTION_ISSUES).optional().nullable(),
+    requestedCheckInAt: requestedTime,
+    requestedCheckOutAt: requestedTime,
+    requestedStatus: z.preprocess(
+      (v) => (v === '' || v === undefined ? null : v),
+      z.enum(ATTENDANCE_STATUSES).nullable(),
+    ),
+    reason: z.string().trim().min(3, 'Give a reason for the correction.').max(1000),
+  })
+  /*
+   * A request that asks for nothing is not a request.
+   *
+   * Without this a "missing punch" with both time fields left blank would be
+   * filed, routed to a manager, approved, and then change precisely nothing -
+   * `applyRegularization` falls back to the stored times when none were asked
+   * for. OTHER is exempt because its whole point is a problem the times cannot
+   * express; the reason carries it, and an approver reads it.
+   */
+  .superRefine((value, ctx) => {
+    if (value.issueType === 'OTHER' || value.issueType === null || value.issueType === undefined) {
+      return;
+    }
+    const fields = ATTENDANCE_CORRECTION_ISSUE_FIELDS[value.issueType];
+    const gaveIn = fields.checkIn && Boolean(value.requestedCheckInAt);
+    const gaveOut = fields.checkOut && Boolean(value.requestedCheckOutAt);
+    if (gaveIn || gaveOut || value.requestedStatus) return;
+
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [fields.checkIn ? 'requestedCheckInAt' : 'requestedCheckOutAt'],
+      message: 'Give the time you are asking for, or choose "Other attendance issue".',
+    });
+  });
+
+/** Filters for the correction request list. `mine` is the employee's own. */
+export const regularizationQuerySchema = paginationQuerySchema.extend({
+  employeeId: z.string().trim().max(64).optional(),
+  status: z.enum(APPROVAL_STATUSES).optional(),
+  view: z.enum(['all', 'mine']).default('all'),
 });
 
 export type AttendanceUpsertInput = z.infer<typeof attendanceUpsertSchema>;
 export type RegularizationCreateInput = z.infer<typeof regularizationCreateSchema>;
+
+/**
+ * One correction request as the API reports it.
+ *
+ * Carries the decision as well as the request, so an employee looking at
+ * "rejected" can see who said so and why without opening the approvals screen.
+ */
+export interface RegularizationRecord {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  attendanceDate: string;
+  issueType: AttendanceCorrectionIssue | null;
+  requestedCheckInAt: string | null;
+  requestedCheckOutAt: string | null;
+  requestedStatus: AttendanceStatus | null;
+  reason: string;
+  status: ApprovalStatus;
+  approvalRequestId: string | null;
+  /** The decision, when one has been made. */
+  decidedAt: string | null;
+  reviewerName: string | null;
+  reviewerComment: string | null;
+  createdAt: string;
+}
 
 export interface AttendanceRecordItem {
   id: string;

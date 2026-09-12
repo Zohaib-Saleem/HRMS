@@ -16,6 +16,7 @@ import {
   Fingerprint,
   LayoutDashboard,
   LifeBuoy,
+  ClipboardPen,
   PencilLine,
   Receipt,
   Settings,
@@ -116,11 +117,25 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
-        // Readable by anyone who may read attendance; the correction form
-        // inside needs attendance.manage, and the endpoint is the real gate.
-        label: 'Corrections',
-        to: '/attendance/corrections',
+        // Self-service, and separate from the correction CENTRE below on
+        // purpose: this one answers "my Tuesday is wrong", that one answers
+        // "somebody's Tuesday is wrong". Everything behind this entry is bound
+        // to the caller's own employee record by the server.
+        label: 'My corrections',
+        to: '/attendance/my-corrections',
         icon: PencilLine,
+        permission: PERMISSIONS.ATTENDANCE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // The HR side of the same module, and named so it is tellable apart
+        // from the self-service entry above. Readable by anyone who may read
+        // attendance; the correction form inside needs attendance.manage, and
+        // the endpoint is the real gate.
+        label: 'Correction centre',
+        to: '/attendance/corrections',
+        icon: ClipboardPen,
         permission: PERMISSIONS.ATTENDANCE_READ,
         status: 'ready',
         matchPrefix: true,
@@ -271,7 +286,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/approvals': 'Approvals',
   '/attendance': 'Attendance',
   '/attendance/team': 'Team attendance',
-  '/attendance/corrections': 'Attendance corrections',
+  '/attendance/corrections': 'Attendance correction centre',
+  '/attendance/my-corrections': 'My attendance corrections',
   '/attendance/reports': 'Attendance reports',
   '/attendance/devices': 'Devices',
   '/attendance/punches': 'Device punches',

@@ -959,6 +959,22 @@ enum AttendanceFlag {
   MANUAL
 }
 
+/// What an employee says went wrong with a day they are asking to have
+/// corrected.
+///
+/// Kept beside the requested times rather than inferred from them: "I forgot
+/// to scan out" and "the terminal wrote the wrong time" both arrive as a
+/// requested check-out, and the reviewer deciding between them should be
+/// reading the complaint that was actually made.
+enum AttendanceCorrectionIssue {
+  /// A punch never reached the system at all.
+  MISSING_PUNCH
+  INCORRECT_CHECK_IN
+  INCORRECT_CHECK_OUT
+  /// Anything the times cannot express. The reason carries it.
+  OTHER
+}
+
 enum TimesheetStatus {
   DRAFT
   SUBMITTED
@@ -1192,6 +1208,10 @@ model AttendanceRegularizationRequest {
   employeeId     String
   attendanceDate DateTime @db.Date
 
+  /// What the employee says is wrong. Null on every row raised before the
+  /// field existed, and on anything filed without one - it is a description of
+  /// the complaint, never an input to how the correction is applied.
+  issueType           AttendanceCorrectionIssue?
   requestedCheckInAt  DateTime?
   requestedCheckOutAt DateTime?
   requestedStatus     AttendanceStatus?

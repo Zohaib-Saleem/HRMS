@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { AttendanceToday } from '@/features/time/attendance-today';
+import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
 import { useEmployeeDashboard, type LeaveRequestView } from './employee-dashboard-data';
 
 /**
@@ -157,6 +158,14 @@ export function EmployeeDashboard() {
           hint={totals ? `${totals.upcoming} day(s) still to come` : undefined}
           loading={loading}
         />
+      </div>
+
+      {/* Self-service, above the reference cards below: a correction is
+          something an employee comes here to DO, rather than to read. The
+          card renders itself away when the permission behind it is absent, so
+          a narrow role gets a shorter dashboard rather than a broken one. */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <MyCorrectionsCard />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">

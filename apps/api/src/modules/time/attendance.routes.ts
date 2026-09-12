@@ -12,7 +12,9 @@ import {
   type PayPeriodRow,
   type PayPeriodSummary,
   type TeamAttendanceRow,
+  type RegularizationRecord,
   type TeamAttendanceSummaryRow,
+  ATTENDANCE_CORRECTION_ISSUE_LABELS,
   attendanceQuerySchema,
   attendanceSummaryQuerySchema,
   attendanceUpsertSchema,
@@ -21,6 +23,7 @@ import {
   markAbsencesSchema,
   payPeriodQuerySchema,
   regularizationCreateSchema,
+  regularizationQuerySchema,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
@@ -30,12 +33,14 @@ import { ConflictError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import {
+  assertApproverChainUsable,
   createApprovalRequest,
+  notifyApprover,
   resolveDefaultApprovers,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
 import { summariseByTeam, teamFilterClause } from './team-attendance.service.js';
-import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
+import { clockBoundary, dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import {
   assertCheckInIpAllowed,
   assertCheckInLocationAllowed,
@@ -828,12 +833,35 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
 
   // --- regularisation requests --------------------------------------------
 
+  /**
+   * Correction requests.
+   *
+   * Scope-filtered exactly like every other employee-shaped list, so a member
+   * of staff with an OWN scope sees their own and nothing else without a
+   * second permission, and `?employeeId=` cannot widen that - it is intersected
+   * with the scope filter and asserted separately, so a guessed id returns 403
+   * rather than somebody else's Tuesday.
+   */
   app.get('/regularizations', async (request, reply) => {
     const auth = requireAuthContext(request);
-    const query = parseOrThrow(attendanceQuerySchema, request.query);
+    const query = parseOrThrow(regularizationQuerySchema, request.query);
 
     const scopeFilter = await employeeScopeFilter(auth);
     if (scopeFilter === null) {
+      return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
+    }
+    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+
+    // `mine` is the self-service view. Resolved from the session, never from
+    // the query string, which is what makes it a filter and not a lookup.
+    const self =
+      query.view === 'mine'
+        ? await prisma.employee.findFirst({
+            where: { companyId: auth.companyId, userId: auth.userId },
+            select: { id: true },
+          })
+        : null;
+    if (query.view === 'mine' && !self) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
 
@@ -841,7 +869,9 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       AND: [
         { companyId: auth.companyId },
         { employee: scopeFilter },
+        self ? { employeeId: self.id } : {},
         query.employeeId ? { employeeId: query.employeeId } : {},
+        query.status ? { status: query.status } : {},
       ],
     };
 
@@ -859,31 +889,94 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       }),
     ]);
 
-    return reply.send({
-      data: rows.map((row) => ({
+    /*
+     * Who decided, and what they said.
+     *
+     * Read from the approval engine rather than mirrored onto the correction
+     * row: the engine already owns the decision, and a second copy of it here
+     * is a second copy that can go stale. One query for the page rather than
+     * one per row.
+     */
+    const approvalIds = rows.map((row) => row.approvalRequestId).filter((id): id is string => Boolean(id));
+    const approvals = approvalIds.length
+      ? await prisma.approvalRequest.findMany({
+          where: { id: { in: approvalIds }, companyId: auth.companyId },
+          select: {
+            id: true,
+            decidedAt: true,
+            steps: {
+              where: { status: { in: ['APPROVED', 'REJECTED'] } },
+              orderBy: { stepOrder: 'desc' },
+              take: 1,
+              select: {
+                comment: true,
+                approverEmployee: {
+                  select: { firstName: true, lastName: true, displayName: true },
+                },
+              },
+            },
+          },
+        })
+      : [];
+    const decisions = new Map(approvals.map((a) => [a.id, a]));
+
+    const data: RegularizationRecord[] = rows.map((row) => {
+      const approval = row.approvalRequestId ? decisions.get(row.approvalRequestId) : undefined;
+      const step = approval?.steps[0];
+      return {
         id: row.id,
         employeeId: row.employeeId,
         employeeName: displayName(row.employee),
         attendanceDate: row.attendanceDate.toISOString().slice(0, 10),
+        issueType: row.issueType,
+        requestedCheckInAt: row.requestedCheckInAt?.toISOString() ?? null,
+        requestedCheckOutAt: row.requestedCheckOutAt?.toISOString() ?? null,
         requestedStatus: row.requestedStatus,
         reason: row.reason,
         status: row.status,
         approvalRequestId: row.approvalRequestId,
+        decidedAt: approval?.decidedAt?.toISOString() ?? null,
+        reviewerName: step?.approverEmployee ? displayName(step.approverEmployee) : null,
+        reviewerComment: step?.comment ?? null,
         createdAt: row.createdAt.toISOString(),
-      })),
-      meta: buildMeta(query.page, query.limit, total),
+      };
     });
+
+    return reply.send({ data, meta: buildMeta(query.page, query.limit, total) });
   });
 
   /**
-   * Raise a correction request for your own attendance. Always goes through the
-   * shared approval engine rather than editing the record directly.
+   * Raise a correction request for your own attendance.
+   *
+   * Three things this route deliberately does NOT do:
+   *
+   *  - It does not take an employee id. The subject is `callerEmployeeOrThrow`,
+   *    read from the session, so there is no field in the body an employee
+   *    could change to file a correction against somebody else.
+   *  - It does not touch `attendance_records`. Submitting asks for a change;
+   *    only `applyRegularization`, called by the approval engine once the chain
+   *    has actually approved, writes one.
+   *  - It does not invent an approval chain. `resolveDefaultApprovers` is the
+   *    same manager -> secondary manager -> department head chain leave, shift
+   *    changes and loans all run through.
    */
   app.post('/regularizations', async (request, reply) => {
     const auth = requireAuthContext(request);
     const input = parseOrThrow(regularizationCreateSchema, request.body);
 
     const self = await callerEmployeeOrThrow(auth);
+    const policy = await resolveAttendancePolicy(auth.companyId);
+    const dayKey = input.attendanceDate.slice(0, 10);
+
+    // A day that has not happened cannot have gone wrong yet, and "today" is
+    // the company's today - a correction filed from another timezone must not
+    // be accepted or refused on the strength of where the employee is standing.
+    if (dayKey > todayInZone(policy.timeZone)) {
+      throw new ValidationError({
+        attendanceDate: ['You cannot request a correction for a day that has not happened yet.'],
+      });
+    }
+
     const attendanceDate = toDateOnly(input.attendanceDate);
 
     const duplicate = await prisma.attendanceRegularizationRequest.findFirst({
@@ -894,47 +987,128 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       throw new ConflictError('You already have a pending correction for that date.');
     }
 
-    const created = await prisma.attendanceRegularizationRequest.create({
-      data: {
-        companyId: auth.companyId,
-        employeeId: self.id,
-        attendanceDate,
-        requestedCheckInAt: input.requestedCheckInAt ? new Date(input.requestedCheckInAt) : null,
-        requestedCheckOutAt: input.requestedCheckOutAt ? new Date(input.requestedCheckOutAt) : null,
-        requestedStatus: input.requestedStatus ?? null,
-        reason: input.reason,
-        status: 'PENDING',
-      },
-    });
-
+    /*
+     * The chain is resolved and checked BEFORE anything is written.
+     *
+     * The other order leaves an orphan: the request row lands, the chain turns
+     * out to be empty or to contain the requester, `createApprovalRequest`
+     * throws, and the employee is left with a PENDING correction nobody can
+     * ever decide. The loans module fixed this same ordering; this is the last
+     * caller that had it the wrong way round.
+     */
     const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
-    const approval = await createApprovalRequest({
-      companyId: auth.companyId,
-      subjectType: 'ATTENDANCE_REGULARIZATION',
-      subjectId: created.id,
-      requesterEmployeeId: self.id,
-      requesterUserId: auth.userId,
-      title: `Attendance correction for ${input.attendanceDate}`,
-      summary: input.reason,
-      approverEmployeeIds: approvers,
-      request,
+    assertApproverChainUsable(approvers, self.id);
+
+    const requestedCheckInAt = resolveRequestedTime(
+      input.requestedCheckInAt,
+      dayKey,
+      policy.timeZone,
+      'requestedCheckInAt',
+    );
+    const requestedCheckOutAt = resolveRequestedTime(
+      input.requestedCheckOutAt,
+      dayKey,
+      policy.timeZone,
+      'requestedCheckOutAt',
+    );
+
+    if (
+      requestedCheckInAt &&
+      requestedCheckOutAt &&
+      requestedCheckOutAt.getTime() <= requestedCheckInAt.getTime()
+    ) {
+      throw new ValidationError({
+        requestedCheckOutAt: ['The check-out time has to be after the check-in time.'],
+      });
+    }
+
+    const { created, approval } = await prisma.$transaction(async (tx) => {
+      const created = await tx.attendanceRegularizationRequest.create({
+        data: {
+          companyId: auth.companyId,
+          employeeId: self.id,
+          attendanceDate,
+          issueType: input.issueType ?? null,
+          requestedCheckInAt,
+          requestedCheckOutAt,
+          requestedStatus: input.requestedStatus ?? null,
+          reason: input.reason,
+          status: 'PENDING',
+        },
+      });
+
+      const approval = await createApprovalRequest({
+        companyId: auth.companyId,
+        subjectType: 'ATTENDANCE_REGULARIZATION',
+        subjectId: created.id,
+        requesterEmployeeId: self.id,
+        requesterUserId: auth.userId,
+        title: `Attendance correction for ${dayKey}`,
+        summary: input.issueType
+          ? `${ATTENDANCE_CORRECTION_ISSUE_LABELS[input.issueType]} - ${input.reason}`
+          : input.reason,
+        approverEmployeeIds: approvers,
+        request,
+        client: tx,
+        deferAudit: true,
+      });
+
+      await tx.attendanceRegularizationRequest.update({
+        where: { id: created.id },
+        data: { approvalRequestId: approval.id },
+      });
+
+      return { created, approval };
     });
 
-    await prisma.attendanceRegularizationRequest.update({
-      where: { id: created.id },
-      data: { approvalRequestId: approval.id },
-    });
-
+    // Both side effects wait for the commit: an approver must never be told
+    // about a request a rolled-back transaction never filed.
     await recordAudit({
       companyId: auth.companyId,
       actorId: auth.userId,
       action: 'attendance.regularization.create',
       entityType: 'AttendanceRegularizationRequest',
       entityId: created.id,
-      summary: `Requested attendance correction for ${input.attendanceDate}`,
+      summary: `Requested attendance correction for ${dayKey}`,
+      after: {
+        issueType: input.issueType ?? null,
+        requestedCheckInAt: requestedCheckInAt?.toISOString() ?? null,
+        requestedCheckOutAt: requestedCheckOutAt?.toISOString() ?? null,
+        requestedStatus: input.requestedStatus ?? null,
+      },
       request,
     });
+    await notifyApprover(approval.id, 1, request);
 
     return reply.status(201).send({ data: { id: created.id, approvalRequestId: approval.id } });
   });
 };
+
+/**
+ * A requested time, as an instant.
+ *
+ * `HH:mm` is a wall-clock reading and is resolved against the attendance date
+ * in the COMPANY's timezone, which is the only reading that stays right when
+ * the employee files it from somewhere else. A full ISO instant is passed
+ * through, for callers that were already sending one.
+ */
+function resolveRequestedTime(
+  value: string | null | undefined,
+  dayKey: string,
+  timeZone: string,
+  field: string,
+): Date | null {
+  if (value === null || value === undefined || value === '') return null;
+
+  if (/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    const instant = clockBoundary(dayKey, value, timeZone);
+    if (!instant) throw new ValidationError({ [field]: ['Enter a time as HH:mm.'] });
+    return instant;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new ValidationError({ [field]: ['Enter a valid time.'] });
+  }
+  return parsed;
+}

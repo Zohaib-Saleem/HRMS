@@ -1,20 +1,14 @@
 import * as React from 'react';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { toast } from 'sonner';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { CalendarClock, Plus, CircleAlert } from 'lucide-react';
 import {
-  ATTENDANCE_STATUSES,
   ATTENDANCE_STATUS_LABELS,
   DERIVED_ATTENDANCE_STATUS_LABELS,
   type AttendanceRecordItem,
   type AttendanceStatus,
   type DerivedAttendanceStatus,
-  type RegularizationCreateInput,
-  regularizationCreateSchema,
 } from '@hrms/shared';
-import { ApiError, api, errorMessage } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useLookups } from '@/lib/lookups';
 import { useDebounced } from '@/lib/use-debounced';
 import { formatDate } from '@/lib/utils';
@@ -23,22 +17,13 @@ import { PageHeader } from '@/components/layout/page-header';
 import { HelpLink } from '@/features/help/help-link';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { ListToolbar } from '@/components/ui/list-toolbar';
 import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { AttendanceToday } from './attendance-today';
+import { CorrectionRequestDialog } from './correction-request-dialog';
 import { AttendanceCalendarView, AttendanceChartView } from './attendance-analytics';
 import {
   AttendanceControlBar,
@@ -177,7 +162,7 @@ function AttendancePageInner() {
         <AttendanceTableView month={month} filters={filters} onFiltersChange={updateFilters} />
       )}
 
-      <RegularizationDrawer open={requesting} onClose={() => setRequesting(false)} />
+      <CorrectionRequestDialog open={requesting} onClose={() => setRequesting(false)} />
     </>
   );
 }
@@ -360,84 +345,6 @@ function AttendanceTableView({
         </>
       )}
     </Card>
-  );
-}
-
-function RegularizationDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const queryClient = useQueryClient();
-
-  const { register, handleSubmit, formState, reset, setError } = useForm<RegularizationCreateInput>({
-    resolver: zodResolver(regularizationCreateSchema),
-    values: {
-      attendanceDate: new Date().toISOString().slice(0, 10),
-      requestedCheckInAt: '',
-      requestedCheckOutAt: '',
-      requestedStatus: null,
-      reason: '',
-    },
-  });
-
-  const mutation = useMutation({
-    mutationFn: (values: RegularizationCreateInput) =>
-      api.post('/attendance/regularizations', values),
-    onSuccess: async () => {
-      toast.success('Correction requested. Your manager has been notified.');
-      await queryClient.invalidateQueries({ queryKey: ['approvals'] });
-      await queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      reset();
-      onClose();
-    },
-    onError: (error: unknown) => {
-      if (error instanceof ApiError && error.isValidation && error.details) {
-        for (const [field, messages] of Object.entries(error.details)) {
-          setError(field as keyof RegularizationCreateInput, { message: messages[0] });
-        }
-        return;
-      }
-      toast.error(errorMessage(error));
-    },
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => (next ? null : onClose())}>
-      <DialogContent variant="drawer" size="md">
-        <form onSubmit={handleSubmit((values) => mutation.mutate(values))} className="contents">
-          <DialogHeader>
-            <DialogTitle>Request an attendance correction</DialogTitle>
-            <DialogDescription>
-              This is routed to your reporting manager for approval. Attendance history is never
-              edited directly.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogBody className="space-y-4">
-            <FormField label="Date" htmlFor="reg-date" error={formState.errors.attendanceDate?.message} required>
-              <Input type="date" {...register('attendanceDate')} autoFocus />
-            </FormField>
-            <FormField label="Correct status to" htmlFor="reg-status" error={formState.errors.requestedStatus?.message}>
-              <NativeSelect {...register('requestedStatus')}>
-                <option value="">No change</option>
-                {ATTENDANCE_STATUSES.map((s) => (
-                  <option key={s} value={s}>{ATTENDANCE_STATUS_LABELS[s]}</option>
-                ))}
-              </NativeSelect>
-            </FormField>
-            <FormField label="Reason" htmlFor="reg-reason" error={formState.errors.reason?.message} required>
-              <Textarea rows={4} {...register('reason')} placeholder="Explain what should be corrected and why." />
-            </FormField>
-          </DialogBody>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" loading={mutation.isPending}>
-              Submit request
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }
 
