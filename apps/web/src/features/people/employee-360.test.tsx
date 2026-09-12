@@ -138,7 +138,15 @@ const SUMMARY: EmployeeProfileSummary = {
     overtimeMinutes: 95,
     attendancePercentage: 70,
   },
-  leave: { year: 2026, entitlementDays: 20, usedDays: 4, pendingDays: 1, availableDays: 10 },
+  leave: {
+    year: 2026,
+    entitlementDays: 20,
+    usedDays: 4,
+    adjustedDays: 2,
+    consumedDays: 6,
+    pendingDays: 1,
+    availableDays: 10,
+  },
   loans: { activeCount: 1, outstandingAmount: 45000, monthlyDeduction: 5000, currency: 'PKR' },
   salary: {
     amount: 120000,

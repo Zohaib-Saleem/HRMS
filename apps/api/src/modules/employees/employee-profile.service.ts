@@ -2,7 +2,7 @@ import { PERMISSIONS, type EmployeeProfileSummary, type Permission } from '@hrms
 import type { AuthContext } from '../../auth/session.js';
 import { prisma } from '../../core/db.js';
 import { deriveRange, tallyDerived } from '../time/attendance.service.js';
-import { balancesForEmployee } from '../leave/leave.service.js';
+import { balancesForEmployee, foldPaidBalances } from '../leave/leave.service.js';
 import { loanTotals, toNumber } from '../loans/loans.service.js';
 
 /**
@@ -100,11 +100,13 @@ async function attendanceFor(
 }
 
 /**
- * This year's leave, folded across every active type.
+ * This year's PAID leave, folded across every active type.
  *
  * A single figure on a header card, where the Leave tab breaks the same numbers
- * out per type. Folding is the only arithmetic here; entitlement, accrual, used
- * and available are each decided by the leave service.
+ * out per type. No arithmetic here at all: entitlement, accrual, used and
+ * available are decided by the leave service, and the fold - which excludes
+ * unpaid types - is `foldPaidBalances`, shared with the master report so a
+ * profile and a report cannot disagree about the same person.
  */
 async function leaveFor(
   companyId: string,
@@ -114,16 +116,7 @@ async function leaveFor(
   const year = reference.getUTCFullYear();
   const balances = await balancesForEmployee(companyId, employeeId, year);
 
-  const sum = (pick: (b: (typeof balances)[number]) => number) =>
-    Math.round(balances.reduce((total, b) => total + pick(b), 0) * 100) / 100;
-
-  return {
-    year,
-    entitlementDays: sum((b) => b.annualEntitlementDays),
-    usedDays: sum((b) => b.usedDays),
-    pendingDays: sum((b) => b.pendingDays),
-    availableDays: sum((b) => b.availableDays),
-  };
+  return { year, ...foldPaidBalances(balances) };
 }
 
 /**

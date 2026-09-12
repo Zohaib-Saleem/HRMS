@@ -197,6 +197,62 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
  * Rejects a request that would overlap leave the employee already has.
  * Cancelled and rejected rows are ignored - only live commitments block.
  */
+/**
+ * One person's year, folded to a single set of figures.
+ *
+ * Unpaid leave is excluded, and that is the whole reason this exists. An
+ * unpaid type carries an entitlement so that a request against it can be
+ * bounded and approved, but it is not leave anybody *has* - folding its 30 days
+ * into "remaining" told every employee they had 45 days left when the company's
+ * policy grants 15. Somebody reading that number is asking what they can take
+ * without losing pay.
+ *
+ * Shared by the Employee 360 header card and the Employee Master Report so the
+ * two cannot answer the same question differently. `byType` keeps every type,
+ * paid or not: the breakdown is where an unpaid balance is legible without
+ * being silently added to a total.
+ */
+export function foldPaidBalances(balances: readonly LeaveBalanceView[]): {
+  entitlementDays: number;
+  usedDays: number;
+  adjustedDays: number;
+  consumedDays: number;
+  pendingDays: number;
+  availableDays: number;
+} {
+  const paid = balances.filter((b) => b.isPaid);
+  const sum = (pick: (b: LeaveBalanceView) => number) =>
+    Math.round(paid.reduce((total, b) => total + pick(b), 0) * 100) / 100;
+
+  /**
+   * Days an administrator debited from the balance.
+   *
+   * Only the negative side counts. An adjustment is signed - a credit corrects
+   * a balance upwards and a debit records days taken - and a credit is a grant,
+   * not consumption, so folding both together would let one cancel the other
+   * and report somebody as having taken nothing.
+   */
+  const adjustedDays = sum((b) => Math.max(0, -b.adjustmentDays));
+
+  return {
+    entitlementDays: sum((b) => b.annualEntitlementDays),
+    usedDays: sum((b) => b.usedDays),
+    adjustedDays,
+    /**
+     * Everything this person has actually spent, however it was recorded.
+     *
+     * `usedDays` counts approved requests and nothing else, which is right for
+     * "leave booked through HRMS" and wrong for "leave taken". History imported
+     * from a spreadsheet that carried no dates, types or statuses could not
+     * become requests - it became a balance debit - so a report that showed
+     * only `usedDays` said 0 for people who had taken fifty days.
+     */
+    consumedDays: Math.round((sum((b) => b.usedDays) + adjustedDays) * 100) / 100,
+    pendingDays: sum((b) => b.pendingDays),
+    availableDays: sum((b) => b.availableDays),
+  };
+}
+
 export async function assertNoOverlap(
   employeeId: string,
   start: Date,

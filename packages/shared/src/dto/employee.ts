@@ -465,8 +465,14 @@ export interface EmployeeProfileSummary {
   /** Totalled across every active leave type for the year. */
   leave?: {
     year: number;
+    /** Paid types only - unpaid leave is not leave anybody has. */
     entitlementDays: number;
+    /** Approved leave requests. Excludes history imported as a balance debit. */
     usedDays: number;
+    /** Days an administrator debited from the balance, e.g. imported history. */
+    adjustedDays: number;
+    /** Everything spent, however recorded: `usedDays` + `adjustedDays`. */
+    consumedDays: number;
     pendingDays: number;
     availableDays: number;
   };
