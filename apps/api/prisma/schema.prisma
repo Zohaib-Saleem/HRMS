@@ -336,6 +336,11 @@ model Company {
   loanInstallments  EmployeeLoanInstallment[]
   loanPolicies      LoanPolicy[]
 
+  // --- phase 11 ---
+  medicalPolicies   MedicalPolicy[]
+  medicalDependents MedicalDependent[]
+  medicalClaims     MedicalClaim[]
+
   @@map("companies")
 }
 
@@ -621,6 +626,10 @@ model Employee {
   salaryRevisions   SalaryRevision[]
   loans             EmployeeLoan[]
   loanInstallments  EmployeeLoanInstallment[]
+
+  // --- phase 11: medical ---
+  medicalDependents MedicalDependent[]
+  medicalClaims     MedicalClaim[]
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
@@ -3159,4 +3168,378 @@ model LoanPolicy {
   @@unique([companyId, effectiveFrom])
   @@index([companyId, effectiveFrom])
   @@map("loan_policies")
+}
+
+// -------------------------------------------------- phase 11: medical benefit
+
+/// What a medical claim can be made against.
+///
+/// A fixed list rather than free text: each category carries limits and a
+/// contribution split of its own, so it has to be something a policy can be
+/// configured for. Mirrored exactly by MEDICAL_CATEGORIES in
+/// packages/shared/src/dto/medical-policy.ts.
+enum MedicalCategory {
+  OPD
+  HOSPITALIZATION
+  MEDICINES
+  DIAGNOSTICS
+  DENTAL
+  OPTICAL
+  EMERGENCY
+}
+
+/// Who a dependent is to the employee. Deliberately three values: the policy
+/// configures coverage per relationship, so a relationship it cannot express is
+/// a relationship it cannot cover.
+enum MedicalDependentRelationship {
+  SPOUSE
+  CHILD
+  PARENT
+}
+
+/// Whether a dependent is still to be considered. INACTIVE rather than deleted,
+/// so a dependent who was covered when a claim was paid can still be named by
+/// that claim.
+enum MedicalDependentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// What a supporting document is.
+///
+/// Mirrors the policy's document requirements one for one, so "require a
+/// receipt" can be checked by asking whether a RECEIPT is attached rather than
+/// by reading a free-text label and hoping.
+enum MedicalClaimDocumentType {
+  RECEIPT
+  PRESCRIPTION
+  /// A diagnosis, discharge summary or other treatment document.
+  DIAGNOSIS
+  OTHER
+}
+
+/// Where a medical claim is in its life.
+///
+/// The order below is not the order a claim moves through: a claim is submitted
+/// PENDING and then reaches exactly one of the rest, which is why every other
+/// state is terminal apart from APPROVED and PARTIALLY_APPROVED, and those go
+/// only to PAID.
+enum MedicalClaimStatus {
+  /// Submitted and awaiting a decision. Costs the company nothing and is
+  /// deliberately NOT counted against the annual limit.
+  PENDING
+  APPROVED
+  /// Approved for less than was asked for.
+  PARTIALLY_APPROVED
+  REJECTED
+  /// Withdrawn by the employee before a decision.
+  CANCELLED
+  /// Approved and paid out.
+  PAID
+}
+
+/// The company-wide medical policy, as one immutable version.
+///
+/// Rows are never edited. Saving a change writes a NEW row with its own
+/// `effectiveFrom`, and the policy in force at an instant is the newest row at
+/// or before it. Three things fall out of that, and each is the reason for it:
+///
+///   - A decided claim stays explicable. The rules that governed it are the
+///     version in force when it was submitted, and that version is still on
+///     file, unedited, however often the policy has moved since. Nothing here
+///     ever rewrites a claim.
+///   - The change history needs no second table. It is this table read in
+///     order, with the field-level difference between neighbours derived on
+///     read - so the log cannot disagree with the values it describes.
+///   - A change can be announced before it bites, by giving it a future
+///     `effectiveFrom`.
+///
+/// Every limit, percentage and deadline is configuration. Nothing in the
+/// eligibility engine carries a literal for any of these, and no amount here
+/// carries a currency: amounts are in the company's own currency, read from
+/// `Company.currency` exactly as payroll and loans read it.
+model MedicalPolicy {
+  id        String @id @default(cuid())
+  companyId String
+
+  // --- general --------------------------------------------------------------
+  /// The master switch. Off makes every employee ineligible, whatever the rest
+  /// of the policy says, and is how a company suspends the benefit without
+  /// losing the configuration behind it.
+  enabled     Boolean @default(true)
+  policyName  String  @default("Company Medical Benefit")
+  description String  @default("")
+
+  // --- eligibility ----------------------------------------------------------
+  minEmploymentMonths Int     @default(3)
+  allowProbation      Boolean @default(false)
+  allowPermanent      Boolean @default(true)
+  blockResigned       Boolean @default(true)
+  blockTerminated     Boolean @default(true)
+
+  // --- annual benefit -------------------------------------------------------
+  /// The yearly entitlement per employee, in the company's currency.
+  annualLimitPerEmployee Decimal @default(100000) @db.Decimal(14, 2)
+
+  // --- dependents -----------------------------------------------------------
+  spouseCovered                Boolean @default(true)
+  childrenCovered              Boolean @default(true)
+  maxChildren                  Int     @default(4)
+  parentsCovered               Boolean @default(false)
+  maxParents                   Int     @default(2)
+  /// True: dependents draw on the employee's annual limit. False: they have
+  /// `dependentAnnualLimit` of their own.
+  dependentsShareEmployeeLimit Boolean @default(true)
+  dependentAnnualLimit         Decimal @default(0) @db.Decimal(14, 2)
+
+  // --- document requirements ------------------------------------------------
+  requireReceipt       Boolean @default(true)
+  requirePrescription  Boolean @default(false)
+  requireDiagnosis     Boolean @default(false)
+  requireHospitalName  Boolean @default(true)
+  requireTreatmentDate Boolean @default(true)
+
+  // --- claim rules ----------------------------------------------------------
+  claimSubmissionDeadlineDays Int     @default(30)
+  allowBackdatedClaims        Boolean @default(true)
+  maxBackdatedDays            Int     @default(30)
+  requireHrApproval           Boolean @default(true)
+  allowPartialApproval        Boolean @default(true)
+  allowEmployeeCancelPending  Boolean @default(true)
+  allowHrOverride             Boolean @default(true)
+  requireOverrideReason       Boolean @default(true)
+
+  // --- carry forward --------------------------------------------------------
+  /// Configuration only. Nothing computes a carried balance: the benefit summary
+  /// deliberately does not add one, because a carried figure has to be struck
+  /// from a closed year and this product has no year-end close to strike it at.
+  /// Stored so the intent survives until there is one.
+  allowCarryForward     Boolean @default(false)
+  maxCarryForwardAmount Decimal @default(0) @db.Decimal(14, 2)
+
+  /// When this version starts. The seeded first version uses the epoch so that
+  /// every claim ever made has a policy in force behind it.
+  effectiveFrom DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  /// Null for the version seeded on first read, which nobody authored.
+  createdBy String?
+
+  company    Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  categories MedicalPolicyCategory[]
+  claims     MedicalClaim[]
+
+  /// One version per instant per company. Two administrators saving at once
+  /// cannot produce two policies in force at the same moment - the second
+  /// write fails rather than making "the current policy" a matter of ordering.
+  @@unique([companyId, effectiveFrom])
+  @@index([companyId, effectiveFrom])
+  @@map("medical_policies")
+}
+
+/// One category's settings within one policy version.
+///
+/// A child table rather than thirty-five columns on the policy: the seven
+/// categories carry identical settings, and a column per category per setting
+/// would make adding an eighth a migration instead of a row. Immutable with its
+/// parent - a new policy version writes a new set of these.
+model MedicalPolicyCategory {
+  id       String @id @default(cuid())
+  policyId String
+
+  category MedicalCategory
+  enabled  Boolean         @default(true)
+
+  /// Null: this category has no cap of its own, and only the employee's annual
+  /// limit binds. Distinct from zero, which is a cap of nothing.
+  annualLimit    Decimal? @db.Decimal(14, 2)
+  /// Null: no ceiling on a single claim.
+  maxClaimAmount Decimal? @db.Decimal(14, 2)
+
+  /// How one claim is divided. The two are validated to total 100 before a
+  /// version is written, so no part of a claim belongs to nobody.
+  companyContributionPercent  Decimal @default(100) @db.Decimal(5, 2)
+  employeeContributionPercent Decimal @default(0) @db.Decimal(5, 2)
+
+  policy MedicalPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+
+  @@unique([policyId, category])
+  @@index([policyId])
+  @@map("medical_policy_categories")
+}
+
+/// Somebody an employee's medical benefit may extend to.
+///
+/// Deliberately thin. A name, a relationship, a date of birth and a status is
+/// everything the policy needs to decide coverage; there is no condition, no
+/// diagnosis and no document here, and none is needed to answer "who does this
+/// cover".
+///
+/// Coverage is NOT stored. Whether a dependent is covered is derived on read
+/// from the policy in force - the maximum number of children can change, and a
+/// stored flag would go on describing the policy as it was on the day the
+/// record was created. So a fourth child under a three-child policy is recorded
+/// and is simply not covered, which is also what makes raising the maximum
+/// cover them without anybody re-keying anything.
+model MedicalDependent {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  name         String
+  relationship MedicalDependentRelationship
+  dateOfBirth  DateTime?                    @db.Date
+  gender       Gender?
+  status       MedicalDependentStatus       @default(ACTIVE)
+
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  claims   MedicalClaim[]
+
+  @@index([companyId, employeeId])
+  /// Coverage is decided in registration order, so the order has to be a
+  /// stable, indexed one rather than whatever the planner returns.
+  @@index([employeeId, relationship, createdAt])
+  @@map("medical_dependents")
+}
+
+/// A medical claim.
+///
+/// Two columns carry the weight of this table, and both are deliberate:
+///
+///   - `policyId` pins the version the claim was submitted under. A claim
+///     decided last March stays measured by March's rules however often the
+///     policy has moved since - the limit it was judged against, the category
+///     cap and the contribution split are all read from that version. That is a
+///     column rather than a convention precisely because re-reading the live
+///     policy would silently re-judge a decided claim.
+///   - `companyAmount` is the figure that consumes the annual limit, and it is
+///     stored rather than derived. The employee's own share never drew on their
+///     entitlement, so the benefit summary sums this and not `approvedAmount`.
+///
+/// A claim is decided by a holder of `medical.claim.approve`, NOT through the
+/// ordinary approval chain. That chain runs through the employee's line manager,
+/// and a manager has no business seeing what treatment somebody had. It is the
+/// only place in this product that departs from the house approval pattern.
+model MedicalClaim {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  /// The reference people quote. Generated per company from the same
+  /// highest-so-far rule employee numbers use, and unique within the company.
+  claimNumber String
+
+  /// Null when the claim is for the employee themselves.
+  dependentId String?
+
+  category      MedicalCategory
+  /// When the treatment happened.
+  ///
+  /// Nullable because `requireTreatmentDate` is a policy switch, and a column
+  /// that cannot be empty would make switching it off unimplementable - which
+  /// is the hardcoded-rule failure this module exists to avoid. Every date rule
+  /// (the submission deadline, backdating, which benefit year it lands in) is
+  /// simply not applied when there is no date, and the policy that allowed the
+  /// blank is the one on file against the claim.
+  treatmentDate DateTime?       @db.Date
+  /// Where the treatment happened. Required or not by the policy in force.
+  providerName  String?
+  /// What the claim is for, in the claimant's words. Deliberately free text and
+  /// deliberately optional: nothing here asks anybody to disclose a condition.
+  notes         String?
+
+  requestedAmount Decimal  @db.Decimal(14, 2)
+  /// Set when a decision has been made. Null while PENDING.
+  approvedAmount  Decimal? @db.Decimal(14, 2)
+  /// The split of `approvedAmount`, resolved from the category's contribution
+  /// percentages at the moment of the decision. `companyAmount` is the figure
+  /// that counts against the annual limit - the employee's own share never
+  /// consumed any of their entitlement.
+  companyAmount   Decimal? @db.Decimal(14, 2)
+  employeeAmount  Decimal? @db.Decimal(14, 2)
+
+  status MedicalClaimStatus @default(PENDING)
+
+  /// The policy version in force when the claim was submitted. Never updated:
+  /// re-pointing it at a newer version would silently re-judge a decided claim.
+  policyId String
+
+  submittedAt DateTime  @default(now())
+  decidedAt   DateTime?
+  paidAt      DateTime?
+  cancelledAt DateTime?
+
+  reviewedByUserId String?
+  /// What the reviewer said when deciding. Shown to the claimant.
+  decisionNote     String?
+  rejectionReason  String?
+  /// Why an authorised user allowed a claim the rules refused. Mandatory when
+  /// the policy in force says so.
+  overrideReason   String?
+
+  cancelledByUserId String?
+  /// Who recorded the payment, and against what. Separate from the approver:
+  /// agreeing that money is owed and recording that it went out are two acts,
+  /// the same way a loan is approved by one person and released by another.
+  paidByUserId      String?
+  paymentReference  String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  dependent MedicalDependent?      @relation(fields: [dependentId], references: [id], onDelete: SetNull)
+  policy    MedicalPolicy          @relation(fields: [policyId], references: [id])
+  documents MedicalClaimDocument[]
+
+  /// One claim number per company. The generator reads the highest so far, so
+  /// this index is what actually guarantees uniqueness under a race.
+  @@unique([companyId, claimNumber])
+  @@index([companyId, status])
+  /// The benefit summary's query: this employee's consuming claims in a year.
+  @@index([employeeId, status, treatmentDate])
+  @@index([policyId])
+  @@map("medical_claims")
+}
+
+/// Proof attached to a claim.
+///
+/// This product has no file storage, so what is recorded is the DOCUMENT
+/// rather than the file: its type and the reference printed on it - a receipt
+/// number, an invoice number, a prescription number. That is enough to make the
+/// policy's document requirements enforceable (a claim that must carry a
+/// receipt is refused until a RECEIPT row exists) and enough to reconcile a
+/// payment against paperwork held elsewhere.
+///
+/// When a file store lands, a nullable file reference joins this row. It is
+/// deliberately not here yet: a column nothing can fill is a promise the system
+/// cannot keep.
+model MedicalClaimDocument {
+  id        String @id @default(cuid())
+  companyId String
+  claimId   String
+
+  type      MedicalClaimDocumentType
+  /// The number printed on the document. Free text - a receipt number is
+  /// whatever the clinic decided to print.
+  reference String
+  note      String?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  claim MedicalClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([claimId])
+  @@index([companyId, type])
+  @@map("medical_claim_documents")
 }

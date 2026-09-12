@@ -113,6 +113,40 @@ export const PERMISSIONS = {
   /// administrative one.
   LOAN_POLICY_MANAGE: 'loan.policy.manage',
 
+  // --- Medical ---
+  /// See a medical benefit: the entitlement, what is left of it, and the
+  /// dependents it covers. Held with an OWN data scope by every member of
+  /// staff, which is what lets somebody see their own and nothing else.
+  ///
+  /// Reaching ANOTHER employee's medical information needs `medical.manage` as
+  /// well as the data scope - see `assertMedicalSubjectAccess`. Medical data is
+  /// the one place where a wide data scope is deliberately not enough on its
+  /// own, because a manager's reporting line is not a reason to read somebody's
+  /// dependents.
+  MEDICAL_READ: 'medical.read',
+  /// Maintain medical dependents for other employees, and read their benefit.
+  /// HR's grant. It does not include changing the policy.
+  MEDICAL_MANAGE: 'medical.manage',
+  /// See the company-wide medical policy - the entitlement, category limits and
+  /// claim rules a benefit is measured against. Separate from `medical.read`
+  /// because the rules are company configuration, not somebody's benefit.
+  MEDICAL_POLICY_READ: 'medical.policy.read',
+  /// Change the medical policy. Super Admin only by default: moving the annual
+  /// limit is a financial decision, not an administrative one.
+  MEDICAL_POLICY_MANAGE: 'medical.policy.manage',
+  /// Submit a medical claim for yourself, and withdraw one nobody has decided
+  /// yet. Held by every member of staff; it reaches only their own claims.
+  MEDICAL_CLAIM_REQUEST: 'medical.claim.request',
+  /// Decide a medical claim: approve it in full, approve part of it, or refuse
+  /// it. Held separately from `medical.manage` so the person who records a
+  /// claim need not be the person who agrees to pay it.
+  ///
+  /// A medical claim is deliberately NOT routed through the ordinary approval
+  /// chain. That chain runs through the employee's line manager, and a manager
+  /// has no business seeing what treatment somebody had - so claims are decided
+  /// by holders of this grant instead.
+  MEDICAL_CLAIM_APPROVE: 'medical.claim.approve',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -249,6 +283,43 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     ],
   },
   {
+    key: 'medical',
+    label: 'Medical',
+    description: 'Medical benefits, dependents and the company medical policy.',
+    permissions: [
+      {
+        value: PERMISSIONS.MEDICAL_READ,
+        label: 'View medical benefit',
+        description: 'See your own medical entitlement, balance and dependents.',
+      },
+      {
+        value: PERMISSIONS.MEDICAL_MANAGE,
+        label: 'Manage medical records',
+        description: "Read other employees' medical benefit and maintain their dependents. Grant sparingly.",
+      },
+      {
+        value: PERMISSIONS.MEDICAL_POLICY_READ,
+        label: 'View medical policy',
+        description: 'See the entitlement, category limits and claim rules.',
+      },
+      {
+        value: PERMISSIONS.MEDICAL_POLICY_MANAGE,
+        label: 'Manage medical policy',
+        description: 'Change the company medical rules. Grant to Super Admin only.',
+      },
+      {
+        value: PERMISSIONS.MEDICAL_CLAIM_REQUEST,
+        label: 'Submit medical claims',
+        description: 'Raise and withdraw your own medical claims.',
+      },
+      {
+        value: PERMISSIONS.MEDICAL_CLAIM_APPROVE,
+        label: 'Decide medical claims',
+        description: 'Approve, part-approve or refuse a claim. Grant sparingly.',
+      },
+    ],
+  },
+  {
     key: 'governance',
     label: 'Governance',
     description: 'Audit trail and system settings.',
@@ -352,6 +423,16 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // explain a refusal, which means seeing the rule that caused it. Changing
     // the rule is Super Admin's.
     PERMISSIONS.LOAN_POLICY_READ,
+    // HR maintains dependents and answers "why was this refused?", so it needs
+    // to read the medical rules. Changing them is Super Admin's, for the same
+    // reason the loan policy is: the annual limit is money.
+    PERMISSIONS.MEDICAL_READ,
+    PERMISSIONS.MEDICAL_MANAGE,
+    PERMISSIONS.MEDICAL_POLICY_READ,
+    PERMISSIONS.MEDICAL_CLAIM_REQUEST,
+    // HR decides claims, because the ordinary approval chain runs through a
+    // line manager and a manager must not see somebody's treatment.
+    PERMISSIONS.MEDICAL_CLAIM_APPROVE,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -374,6 +455,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.POLICY_READ,
     PERMISSIONS.LOAN_READ,
     PERMISSIONS.LOAN_REQUEST,
+    // Their own benefit, and only their own. A manager holds no
+    // `medical.manage`, and the medical routes require that on top of the data
+    // scope before they will show anybody else's record - so a REPORTS_AND_OWN
+    // scope reaches this manager's own dependents and stops there. No medical
+    // POLICY permission at all: the rules are not a line-management concern.
+    PERMISSIONS.MEDICAL_READ,
+    // Their own claims, and only their own. Managers hold no claim.approve:
+    // deciding a report's medical claim would mean reading their treatment.
+    PERMISSIONS.MEDICAL_CLAIM_REQUEST,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -396,6 +486,12 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.POLICY_READ,
     PERMISSIONS.LOAN_READ,
     PERMISSIONS.LOAN_REQUEST,
+    // Narrowed to their own record by the OWN scope, and narrowed again by the
+    // medical routes, which will not show another employee's benefit without
+    // `medical.manage`. No policy permission: an employee cannot see, let alone
+    // change, the rules that decide their entitlement.
+    PERMISSIONS.MEDICAL_READ,
+    PERMISSIONS.MEDICAL_CLAIM_REQUEST,
   ],
 };
 

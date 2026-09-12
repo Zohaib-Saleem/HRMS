@@ -47,6 +47,9 @@ import { contractRoutes } from './employment/contracts.routes.js';
 import { policyAssignmentRoutes, policyRoutes } from './employment/policies.routes.js';
 import { loanRoutes } from './loans/loans.routes.js';
 import { loanEligibilityRoutes, loanPolicyRoutes } from './loans/loan-policy.routes.js';
+import { medicalRoutes } from './medical/medical.routes.js';
+import { medicalPolicyRoutes } from './medical/medical-policy.routes.js';
+import { medicalClaimRoutes } from './medical/medical-claims.routes.js';
 import { reportRoutes } from './reports/reports.routes.js';
 import {
   payrollDashboardRoutes,
@@ -130,6 +133,16 @@ export const modules: ModuleDefinition[] = [
   // matches them ahead of `/loans/:id` regardless of registration order.
   { prefix: '/loans/policy', plugin: loanPolicyRoutes },
   { prefix: '/loans', plugin: loanEligibilityRoutes },
+
+  // --- phase 11: medical benefit ----------------------------------------
+  // The policy is company configuration and the benefit is somebody's own
+  // record, so they are separate plugins on separate permissions. Both are
+  // static segments under /medical, so Fastify matches them unambiguously.
+  { prefix: '/medical/policy', plugin: medicalPolicyRoutes },
+  // Registered ahead of the bare /medical plugin so the static `claims` segment
+  // is unambiguous, the same way /loans/policy sits ahead of /loans.
+  { prefix: '/medical/claims', plugin: medicalClaimRoutes },
+  { prefix: '/medical', plugin: medicalRoutes },
   { prefix: '/reports', plugin: reportRoutes },
 
   // --- phase 5+ ---------------------------------------------------------

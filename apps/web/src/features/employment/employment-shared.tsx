@@ -1,9 +1,9 @@
 import type { BadgeProps } from '@/components/ui/badge';
 import type { ContractExpiryState, ContractStatus, PolicyAcknowledgementStatus } from '@hrms/shared';
-import type { LoanInstallmentStatus, LoanStatus } from '@hrms/shared';
+import type { LoanInstallmentStatus, LoanStatus, MedicalClaimStatus } from '@hrms/shared';
 
 /**
- * Shared vocabulary for contracts, policies and loans.
+ * Shared vocabulary for contracts, policies, loans and medical claims.
  *
  * The tone of a badge is a judgement about the record, and the same record has
  * to look the same on the list screen and on the employee's profile. Keeping
@@ -72,6 +72,22 @@ export const LOAN_INSTALLMENT_TONE: Record<LoanInstallmentStatus, Tone> = {
   PAID: 'success',
   WAIVED: 'warning',
   SKIPPED: 'neutral',
+};
+
+/**
+ * A medical claim's status, as a badge tone.
+ *
+ * PARTIALLY_APPROVED is amber rather than green on purpose: it reads as "agreed,
+ * but not for what was asked", which is the part the claimant has to notice.
+ * PAID is the only settled-and-done state, so it is the only plain one.
+ */
+export const MEDICAL_CLAIM_STATUS_TONE: Record<MedicalClaimStatus, Tone> = {
+  PENDING: 'warning',
+  APPROVED: 'success',
+  PARTIALLY_APPROVED: 'warning',
+  REJECTED: 'destructive',
+  CANCELLED: 'neutral',
+  PAID: 'primary',
 };
 
 /** Money in the currency the record itself carries, never a global default. */

@@ -4,6 +4,7 @@ import {
   Clock,
   Fingerprint,
   HandCoins,
+  HeartPulse,
   KeyRound,
   Layers3,
   ScrollText,
@@ -58,6 +59,15 @@ export const TABS: SettingsTab[] = [
     label: 'Loan policy',
     icon: HandCoins,
     permission: PERMISSIONS.LOAN_POLICY_READ,
+  },
+  {
+    // The company's medical rules. Gated on medical.policy.read, which HR holds
+    // and an employee does not - changing them needs medical.policy.manage,
+    // which is Super Admin's alone.
+    to: '/settings/medical-policy',
+    label: 'Medical policy',
+    icon: HeartPulse,
+    permission: PERMISSIONS.MEDICAL_POLICY_READ,
   },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },

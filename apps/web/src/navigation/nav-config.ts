@@ -16,6 +16,7 @@ import {
   FileSpreadsheet,
   Fingerprint,
   HandCoins,
+  HeartPulse,
   LayoutDashboard,
   LifeBuoy,
   ClipboardPen,
@@ -251,6 +252,18 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
+        // Alongside Payslips and Loans, and for the same reason: every member
+        // of staff holds medical.read and opens this to find their OWN benefit.
+        // The endpoint refuses to show anybody else's without medical.manage,
+        // so a manager finds their own here too and nothing of their team's.
+        label: 'Medical',
+        to: '/medical',
+        icon: HeartPulse,
+        permission: PERMISSIONS.MEDICAL_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
         // The consolidated HR view: one row per employee, every module's figure
         // for that person. Gated on employee.read; the columns a reader may
         // fill are decided per block by the module that owns them.
@@ -338,9 +351,12 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/payroll/preview': 'Payroll preview',
   '/payroll/salaries': 'Salary management',
   '/loans': 'Loans',
+  '/medical': 'Medical',
+  '/medical/claims': 'Medical claims',
   '/reports/employee-master': 'Employee Master Report',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/loan-policy': 'Loan policy',
+  '/settings/medical-policy': 'Medical policy',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',
 };

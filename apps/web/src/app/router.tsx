@@ -106,6 +106,15 @@ const LoanPolicyPage = lazyPage(
   () => import('@/features/settings/loan-policy-page'),
   'LoanPolicyPage',
 );
+const MedicalPage = lazyPage(() => import('@/features/medical/medical-page'), 'MedicalPage');
+const MedicalClaimsPage = lazyPage(
+  () => import('@/features/medical/medical-claims-page'),
+  'MedicalClaimsPage',
+);
+const MedicalPolicyPage = lazyPage(
+  () => import('@/features/settings/medical-policy-page'),
+  'MedicalPolicyPage',
+);
 const EmployeeMasterReportPage = lazyPage(
   () => import('@/features/reports/employee-master-report-page'),
   'EmployeeMasterReportPage',
@@ -350,6 +359,19 @@ export function AppRoutes() {
           <Route path="loans" element={<LoansPage />} />
         </Route>
 
+        {/* medical.read only, and the endpoint behind it narrows further: it
+            shows the CALLER's own benefit unless they also hold medical.manage.
+            So a manager opening this finds their own medical record and no
+            trace of their team's. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.MEDICAL_READ} />}>
+          <Route path="medical" element={<MedicalPage />} />
+          {/* Claims are gated on medical.read too, and narrowed the same way:
+              the endpoint shows the caller's own unless they also hold
+              medical.manage or medical.claim.approve. Submitting is gated again
+              inside the screen on medical.claim.request. */}
+          <Route path="medical/claims" element={<MedicalClaimsPage />} />
+        </Route>
+
         {/* employee.read is the whole gate. Each block inside a row - pay,
             leave, loans, attendance - is gated again server-side, so a reader
             without payroll.read gets rows with no salary rather than a 403. */}
@@ -409,6 +431,7 @@ export function AppRoutes() {
                 // Without this, a role granted only the loan policy would see
                 // the tab and be turned away by the section gate above it.
                 PERMISSIONS.LOAN_POLICY_READ,
+                PERMISSIONS.MEDICAL_POLICY_READ,
               ]}
             />
           }
@@ -431,6 +454,12 @@ export function AppRoutes() {
                 real gate either way. */}
             <Route element={<RequirePermission permission={PERMISSIONS.LOAN_POLICY_READ} />}>
               <Route path="loan-policy" element={<LoanPolicyPage />} />
+            </Route>
+            {/* Readable with medical.policy.read, which HR holds; the form is
+                read-only without medical.policy.manage, and the endpoint is the
+                real gate either way. */}
+            <Route element={<RequirePermission permission={PERMISSIONS.MEDICAL_POLICY_READ} />}>
+              <Route path="medical-policy" element={<MedicalPolicyPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
               <Route path="users" element={<UsersPage />} />
