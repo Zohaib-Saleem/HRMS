@@ -1,7 +1,11 @@
 import type { AttendancePunchPairing } from '@prisma/client';
 import { prisma } from '../../core/db.js';
 import { dayKeyToDateColumn } from '../../core/zoned-time.js';
-import { computeAttendance, resolvePolicyFor } from '../time/attendance-policy.js';
+import {
+  checkOutBoundaryOn,
+  computeAttendance,
+  resolvePolicyFor,
+} from '../time/attendance-policy.js';
 import { shiftOnDate } from '../time/attendance.service.js';
 
 /**
@@ -22,6 +26,105 @@ export interface RecalculationResult {
   skipped: 'MANUAL_RECORD' | 'NO_USABLE_PUNCH' | null;
 }
 
+/** What a punch meant for attendance, as against which key was pressed. */
+export type PunchRole = 'IN' | 'OUT';
+
+/** Directions a terminal reports that mean what they say. */
+const STATED_ROLES: Readonly<Record<string, PunchRole>> = { IN: 'IN', OUT: 'OUT' };
+
+/**
+ * Directions that describe the terminal's mode rather than the employee's.
+ *
+ * A K50 whose punch mode is nudged into an overtime setting stamps OVERTIME_IN
+ * - or OVERTIME_OUT - on every transaction until somebody notices, an ordinary
+ * evening departure included. The transaction is real and the employee is not
+ * the one who chose the label, so reading the label literally is how a normal
+ * day acquires two arrivals and no departure.
+ *
+ * They are also not a claim about overtime. Whether the day earned any is the
+ * policy's decision from the hours worked, exactly as for a day of IN and OUT.
+ */
+const MODE_ROLES: ReadonlySet<string> = new Set(['OVERTIME_IN', 'OVERTIME_OUT']);
+
+/**
+ * Reads a day's punches as arrivals and departures.
+ *
+ * A stated direction is taken at its word. A direction that came from the
+ * terminal's *mode* is not a direction at all, so it is resolved from when the
+ * punch happened, against the scheduled end of that employee's own day:
+ *
+ *   - at or after the scheduled end, it is a departure. Somebody standing at
+ *     the terminal after their shift has finished is going home, and this is
+ *     the case the whole rule exists for: it is what stops a mis-set punch
+ *     mode from turning an ordinary six-o'clock departure into "check out:
+ *     missing".
+ *   - before the scheduled end, the label is not evidence of anything. The
+ *     first punch of a day is still the arrival, because something has to be;
+ *     a later one is left unread rather than promoted into a departure at ten
+ *     in the morning, which would close the day hours early.
+ *
+ * `checkOutFrom` is that boundary, and null means it could not be established -
+ * no shift, an unparseable window, an overnight one. Then there is no time to
+ * reason from and the reading falls back to position alone, which is what this
+ * function did before the boundary existed: first punch in, anything after an
+ * arrival out.
+ *
+ * Nothing is invented and nothing is dropped - every punch handed in comes
+ * back, carrying the role it was read as and whether that role was stated or
+ * inferred.
+ *
+ * The raw punch is untouched. `punchState` is what the device said and remains
+ * what the device said; this is a reading of it, taken fresh each time the day
+ * is calculated, so an audit can always see both.
+ */
+export function resolvePunchRoles<T extends { punchedAt: Date; punchState: string | null }>(
+  punches: ReadonlyArray<T>,
+  /** Scheduled end of the employee's day; from here a mode label means OUT. */
+  checkOutFrom: Date | null = null,
+): Array<{ punch: T; role: PunchRole | null; inferred: boolean }> {
+  const ordered = [...punches].sort((a, b) => a.punchedAt.getTime() - b.punchedAt.getTime());
+
+  let arrived = false;
+  return ordered.map((punch) => {
+    const stated = punch.punchState === null ? undefined : STATED_ROLES[punch.punchState];
+    if (stated) {
+      arrived ||= stated === 'IN';
+      return { punch, role: stated, inferred: false };
+    }
+
+    if (punch.punchState !== null && MODE_ROLES.has(punch.punchState)) {
+      // Something has to be the arrival, and the first punch of a day is it -
+      // whatever mode the terminal happened to be in. Reading a lone evening
+      // punch as a departure instead would leave the day with no arrival, and
+      // a day with no arrival is written as no day at all.
+      if (!arrived) {
+        arrived = true;
+        return { punch, role: 'IN', inferred: true };
+      }
+
+      // Past the end of the scheduled day: this is somebody going home, and it
+      // is the case the rule exists for.
+      if (checkOutFrom !== null && punch.punchedAt.getTime() >= checkOutFrom.getTime()) {
+        return { punch, role: 'OUT', inferred: true };
+      }
+
+      // Still inside the scheduled day. With a boundary to measure against,
+      // refusing to read the label is the honest answer: the punch is kept,
+      // and it closes nothing. Promoting it would end the day early - at ten
+      // in the morning, for the shapes that prompted this.
+      if (checkOutFrom !== null) return { punch, role: null, inferred: false };
+
+      // No boundary at all - position is the only thing left to read.
+      return { punch, role: 'OUT', inferred: true };
+    }
+
+    // A state this system has no reading for - a break, or a spelling from a
+    // terminal nobody has met yet. Repeating the old behaviour: it is kept,
+    // and it is not guessed at.
+    return { punch, role: null, inferred: false };
+  });
+}
+
 /**
  * Chooses the arrival and departure from a day's punches.
  *
@@ -40,21 +143,29 @@ export function pairPunches(
    * value, which is what this function did before the setting existed.
    */
   duplicateWindowSeconds = 0,
+  /**
+   * The scheduled end of the employee's day, from `checkOutBoundaryOn`. Only
+   * DEVICE_STATE reads it, and only for punches carrying an overtime mode
+   * label; FIRST_IN_LAST_OUT never looks at a state at all. Null means no
+   * boundary could be established, and the label is then read by position.
+   */
+  checkOutFrom: Date | null = null,
 ): { checkInAt: Date | null; checkOutAt: Date | null } {
   if (punches.length === 0) return { checkInAt: null, checkOutAt: null };
 
   const ordered = collapseDuplicates(punches, duplicateWindowSeconds);
 
   if (strategy === 'DEVICE_STATE') {
-    const ins = ordered.filter((p) => p.punchState === 'IN' || p.punchState === 'OVERTIME_IN');
-    const outs = ordered.filter((p) => p.punchState === 'OUT' || p.punchState === 'OVERTIME_OUT');
+    const read = resolvePunchRoles(ordered, checkOutFrom);
+    const ins = read.filter((p) => p.role === 'IN');
+    const outs = read.filter((p) => p.role === 'OUT');
 
     // A device configured to report direction, that then reports none, is a
     // configuration problem. Falling back silently would hide it; returning
     // nothing surfaces the day as unresolved instead of inventing times.
     return {
-      checkInAt: ins[0]?.punchedAt ?? null,
-      checkOutAt: outs.length > 0 ? outs[outs.length - 1]!.punchedAt : null,
+      checkInAt: ins[0]?.punch.punchedAt ?? null,
+      checkOutAt: outs.length > 0 ? outs[outs.length - 1]!.punch.punchedAt : null,
     };
   }
 
@@ -150,10 +261,13 @@ export async function recalculateFromPunches(input: {
     shiftOnDate(employeeId, date),
   ]);
 
+  // The employee's own scheduled end, from the shift and policy already
+  // resolved above - not a second shift calculation, and not a literal 18:00.
   const { checkInAt, checkOutAt } = pairPunches(
     punches,
     pairing,
     policy.duplicatePunchWindowSeconds,
+    checkOutBoundaryOn({ shift, policy, dayKey }),
   );
   if (!checkInAt) {
     await markProcessed(punches.map((p) => p.id));

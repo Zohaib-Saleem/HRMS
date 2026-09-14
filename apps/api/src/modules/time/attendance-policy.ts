@@ -642,6 +642,47 @@ export function effectiveShift(
 }
 
 /**
+ * The instant from which a departure is the only sensible reading of a punch.
+ *
+ * The scheduled end of the employee's own day, resolved through the same
+ * `effectiveShift` every other figure uses: their shift assignment when they
+ * have one, the company's default window when they do not. A company on
+ * 09:00-18:00 and an employee rostered 10:00-19:00 therefore get different
+ * boundaries, from one shift calculation rather than two.
+ *
+ * Null means "no boundary can be established", and every caller must read that
+ * as "do not apply the rule" rather than as midnight:
+ *
+ *   - an unparseable window, and
+ *   - an overnight window, whose end falls on the following calendar day.
+ *     `scheduledMinutesCovered` already declines to measure those against a
+ *     single day, and disagreeing with it here would be a second opinion about
+ *     the same shift.
+ *
+ * This is deliberately the shift end and NOT the overtime threshold. Somebody
+ * leaving ten minutes after their shift ends is going home, whether or not the
+ * company credits the ten minutes - and reading the overtime boundary here
+ * would make a payroll setting decide whether a departure was recorded at all.
+ */
+export function checkOutBoundaryOn(input: {
+  shift: ShiftWindow | null;
+  policy: Pick<
+    AttendancePolicy,
+    'defaultShiftStart' | 'defaultShiftEnd' | 'defaultBreakMinutes' | 'timeZone'
+  >;
+  dayKey: DayKey;
+}): Date | null {
+  const { shift, policy, dayKey } = input;
+  const window = effectiveShift(shift, policy);
+
+  const start = minutesOfDay(window.startTime);
+  const end = minutesOfDay(window.endTime);
+  if (start === null || end === null || end <= start) return null;
+
+  return boundaryOn(dayKey, window.endTime, policy.timeZone);
+}
+
+/**
  * Whether the day started too late to be the shift it would be scored against.
  *
  * A 14:00 check-in measured against a shift ending at 18:00 is not three hours
