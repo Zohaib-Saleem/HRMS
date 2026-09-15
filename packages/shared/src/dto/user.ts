@@ -62,6 +62,94 @@ export const userUpdateSchema = z.object({
 
 export type UserUpdateInput = z.infer<typeof userUpdateSchema>;
 
+/**
+ * Changing the address an account signs in with.
+ *
+ * Its own schema and its own endpoint rather than a field on
+ * `userUpdateSchema`, because it is not the same kind of edit. Correcting a
+ * surname is a tidy-up; handing an account a different sign-in identity ends
+ * every session, may re-issue an unaccepted invitation, and is the one account
+ * change that cannot be undone by simply typing the old value back — the old
+ * address may by then belong to somebody else.
+ */
+export const userEmailChangeSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(1, 'Enter an email address.')
+    .max(254)
+    .email('Enter a valid email address.'),
+  /**
+   * Also write the new address to the linked employee's `workEmail`.
+   *
+   * Opt-in because the two fields answer different questions: one is how a
+   * person authenticates, the other is how the organisation contacts them.
+   * They are usually the same and occasionally, deliberately, not.
+   */
+  syncEmployeeWorkEmail: z.boolean().default(false),
+  /**
+   * The administrator has read that the old address stops working.
+   *
+   * Required by the API and not only by the form, so a request assembled by
+   * hand is held to the same standard as a click: this change ends every
+   * session the person has and cannot be undone by typing the old value back,
+   * and a single mis-click must not be enough to cause it.
+   */
+  acknowledged: z.literal(true, {
+    errorMap: () => ({ message: 'Confirm that you understand the old sign-in email will stop working.' }),
+  }),
+});
+
+export type UserEmailChangeInput = z.infer<typeof userEmailChangeSchema>;
+
+/** What `POST /users/:id/change-email` reports back. */
+export interface UserEmailChangeResult {
+  id: string;
+  email: string;
+  previousEmail: string;
+  /** The linked employee, when there is one. Its identity is never touched. */
+  employeeId: string | null;
+  /** Unused password-reset or invitation links retired by the change. */
+  retiredResetTokens: number;
+  /** Sessions ended by the change. The person must sign in again. */
+  revokedSessions: number;
+  /** True when an unaccepted invitation was re-sent to the new address. */
+  invitationResent: boolean;
+  /** True when the linked employee's work email was updated alongside. */
+  employeeWorkEmailUpdated: boolean;
+}
+
+/**
+ * What became of the email a request tried to send.
+ *
+ * Carried in the response so the screen can say what happened rather than
+ * assuming. `unconfirmed` is the honest answer for a server whose mail
+ * transport accepted the message without delivering it - the console provider
+ * does exactly that - and reporting it as a success is what let a silently
+ * unconfigured relay look like a working one.
+ */
+export const EMAIL_DELIVERY_STATUSES = [
+  'skipped',
+  'delivered',
+  'unconfirmed',
+  'failed',
+] as const;
+export type EmailDeliveryStatus = (typeof EMAIL_DELIVERY_STATUSES)[number];
+
+/** What `POST /users/:id/send-reset` reports back. */
+export interface PasswordResetSendResult {
+  /** True when a reset token was created and handed to the mail transport. */
+  sent: boolean;
+  delivery: EmailDeliveryStatus;
+  /**
+   * A short technical code when the transport failed - `EAUTH`, `ETIMEDOUT`
+   * and so on. Never a host, a username, a credential or a relay's own text,
+   * so it is safe to put in front of an administrator.
+   */
+  errorCode?: string;
+}
+
 export const userRolesSchema = z.object({
   roleIds: z
     .array(z.string().trim().min(1).max(64))
@@ -120,6 +208,12 @@ export interface UserRecord {
     fullName: string;
     status: string;
     departmentName: string | null;
+    /**
+     * The HR record's own address, which is not the sign-in address and may
+     * legitimately differ from it. Carried here so the change-email dialog can
+     * show what it is about to overwrite rather than asking blind.
+     */
+    workEmail: string | null;
   } | null;
 
   /** Sessions that are neither revoked nor expired. */

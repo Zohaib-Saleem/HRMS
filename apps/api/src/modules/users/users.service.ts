@@ -38,6 +38,7 @@ export const USER_INCLUDE = {
       lastName: true,
       displayName: true,
       status: true,
+      workEmail: true,
       department: { select: { name: true } },
     },
   },

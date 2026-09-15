@@ -3,16 +3,20 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
-import { KeyRound, Plus, ShieldOff, UserCheck, UserPlus, Users } from 'lucide-react';
+import { AtSign, KeyRound, Plus, ShieldOff, UserCheck, UserPlus, Users } from 'lucide-react';
 import {
   PERMISSIONS,
   USER_STATUSES,
   USER_STATUS_LABELS,
   USER_SUSPENSION_REASON_LABELS,
   userCreateSchema,
+  userEmailChangeSchema,
   type LinkableEmployee,
+  type PasswordResetSendResult,
   type UserCreateInput,
   type UserDetail,
+  type UserEmailChangeInput,
+  type UserEmailChangeResult,
   type UserRecord,
   type UserStatus,
 } from '@hrms/shared';
@@ -156,8 +160,8 @@ export function UsersPage() {
               <Table>
                 <THead>
                   <TR className="hover:bg-transparent">
-                    <TH>User</TH>
-                    <TH className="w-48">Employee</TH>
+                    <TH>User · sign-in email</TH>
+                    <TH className="w-48">Employee · ID</TH>
                     <TH className="w-44">Roles</TH>
                     <TH className="w-32">Account</TH>
                     <TH className="w-24 text-right">Sessions</TH>
@@ -432,6 +436,46 @@ function InviteUserDialog({
 }
 
 /** One account: status, roles, employee link, sessions and the actions. */
+/**
+ * What to tell an administrator after asking for a reset link.
+ *
+ * A reset link is two separate things - a token in the database, and an email
+ * carrying it - and only the first is guaranteed. The screen used to announce
+ * both on the strength of the first, so a server whose mail transport delivered
+ * nothing still produced a green "Reset link sent" while the recipient waited
+ * for mail that was never going to arrive. Each outcome now gets its own words.
+ *
+ * Exported for its own test, and because getting these three sentences right
+ * matters more than where they live.
+ */
+export function resetLinkToast(result: PasswordResetSendResult | undefined): {
+  tone: 'success' | 'warning' | 'error';
+  message: string;
+} {
+  switch (result?.delivery) {
+    case 'delivered':
+      return { tone: 'success', message: 'Password reset link sent.' };
+    case 'failed':
+      return {
+        tone: 'error',
+        // The code and nothing else. A relay's own text can quote the host,
+        // the envelope and the account we authenticate as, none of which
+        // belongs on a screen an HR administrator is looking at.
+        message: `The reset link was created, but the email could not be sent${
+          result.errorCode ? ` (${result.errorCode})` : ''
+        }. Check the mail configuration before asking them to look.`,
+      };
+    default:
+      // `unconfirmed`, `skipped`, and whatever a later server adds. The link
+      // exists; nothing confirms it went anywhere, and saying so is the point.
+      return {
+        tone: 'warning',
+        message:
+          'Password reset request created, but email delivery could not be confirmed. Check the mail configuration.',
+      };
+  }
+}
+
 function UserDetailDrawer({
   userId,
   onClose,
@@ -445,6 +489,7 @@ function UserDetailDrawer({
   const queryClient = useQueryClient();
   const { session } = useSession();
   const [editingRoles, setEditingRoles] = React.useState(false);
+  const [changingEmail, setChangingEmail] = React.useState(false);
 
   const query = useQuery({
     queryKey: ['user', userId],
@@ -529,15 +574,21 @@ function UserDetailDrawer({
         'A link goes to their own email address. Nobody else sees it, and it expires shortly.',
       confirmLabel: 'Send link',
     });
-    if (ok) {
-      act.mutate(
-        { path: 'send-reset' },
-        { onSuccess: () => toast.success('Reset link sent to their email address.') },
-      );
-    }
+    if (!ok) return;
+
+    act.mutate(
+      { path: 'send-reset' },
+      {
+        onSuccess: (data) => {
+          const { tone, message } = resetLinkToast(data as PasswordResetSendResult | undefined);
+          toast[tone](message);
+        },
+      },
+    );
   };
 
   return (
+    <>
     <Dialog open onOpenChange={(next) => (next ? null : onClose())}>
       <DialogContent variant="drawer" size="md">
         <DialogHeader>
@@ -595,6 +646,51 @@ function UserDetailDrawer({
                   </p>
                 </div>
               ) : null}
+
+              <section>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h3 className="text-[12.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Sign-in email
+                  </h3>
+                  {!isSelf ? (
+                    <Can permission={PERMISSIONS.USER_EMAIL_MANAGE}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        data-testid="change-signin-email"
+                        onClick={() => setChangingEmail(true)}
+                      >
+                        <AtSign />
+                        Change
+                      </Button>
+                    </Can>
+                  ) : null}
+                </div>
+                <dl className="space-y-1.5 text-[13px]">
+                  <div className="flex gap-2">
+                    <dt className="w-36 shrink-0 text-muted-foreground">Current</dt>
+                    <dd className="truncate font-medium" data-testid="signin-email">
+                      {user.email}
+                    </dd>
+                  </div>
+                  {user.employee ? (
+                    <div className="flex gap-2">
+                      <dt className="w-36 shrink-0 text-muted-foreground">Employee work email</dt>
+                      <dd className="truncate" data-testid="work-email">
+                        {user.employee.workEmail ?? (
+                          <span className="text-muted-foreground">Not set</span>
+                        )}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                <p className="mt-1.5 text-[12px] text-muted-foreground">
+                  The sign-in email is where this person signs in.
+                  {user.employee
+                    ? ' The work email is on their HR record and is a separate field.'
+                    : ''}
+                </p>
+              </section>
 
               <section>
                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -725,6 +821,209 @@ function UserDetailDrawer({
             </p>
           ) : null}
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    {user && changingEmail ? (
+      <ChangeEmailDialog
+        user={user}
+        onClose={() => setChangingEmail(false)}
+        onSaved={refresh}
+      />
+    ) : null}
+    </>
+  );
+}
+
+/**
+ * Changes the address an account signs in with.
+ *
+ * Says what it is about to do before it does it, because the consequences reach
+ * somebody who is not in the room: they are signed out everywhere, and the
+ * address they have been typing for months stops working. An administrator who
+ * only meant to correct the HR directory should be able to tell from this
+ * dialog that they are in the wrong place - which is why the work email is a
+ * separate, named choice rather than a side effect.
+ *
+ * Exported for its test. It is rendered only from the detail drawer.
+ */
+export function ChangeEmailDialog({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: UserDetail;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const { register, handleSubmit, formState, setError, watch } = useForm<UserEmailChangeInput>({
+    resolver: zodResolver(userEmailChangeSchema),
+    defaultValues: {
+      email: '',
+      // Ticked by default only when the two currently agree: an administrator
+      // who has deliberately kept them apart should not have them silently
+      // merged by an unrelated edit.
+      syncEmployeeWorkEmail:
+        user.employee !== null &&
+        user.employee.workEmail !== null &&
+        user.employee.workEmail.toLowerCase() === user.email.toLowerCase(),
+      // Never pre-ticked. The point of the box is the click.
+      acknowledged: undefined as unknown as true,
+    },
+  });
+
+  const mutation = useMutation({
+    mutationFn: (values: UserEmailChangeInput) =>
+      api.post<UserEmailChangeResult>(`/users/${user.id}/change-email`, values),
+    onSuccess: async (result) => {
+      toast.success(
+        `Now signs in as ${result.email}.` +
+          (result.revokedSessions > 0
+            ? ` ${result.revokedSessions} session${result.revokedSessions === 1 ? '' : 's'} ended.`
+            : '') +
+          (result.employeeWorkEmailUpdated ? ' Work email updated too.' : '') +
+          (result.invitationResent ? ' The invitation was re-sent to the new address.' : ''),
+      );
+      await onSaved();
+      onClose();
+    },
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.isValidation && error.details) {
+        for (const [field, messages] of Object.entries(error.details)) {
+          if (field === '_') {
+            toast.error(messages[0]);
+            continue;
+          }
+          setError(field as keyof UserEmailChangeInput, { message: messages[0] });
+        }
+        return;
+      }
+      toast.error(errorMessage(error));
+    },
+  });
+
+  const next = watch('email')?.trim().toLowerCase() ?? '';
+  const acknowledged = watch('acknowledged') === true;
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent size="md">
+        <form onSubmit={handleSubmit((values) => mutation.mutate(values))} className="contents">
+          <DialogHeader>
+            <DialogTitle>Change sign-in email</DialogTitle>
+            <DialogDescription>
+              Changing this address will change where this user signs in. The old address will
+              no longer work.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody className="space-y-4">
+            <div className="rounded-md border border-border bg-muted/40 p-3 text-[13px]">
+              <p className="text-[12px] text-muted-foreground">Current sign-in email</p>
+              <p className="truncate font-medium" data-testid="current-signin-email">
+                {user.email}
+              </p>
+              {user.employee ? (
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  Employee work email:{' '}
+                  <span data-testid="current-work-email">
+                    {user.employee.workEmail ?? 'not set'}
+                  </span>
+                </p>
+              ) : null}
+            </div>
+
+            <FormField
+              label="New sign-in email"
+              htmlFor="new-email"
+              error={formState.errors.email?.message}
+              hint="They will use this address to sign in. Their password does not change."
+            >
+              <Input
+                id="new-email"
+                type="email"
+                autoComplete="off"
+                autoFocus
+                placeholder="name@company.com"
+                {...register('email')}
+              />
+            </FormField>
+
+            {user.employee ? (
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border p-2.5 text-[13px]">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 shrink-0 rounded border-input accent-[var(--primary)]"
+                  {...register('syncEmployeeWorkEmail')}
+                />
+                <span className="min-w-0">
+                  <span className="font-medium">Also update employee work email</span>
+                  <span className="block text-[12px] text-muted-foreground">
+                    {user.employee.fullName} currently has{' '}
+                    {user.employee.workEmail ?? 'no work email'} on their HR record. Leave this
+                    off to change the login only.
+                  </span>
+                </span>
+              </label>
+            ) : (
+              <p className="text-[12.5px] text-muted-foreground">
+                This account is not linked to an employee, so there is no work email to keep in
+                step.
+              </p>
+            )}
+
+            <div className="rounded-md border border-warning/30 bg-warning-soft/40 p-3 text-[13px]">
+              <p className="font-medium text-warning-foreground">What this does</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted-foreground">
+                <li>
+                  {user.email} stops working as a sign-in address
+                  {next ? ` and ${next} starts` : ''}.
+                </li>
+                <li>
+                  Existing sessions will be signed out
+                  {user.activeSessionCount > 0
+                    ? ` (${user.activeSessionCount} right now)`
+                    : ''}
+                  , so they will need to sign in again with the new address.
+                </li>
+                <li>Unused password-reset and invitation links stop working.</li>
+                <li>
+                  {user.status === 'INVITED'
+                    ? 'Their unaccepted invitation is re-sent to the new address.'
+                    : user.status === 'SUSPENDED'
+                      ? 'The account stays suspended. Nothing is sent, and their password is unchanged.'
+                      : 'Their password is unchanged, and no email is sent.'}
+                </li>
+                <li>Their role and employee record are not changed.</li>
+                <li>The change is recorded in the audit trail with both addresses.</li>
+              </ul>
+            </div>
+
+            <label className="flex cursor-pointer items-start gap-2.5 text-[13px]">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 shrink-0 rounded border-input accent-[var(--primary)]"
+                data-testid="acknowledge-email-change"
+                {...register('acknowledged')}
+              />
+              <span>I understand that the old sign-in email will stop working.</span>
+            </label>
+            {formState.errors.acknowledged?.message ? (
+              <p className="text-[12px] text-destructive">
+                {formState.errors.acknowledged.message}
+              </p>
+            ) : null}
+          </DialogBody>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={mutation.isPending} disabled={!acknowledged}>
+              Change Email
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

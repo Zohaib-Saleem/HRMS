@@ -75,3 +75,20 @@ export async function verifyEmailProvider(logger: FastifyBaseLogger): Promise<vo
 export function setEmailProviderForTesting(next: EmailProvider | null): void {
   provider = next;
 }
+
+/**
+ * A short, non-sensitive identifier for a transport failure, safe to show an
+ * administrator and safe to put in an API response.
+ *
+ * Only a bare code is ever taken - `EAUTH`, `ECONNECTION`, `ETIMEDOUT` and the
+ * like, which nodemailer sets. The message is deliberately discarded: a relay's
+ * text can quote the host, the envelope, the authenticating username, and in
+ * some cases the greeting it was rejected with. A code says what went wrong
+ * without saying who we are.
+ */
+export function emailErrorCode(error: unknown): string {
+  const raw = (error as { code?: unknown } | null)?.code;
+  return typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(raw)
+    ? raw
+    : 'EMAIL_SEND_FAILED';
+}

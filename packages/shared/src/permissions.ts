@@ -33,6 +33,11 @@ export const PERMISSIONS = {
   // --- Access control ---
   USER_READ: 'user.read',
   USER_MANAGE: 'user.manage',
+  /// Change the address an account signs in with. Deliberately separate from
+  /// `user.manage`: every other account action is reversible by the next
+  /// administrator, and this one hands somebody a different identity. Held by
+  /// `SUPER_ADMIN` alone unless a company grants it on purpose.
+  USER_EMAIL_MANAGE: 'user.email.manage',
   ROLE_READ: 'role.read',
   ROLE_MANAGE: 'role.manage',
 
@@ -201,6 +206,7 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     permissions: [
       { value: PERMISSIONS.USER_READ, label: 'View users', description: 'See login accounts.' },
       { value: PERMISSIONS.USER_MANAGE, label: 'Manage users', description: 'Invite, edit and disable login accounts.' },
+      { value: PERMISSIONS.USER_EMAIL_MANAGE, label: 'Change sign-in addresses', description: 'Change the email address an account signs in with.' },
       { value: PERMISSIONS.ROLE_READ, label: 'View roles', description: 'See roles and their permissions.' },
       { value: PERMISSIONS.ROLE_MANAGE, label: 'Manage roles', description: 'Create roles and change permissions.' },
     ],

@@ -4,12 +4,15 @@ import {
   PERMISSIONS,
   idParamSchema,
   userCreateSchema,
+  userEmailChangeSchema,
   userQuerySchema,
   userRolesSchema,
   userSuspendSchema,
   userUpdateSchema,
   type LinkableEmployee,
   type UserDetail,
+  type UserEmailChangeResult,
+  type PasswordResetSendResult,
   type UserRecord,
   type UserSessionRecord,
 } from '@hrms/shared';
@@ -81,6 +84,7 @@ function toRecord(row: UserRow, activeSessionCount: number): UserRecord {
           fullName: displayName(row.employee),
           status: row.employee.status,
           departmentName: row.employee.department?.name ?? null,
+          workEmail: row.employee.workEmail,
         }
       : null,
     activeSessionCount,
@@ -437,6 +441,166 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ data: { id } });
   });
 
+  // ---------------------------------------------------------- sign-in email
+
+  /**
+   * Changes the address an account signs in with.
+   *
+   * Behind `user.email.manage` rather than `user.manage`, which by default puts
+   * it in the hands of `SUPER_ADMIN` alone. The reason is that this is the one
+   * account edit that changes who the account *is*: every session ends, every
+   * unused reset link dies, an unaccepted invitation is re-issued to the new
+   * address, and the old address stops working. An HR administrator fixing a
+   * misspelt surname needs none of that, and `user.manage` should not quietly
+   * carry it.
+   *
+   * What it does NOT touch, and the test file holds it to this: the password,
+   * the roles, the account status (an INVITED account stays INVITED, a
+   * SUSPENDED one stays SUSPENDED and is not sent a link), and every column of
+   * the employee record except `workEmail` - and that one only when asked.
+   * The employee's identity, number, punch code, attendance, salary, leave,
+   * loans and benefits are keyed on the employee row, not on the address, so
+   * none of them can move.
+   *
+   * No password is involved, here as everywhere else in this module. The person
+   * signs back in with the password they already had, at the new address.
+   */
+  app.post(
+    '/:id/change-email',
+    { preHandler: requirePermission(PERMISSIONS.USER_EMAIL_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const input = parseOrThrow(userEmailChangeSchema, request.body);
+
+      // Ending your own sessions is half of what this endpoint does, and a typo
+      // in your own address locks you out of the screen that would fix it.
+      // Checked before the lookup so the refusal does not depend on the row.
+      assertNotSelf(auth.userId, id, 'change the sign-in address of');
+
+      const user = await prisma.user.findFirst({
+        where: { id, companyId: auth.companyId },
+        select: {
+          id: true,
+          email: true,
+          status: true,
+          employee: { select: { id: true, workEmail: true } },
+        },
+      });
+      if (!user) throw new NotFoundError('User');
+
+      // The schema has already lowercased and trimmed the new address, so a
+      // difference in case alone is not a change worth signing somebody out for.
+      if (user.email.toLowerCase() === input.email) {
+        throw new ValidationError({
+          email: ['That is already the address this account signs in with.'],
+        });
+      }
+
+      // Unique across the whole table rather than per company, so the check has
+      // to be too - otherwise the update surfaces as a database error instead of
+      // something a person can act on. Case-insensitive, because the unique
+      // index is not: sign-in lowercases what it is given, so an address that
+      // differs only in case from a stored one would be two rows that one
+      // login attempt could match.
+      const taken = await prisma.user.findFirst({
+        where: { email: { equals: input.email, mode: 'insensitive' }, NOT: { id } },
+        select: { id: true },
+      });
+      if (taken) {
+        throw new ConflictError('That email address is already in use.');
+      }
+
+      const syncWorkEmail = input.syncEmployeeWorkEmail && user.employee !== null;
+
+      /**
+       * One transaction for the three writes that must agree. The address, the
+       * optional work-email copy and the retirement of every unused reset link
+       * either all happen or none do - an employee whose login moved while
+       * their HR record did not is exactly the mismatch this route exists to
+       * avoid, and a reset link issued to the OLD inbox must not outlive the
+       * address it was sent to.
+       *
+       * Nothing else is written. `status`, `lockedUntil`, `passwordHash` and
+       * the roles are not in either `data`, and the employee update names one
+       * column.
+       */
+      const retiredResetTokens = await prisma.$transaction(async (tx) => {
+        await tx.user.update({ where: { id }, data: { email: input.email } });
+        if (syncWorkEmail && user.employee) {
+          await tx.employee.update({
+            where: { id: user.employee.id },
+            data: { workEmail: input.email },
+          });
+        }
+        const retired = await tx.passwordResetToken.updateMany({
+          where: { userId: id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+        return retired.count;
+      });
+
+      // The address is the identity. A session opened against the old one is no
+      // evidence about the holder of the new one, so none of them survive.
+      const revokedSessions = await revokeAllUserSessions(id);
+
+      /**
+       * An account that never accepted its invitation had its only way in - the
+       * invitation link - retired a moment ago, and nothing at all in the new
+       * inbox. Re-issuing sends the link where it now belongs. An ACTIVE account
+       * gets nothing: its password still works, and mailing an unrequested
+       * reset link is not an improvement. A SUSPENDED account gets nothing
+       * either, and keeps its suspension - `requestPasswordReset` refuses it
+       * regardless, so the status check here is what the response reports, not
+       * what keeps the link from going out.
+       */
+      const invitationResent = user.status === 'INVITED';
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'user.email.change',
+        entityType: 'User',
+        entityId: id,
+        // Both addresses, deliberately. "Changed the sign-in address" without
+        // the old value is unanswerable six months later.
+        summary: `Changed the sign-in address for ${user.email} to ${input.email}${syncWorkEmail ? ' and the employee work email with it' : ''}`,
+        before: {
+          email: user.email,
+          employeeId: user.employee?.id ?? null,
+          employeeWorkEmail: user.employee?.workEmail ?? null,
+        },
+        after: {
+          email: input.email,
+          employeeId: user.employee?.id ?? null,
+          employeeWorkEmail: syncWorkEmail ? input.email : (user.employee?.workEmail ?? null),
+          employeeWorkEmailUpdated: syncWorkEmail,
+          revokedSessions,
+          retiredResetTokens,
+          invitationResent,
+        },
+        request,
+      });
+
+      // After the audit entry, for the reason the create route sends after its
+      // own: a mail failure must not roll back a change that has happened.
+      if (invitationResent) await requestPasswordReset(input.email, request);
+
+      const result: UserEmailChangeResult = {
+        id,
+        email: input.email,
+        previousEmail: user.email,
+        employeeId: user.employee?.id ?? null,
+        retiredResetTokens,
+        revokedSessions,
+        invitationResent,
+        employeeWorkEmailUpdated: syncWorkEmail,
+      };
+
+      return reply.send({ data: result });
+    },
+  );
+
   // ------------------------------------------------------------------ roles
 
   app.put('/:id/roles', { preHandler: requirePermission(PERMISSIONS.USER_MANAGE) }, async (request, reply) => {
@@ -627,7 +791,7 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       );
     }
 
-    await requestPasswordReset(user.email, request);
+    const dispatch = await requestPasswordReset(user.email, request);
 
     await recordAudit({
       companyId: auth.companyId,
@@ -635,11 +799,27 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       action: 'user.password_reset.sent',
       entityType: 'User',
       entityId: id,
-      // Records that a link was issued, never the link or the token.
-      summary: `Sent a password reset link to ${user.email}`,
+      // Records that a link was issued and what the transport said about it -
+      // never the link, the token, or anything identifying the relay.
+      summary: `Sent a password reset link to ${user.email} (email ${dispatch.status})`,
+      after: { delivery: dispatch.status },
       request,
     });
 
-    return reply.send({ data: { sent: true } });
+    /**
+     * The token was created, so `sent` is true in the sense the route means it:
+     * the request was accepted and a link exists. Whether that link reached an
+     * inbox is a separate fact and is reported separately, because they come
+     * apart - a server on the console provider creates a perfectly good token
+     * and delivers nothing. The screen reads `delivery`, not `sent`, when it
+     * decides what to tell the administrator.
+     */
+    const result: PasswordResetSendResult = {
+      sent: true,
+      delivery: dispatch.status,
+      ...(dispatch.errorCode ? { errorCode: dispatch.errorCode } : {}),
+    };
+
+    return reply.send({ data: result });
   });
 };

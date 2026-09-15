@@ -2,7 +2,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
 import { prisma } from '../core/db.js';
 import { recordAudit, clientIp } from '../core/audit.js';
-import { notify } from '../core/notifications/notification.service.js';
+import {
+  notify,
+  type EmailDeliveryStatus,
+} from '../core/notifications/notification.service.js';
 import { ValidationError } from '../core/errors.js';
 import { env } from '../config/env.js';
 import { hashPassword } from './password.js';
@@ -26,6 +29,23 @@ function hashToken(token: string): string {
 }
 
 /**
+ * What a reset request did, for a caller that is allowed to know.
+ *
+ * `status` is `skipped` both for an address with no account and for one whose
+ * account may not be sent a link. That is deliberate: the public endpoint
+ * discards this value entirely and answers identically either way, and the
+ * administrator endpoint has already established that the account exists
+ * before it calls, so neither can turn this into an enumeration oracle.
+ */
+export interface PasswordResetDispatch {
+  status: EmailDeliveryStatus;
+  /** The transport that handled it. Never a host or a credential. */
+  provider?: string;
+  /** Set only when the transport threw. A bare code, safe to surface. */
+  errorCode?: string;
+}
+
+/**
  * Always completes without revealing whether the address exists. The caller
  * responds identically either way, so this endpoint cannot be used to
  * enumerate accounts.
@@ -33,7 +53,7 @@ function hashToken(token: string): string {
 export async function requestPasswordReset(
   email: string,
   request: FastifyRequest,
-): Promise<void> {
+): Promise<PasswordResetDispatch> {
   const user = await prisma.user.findUnique({
     where: { email },
     select: { id: true, email: true, firstName: true, status: true, companyId: true },
@@ -47,7 +67,7 @@ export async function requestPasswordReset(
       { email },
       'password reset requested for unknown or inactive account - no email sent',
     );
-    return;
+    return { status: 'skipped' };
   }
 
   // Supersede any outstanding tokens so only the newest link works.
@@ -70,7 +90,7 @@ export async function requestPasswordReset(
 
   const resetUrl = `${env.APP_URL}/reset-password?token=${encodeURIComponent(token)}`;
 
-  await notify({
+  const dispatch = await notify({
     companyId: user.companyId,
     userId: user.id,
     type: 'PASSWORD_RESET',
@@ -79,6 +99,10 @@ export async function requestPasswordReset(
     // anyone already holding a session, which defeats the point.
     message: 'A password reset was requested for your account. Check your email for the link.',
     logger: request.log,
+    // The link is the entire reason this request exists, so the relay's answer
+    // is waited for rather than guessed at. `notify` still swallows a failure;
+    // what changes is that the caller now learns of it.
+    awaitEmail: true,
     email: {
       to: user.email,
       subject: 'Reset your HRMS password',
@@ -101,9 +125,16 @@ export async function requestPasswordReset(
     action: 'auth.password_reset.requested',
     entityType: 'User',
     entityId: user.id,
-    summary: 'Password reset link issued',
+    // The delivery outcome, never the link and never the token.
+    summary: `Password reset link issued (email ${dispatch.emailStatus})`,
     request,
   });
+
+  return {
+    status: dispatch.emailStatus,
+    provider: dispatch.emailProvider,
+    errorCode: dispatch.emailErrorCode,
+  };
 }
 
 /**

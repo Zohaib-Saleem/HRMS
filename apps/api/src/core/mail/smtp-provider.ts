@@ -24,6 +24,17 @@ export class SmtpEmailProvider implements EmailProvider {
       ...(env.SMTP_USER
         ? { auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD ?? '' } }
         : {}),
+      /**
+       * Bounded, because a password reset now waits for this answer in order to
+       * report it honestly. Nodemailer's defaults run to minutes, which is fine
+       * for a background send and not fine for an administrator watching a
+       * button: an unreachable relay would hold the request open rather than
+       * failing it. Ten seconds is generous for a relay that works and short
+       * enough that one that does not says so.
+       */
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
   }
 

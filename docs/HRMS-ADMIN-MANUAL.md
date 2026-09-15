@@ -660,6 +660,9 @@ is hidden.
     outstanding balance or stops when it is repaid.
 
 11. **Email covers password reset only.** Approval notifications are in-app.
+    And it only leaves the server once an SMTP relay is configured: with none,
+    reset links and invitations are created but never delivered, and the screen
+    says so rather than claiming a send. See **Sending a password reset**.
 
 12. **Single company.** Every table carries `companyId` and every query filters
     on it, but nothing creates a second company.
@@ -784,12 +787,72 @@ signed in somewhere they should not have.
 Different from suspension: revoking ends sessions, suspending ends sessions
 **and** stops them coming back.
 
+### Changing a sign-in email
+
+**Settings → Users → open the account → Sign-in email → Change.** Requires
+`user.email.manage`, which only Super Admin holds by default. HR Admin does
+not receive it unless a Super Admin grants it deliberately from Settings →
+Roles; `user.manage` does not imply it. Nobody can change their own sign-in
+email from this screen, and the API refuses the attempt as well.
+
+The detail panel keeps two addresses apart on purpose:
+
+| | What it is | Where it lives |
+|---|---|---|
+| **Sign-in email** | The address the person types to sign in | The login account |
+| **Employee work email** | The address on the HR record | The employee record |
+
+They are usually the same and occasionally, deliberately, not. The dialog asks
+for the new sign-in email, shows the current work email beside it, and offers
+**Also update employee work email** — ticked in advance only when the two
+currently agree. When it is ticked, both change in one transaction; when it is
+not, only the sign-in email changes. The change cannot be submitted until
+**I understand that the old sign-in email will stop working** is ticked.
+
+What the change does:
+
+- The old address stops working and the new one starts. The new address must
+  not belong to any other account, compared without regard to case.
+- **Every session ends.** They sign in again with the new address and their
+  existing password.
+- Every unused password-reset or invitation link is retired. An *Invited*
+  account has its invitation re-sent to the new address; an *Active* account
+  is sent nothing; a *Suspended* account is sent nothing and stays suspended.
+- The audit trail records who made the change, whose account it was, the
+  linked employee, both addresses, whether the work email moved with it, and
+  how many sessions and links were retired.
+
+What it never does: change or reset the password, change the role or the
+account status, or touch any part of the employee record other than the work
+email when asked — the employee number, punch code, attendance, salary,
+leave, loans and medical records are keyed on the employee, not on the
+address.
+
 ### Sending a password reset
 
-Sends the ordinary reset link to the account holder's own address. The
+Sends the ordinary reset link to the account holder's own address — the
+**sign-in email**, never the employee work email, so a changed login takes
+future reset links with it and the old address receives nothing. The
 administrator never sees the token, it is never returned by the API, never
 written to the log, and never recorded in the audit trail — the audit records
-only that a link was issued.
+only that a link was issued and what became of the email.
+
+**What the confirmation actually tells you.** A reset link is two things: a
+token in the database and an email carrying it. Only the first is guaranteed,
+so the screen reports them separately rather than assuming one from the other.
+
+| Message | What happened | What to do |
+| --- | --- | --- |
+| *Password reset link sent.* | A mail transport accepted the message for delivery. | Nothing. Ask them to check spam if it does not arrive. |
+| *Password reset request created, but email delivery could not be confirmed.* | The token exists; the server has no mail transport that delivers. This is what a server still on the development mail provider reports. | The link cannot be sent at all until a relay is configured — see below. Nothing the administrator does on this screen will change it. |
+| *The reset link was created, but the email could not be sent (CODE).* | A real relay was tried and refused or could not be reached. `EAUTH` is a credential problem, `ECONNECTION` / `ETIMEDOUT` a reachability one. | Pass the code to whoever runs the server. No credential, host or relay message is shown, by design. |
+
+**If delivery is never confirmed,** the server has no mail relay. The API logs
+an error saying so on every start. Configuring one is a server-side change:
+`deploy/configure-smtp.sh` sets `MAIL_PROVIDER=smtp` with the `SMTP_*` values
+and restarts the API, after which the boot log reads `SMTP transport ready`.
+Until then, an invited person cannot be onboarded by email — the invitation is
+an ordinary reset link and travels the same path.
 
 ### Actions refused on your own account
 

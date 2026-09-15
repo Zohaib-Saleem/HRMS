@@ -502,6 +502,31 @@ function OverviewTab({
         <CardContent>
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Work email" value={employee.workEmail} />
+            {/*
+              The sign-in email is authentication data, not HR data, and it is
+              not the same field as the work email even when the two happen to
+              agree. It is neither shown nor edited here: it lives on the login
+              account, under Settings -> Users, behind its own permission.
+            */}
+            {employee.hasLogin ? (
+              <Field
+                label="Sign-in email"
+                value={
+                  <Can
+                    permission={PERMISSIONS.USER_READ}
+                    fallback={
+                      <span className="text-muted-foreground">
+                        Held on the login account, separately from the work email.
+                      </span>
+                    }
+                  >
+                    <Link to="/settings/users" className="text-primary hover:underline">
+                      Managed in Settings &rarr; Users
+                    </Link>
+                  </Can>
+                }
+              />
+            ) : null}
             <Field label="Personal email" value={employee.personalEmail} />
             <Field
               label="Work phone"

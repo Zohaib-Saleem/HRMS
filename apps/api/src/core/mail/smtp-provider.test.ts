@@ -61,6 +61,17 @@ describe('SmtpEmailProvider', () => {
     );
   });
 
+  it('bounds every timeout, because a reset request now waits for the answer', () => {
+    // Nodemailer's defaults run to minutes. An unreachable relay must fail the
+    // send, not hold an administrator's request open until they give up.
+    new SmtpEmailProvider(logger);
+
+    const built = createTransport.mock.calls[0]?.[0] as Record<string, number>;
+    expect(built.connectionTimeout).toBeLessThanOrEqual(15_000);
+    expect(built.greetingTimeout).toBeLessThanOrEqual(15_000);
+    expect(built.socketTimeout).toBeLessThanOrEqual(30_000);
+  });
+
   it('omits auth entirely for a relay that authenticates by IP', () => {
     new SmtpEmailProvider(logger);
 
