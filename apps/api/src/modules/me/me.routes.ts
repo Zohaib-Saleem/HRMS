@@ -1,11 +1,18 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { SessionContext } from '@hrms/shared';
-import { changePasswordSchema, updateProfileSchema } from '@hrms/shared';
+import type { MomentGreetingResult } from '@hrms/shared';
+import {
+  changePasswordSchema,
+  momentGreetingCreateSchema,
+  momentGreetingTitle,
+  updateProfileSchema,
+} from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
-import { NotFoundError } from '../../core/errors.js';
+import { ConflictError, ForbiddenError, NotFoundError } from '../../core/errors.js';
 import { recordAudit } from '../../core/audit.js';
 import { requireAuth, requireAuthContext } from '../../auth/guards.js';
+import { notify } from '../../core/notifications/notification.service.js';
 import { changeOwnPassword } from '../../auth/auth.service.js';
 import { revokeAllUserSessions } from '../../auth/session.js';
 import { deriveRange, shiftOnDate } from '../time/attendance.service.js';
@@ -13,7 +20,11 @@ import { resolveAttendancePolicy, resolvePolicyFor } from '../time/attendance-po
 import { balancesForEmployee } from '../leave/leave.service.js';
 import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import { resolvePhotoUrl } from '../employees/employees.service.js';
-import { companyMomentsFor } from './company-moments.service.js';
+import {
+  companyMomentsFor,
+  countGreetings,
+  resolveGreetableOccasion,
+} from './company-moments.service.js';
 
 /**
  * The session context endpoint. One request gives the shell everything it needs
@@ -395,4 +406,132 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.send({ data });
   });
+
+  /**
+   * Greet a colleague whose birthday, work anniversary or first week it is.
+   *
+   * The interesting part of this handler is what it does NOT trust. The body
+   * carries an employee id, and an employee id from a browser is an id somebody
+   * can change - so nothing here looks that person up directly. The caller's
+   * own celebration lists are re-derived first, by the very same function that
+   * drew their dashboard, and the recipient is accepted only if they appear on
+   * the list for the occasion being claimed. That makes every rule the
+   * dashboard already enforces apply here without being restated: the same
+   * company, the same employment lifecycle, not the caller themselves, and a
+   * welcome only inside the five-working-day window. A request naming somebody
+   * whose birthday is in March is refused in March's absence, not because a
+   * permission was missing.
+   *
+   * A second greeting for the same occasion is a conflict rather than a second
+   * row. The unique constraint is what actually decides that - a double-tap on
+   * a slow connection races past any check this code could make first - so the
+   * duplicate is caught from the database's own answer.
+   */
+  app.post('/company-moments/greetings', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const body = parseOrThrow(momentGreetingCreateSchema, request.body);
+
+    const [sender, policy] = await Promise.all([
+      prisma.employee.findFirst({
+        where: { companyId: auth.companyId, userId: auth.userId },
+        select: { id: true, firstName: true, lastName: true, displayName: true, locationId: true },
+      }),
+      resolveAttendancePolicy(auth.companyId),
+    ]);
+
+    // A login with no employee record has no dashboard to greet from, and
+    // nothing to sign the greeting with.
+    if (!sender) throw new ForbiddenError('Your login is not linked to an employee record.');
+
+    const today = dayKeyToDateColumn(todayInZone(policy.timeZone));
+
+    const moments = await companyMomentsFor({
+      companyId: auth.companyId,
+      viewerEmployeeId: sender.id,
+      today,
+      weekendDays: policy.weekendDays,
+      locationId: sender.locationId,
+    });
+
+    const occasionDate = await resolveGreetableOccasion({
+      moments,
+      recipientEmployeeId: body.employeeId,
+      occasion: body.occasion,
+      today,
+    });
+
+    if (!occasionDate) {
+      throw new NotFoundError('That celebration');
+    }
+
+    const senderName =
+      sender.displayName ?? `${sender.firstName} ${sender.lastName}`.trim();
+
+    let greetingId: string;
+    try {
+      const created = await prisma.momentGreeting.create({
+        data: {
+          companyId: auth.companyId,
+          recipientEmployeeId: body.employeeId,
+          senderEmployeeId: sender.id,
+          occasion: body.occasion,
+          occasionDate,
+          message: body.message,
+        },
+        select: { id: true },
+      });
+      greetingId = created.id;
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ConflictError('You have already greeted them for this.');
+      }
+      throw error;
+    }
+
+    /**
+     * Tell the person.
+     *
+     * A greeting nobody sees is not a greeting, and the recipient does not
+     * appear on their own celebration card - the dashboard excludes the viewer
+     * from every list - so the notification is the whole delivery. Best-effort
+     * and never awaited for email: the greeting is already recorded, and a
+     * quiet relay must not turn a kind gesture into a failed request.
+     */
+    const recipient = await prisma.employee.findUnique({
+      where: { id: body.employeeId },
+      select: { userId: true },
+    });
+
+    if (recipient?.userId) {
+      await notify({
+        companyId: auth.companyId,
+        userId: recipient.userId,
+        type: 'CELEBRATION',
+        title: momentGreetingTitle(body.occasion, senderName),
+        message: body.message,
+        entityType: 'MomentGreeting',
+        entityId: greetingId,
+        logger: request.log,
+      });
+    }
+
+    const greetingCount = await countGreetings({
+      recipientEmployeeId: body.employeeId,
+      occasion: body.occasion,
+      occasionDate,
+    });
+
+    const data: MomentGreetingResult = { id: greetingId, greetingCount };
+    return reply.status(201).send({ data });
+  });
 };
+
+/** Prisma's "that row already exists" - the only database error expected here. */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
+}

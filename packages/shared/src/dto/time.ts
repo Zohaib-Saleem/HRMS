@@ -13,6 +13,8 @@ export const NOTIFICATION_TYPES = [
   'APPROVAL_CANCELLED',
   'PASSWORD_RESET',
   'SYSTEM',
+  /** A colleague greeted you on your birthday, anniversary or first week. */
+  'CELEBRATION',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

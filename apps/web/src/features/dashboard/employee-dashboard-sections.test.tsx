@@ -87,6 +87,8 @@ const person = (over: Partial<BirthdayMoment> & { employeeId: string }): Birthda
   departmentName: 'Engineering',
   teamName: 'Platform',
   designationName: 'Engineer',
+  greetedByMe: false,
+  greetingCount: 0,
   ...over,
 });
 

@@ -1,13 +1,17 @@
-import { Cake, PartyPopper, Sparkles } from 'lucide-react';
+import * as React from 'react';
+import { Cake, Check, Heart, PartyPopper, Sparkles } from 'lucide-react';
 import type {
   AnniversaryMoment,
   BirthdayMoment,
   CompanyMomentPerson,
   CompanyMomentsView,
+  MomentOccasion,
   NewJoinerMoment,
 } from '@hrms/shared';
 import { Avatar } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { GreetDialog } from './greet-dialog';
 
 /**
  * Today at the company: whose birthday it is, who is celebrating a year, and
@@ -44,20 +48,35 @@ function placeLabel(person: CompanyMomentPerson): string | null {
 }
 
 /**
- * One person in a celebration list.
+ * One person in a celebration list, and the way to say something to them.
  *
  * `Avatar` is the app's own, so an uploaded photo shows up here for the same
  * reason it shows up on the people list - and falls back to initials the same
  * way when there is none, or when the viewer may not fetch it.
+ *
+ * The greet control is the reason this row is a row rather than a line of text.
+ * A card that only reports a birthday is a noticeboard; what an employee wants
+ * from it is to wish the person well, and every step between the two is a
+ * greeting that does not get sent. So it is one tap from here to a dialog that
+ * already has a sendable sentence in it.
+ *
+ * Once sent, the button becomes a state rather than disappearing. "Greeted" is
+ * the answer to the question the sender will ask when they look again an hour
+ * later, and a control that vanished would leave them wondering whether it
+ * worked. The server decides that state - see `greetedByMe` on the DTO - so it
+ * survives a refresh, a second device and a redeploy.
  */
 function MomentRow({
   person,
   message,
+  occasion,
 }: {
   person: CompanyMomentPerson;
   message: string;
+  occasion: MomentOccasion;
 }) {
   const place = placeLabel(person);
+  const [greeting, setGreeting] = React.useState(false);
 
   return (
     <li className="flex items-center gap-2.5">
@@ -67,11 +86,52 @@ function MomentRow({
         colorKey={person.employeeId}
         size="sm"
       />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-medium leading-tight">{person.fullName}</p>
         <p className="truncate text-[12px] text-muted-foreground">{message}</p>
         {place ? <p className="truncate text-[11.5px] text-muted-foreground">{place}</p> : null}
       </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        {/*
+          How many colleagues have already said something. Shown only once
+          somebody has: "0 greetings" under a birthday card announces that
+          nobody remembered, which is the opposite of what this block is for.
+        */}
+        {person.greetingCount > 0 ? (
+          <span
+            className="flex items-center gap-1 text-[11.5px] text-muted-foreground"
+            title={`${person.greetingCount} greeting${person.greetingCount === 1 ? '' : 's'}`}
+          >
+            <Heart className="size-3" aria-hidden />
+            {person.greetingCount}
+          </span>
+        ) : null}
+
+        {person.greetedByMe ? (
+          <span className="flex items-center gap-1 text-[11.5px] font-medium text-muted-foreground">
+            <Check className="size-3.5" aria-hidden /> Greeted
+          </span>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2.5 text-[12px]"
+            onClick={() => setGreeting(true)}
+          >
+            Greet
+          </Button>
+        )}
+      </div>
+
+      {greeting ? (
+        <GreetDialog
+          person={person}
+          occasion={occasion}
+          open={greeting}
+          onOpenChange={setGreeting}
+        />
+      ) : null}
     </li>
   );
 }
@@ -114,7 +174,12 @@ export function BirthdaysCard({ people }: { people: BirthdayMoment[] }) {
   return (
     <MomentCard title="Birthdays today" icon={Cake}>
       {people.map((person) => (
-        <MomentRow key={person.employeeId} person={person} message="Birthday today" />
+        <MomentRow
+          key={person.employeeId}
+          person={person}
+          message="Birthday today"
+          occasion="BIRTHDAY"
+        />
       ))}
     </MomentCard>
   );
@@ -130,6 +195,7 @@ export function AnniversariesCard({ people }: { people: AnniversaryMoment[] }) {
           key={person.employeeId}
           person={person}
           message={`Celebrating ${person.years} ${person.years === 1 ? 'year' : 'years'}`}
+          occasion="ANNIVERSARY"
         />
       ))}
     </MomentCard>
@@ -142,7 +208,12 @@ export function NewJoinersCard({ people }: { people: NewJoinerMoment[] }) {
   return (
     <MomentCard title="New joiners" icon={Sparkles}>
       {people.map((person) => (
-        <MomentRow key={person.employeeId} person={person} message="Welcome to the team!" />
+        <MomentRow
+          key={person.employeeId}
+          person={person}
+          message="Welcome to the team!"
+          occasion="NEW_JOINER"
+        />
       ))}
     </MomentCard>
   );

@@ -366,6 +366,9 @@ model Company {
   medicalDependents MedicalDependent[]
   medicalClaims     MedicalClaim[]
 
+  // --- celebrations ---
+  momentGreetings MomentGreeting[]
+
   @@map("companies")
 }
 
@@ -691,6 +694,10 @@ model Employee {
   medicalDependents MedicalDependent[]
   medicalClaims     MedicalClaim[]
 
+  // --- celebrations ---
+  greetingsReceived MomentGreeting[] @relation("MomentGreetingRecipient")
+  greetingsSent     MomentGreeting[] @relation("MomentGreetingSender")
+
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
   @@index([companyId, employmentStatus])
@@ -954,6 +961,8 @@ enum NotificationType {
   APPROVAL_CANCELLED
   PASSWORD_RESET
   SYSTEM
+  /// A colleague greeted you on your birthday, work anniversary or first week.
+  CELEBRATION
 }
 
 enum AttendanceStatus {
@@ -3625,4 +3634,61 @@ model MedicalClaimDocument {
   @@index([claimId])
   @@index([companyId, type])
   @@map("medical_claim_documents")
+}
+
+// ------------------------------------------------------- celebration greetings
+
+/// Which celebration a greeting was sent for.
+///
+/// The same three the dashboard shows. Kept as an enum rather than inferred
+/// from the date, because a person can have a birthday and an anniversary on
+/// the same day and the two greetings are not the same greeting.
+enum MomentOccasion {
+  BIRTHDAY
+  ANNIVERSARY
+  NEW_JOINER
+}
+
+/// One colleague wishing another a happy birthday, a happy work anniversary,
+/// or a warm welcome.
+///
+/// The row is keyed by the OCCASION rather than by the moment it was written,
+/// and that is what makes "you have already greeted them" a fact the database
+/// enforces instead of a check the UI hopes to have done. `occasionDate` is the
+/// day the occasion falls on - today for a birthday or an anniversary, and the
+/// HIRE DATE for a new joiner, whose welcome window runs five working days. A
+/// welcome is therefore one per joiner however many days of that window the
+/// sender saw, while next year's birthday is a new occasion and a new greeting.
+///
+/// Nothing here decides WHO may be greeted. The server re-derives the sender's
+/// own celebration lists and refuses anybody who is not on one of them today,
+/// so this cannot be used to send a message to an arbitrary employee.
+model MomentGreeting {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Who is being celebrated.
+  recipientEmployeeId String
+  /// Who sent the greeting.
+  senderEmployeeId    String
+
+  occasion     MomentOccasion
+  /// The day the occasion falls on - see the model note.
+  occasionDate DateTime       @db.Date
+
+  /// The greeting itself: one of the suggested lines, or the sender's own.
+  message String
+
+  createdAt DateTime @default(now())
+
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  recipient Employee @relation("MomentGreetingRecipient", fields: [recipientEmployeeId], references: [id], onDelete: Cascade)
+  sender    Employee @relation("MomentGreetingSender", fields: [senderEmployeeId], references: [id], onDelete: Cascade)
+
+  /// One greeting per sender, per person, per occasion.
+  @@unique([recipientEmployeeId, senderEmployeeId, occasion, occasionDate], map: "moment_greetings_recipient_sender_occasion_date_key")
+  /// How the dashboard counts a person's greetings for today.
+  @@index([recipientEmployeeId, occasion, occasionDate])
+  @@index([companyId, occasionDate])
+  @@map("moment_greetings")
 }

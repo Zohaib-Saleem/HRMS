@@ -17,13 +17,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const db = vi.hoisted(() => ({
   employee: { findMany: vi.fn() },
   holiday: { findMany: vi.fn() },
+  momentGreeting: { findMany: vi.fn(), count: vi.fn() },
 }));
 
 vi.mock('../../core/db.js', () => ({ prisma: db }));
 
-const { companyMomentsFor, workingDaysElapsed, WELCOME_WORKING_DAYS } = await import(
-  './company-moments.service.js'
-);
+const {
+  companyMomentsFor,
+  occasionDateFor,
+  resolveGreetableOccasion,
+  workingDaysElapsed,
+  WELCOME_WORKING_DAYS,
+} = await import('./company-moments.service.js');
 
 const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 
@@ -106,18 +111,50 @@ function matches(p: Person, clause: Record<string, unknown>): boolean {
   });
 }
 
+/** A greeting already on file, as the greeting query returns one. */
+interface Greeting {
+  recipientEmployeeId: string;
+  senderEmployeeId: string;
+  occasion: 'BIRTHDAY' | 'ANNIVERSARY' | 'NEW_JOINER';
+  occasionDate: Date;
+}
+
 let roster: Person[] = [];
 let holidays: string[] = [];
+let greetings: Greeting[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
   roster = [];
   holidays = [];
+  greetings = [];
 
   db.employee.findMany.mockImplementation(async (args: { where: Record<string, unknown> }) =>
     roster.filter((p) => matches(p, args.where)),
   );
   db.holiday.findMany.mockImplementation(async () => holidays.map((h) => ({ date: day(h) })));
+
+  /**
+   * The greeting lookup, filtered the way the real one is.
+   *
+   * Honouring the `in` clauses rather than returning the whole fixture is what
+   * makes "a greeting for a different day is not counted" a statement about the
+   * query the service sends.
+   */
+  db.momentGreeting.findMany.mockImplementation(
+    async (args: {
+      where: {
+        recipientEmployeeId: { in: string[] };
+        occasionDate: { in: Date[] };
+      };
+    }) => {
+      const ids = new Set(args.where.recipientEmployeeId.in);
+      const days = new Set(args.where.occasionDate.in.map((d) => d.getTime()));
+      return greetings.filter(
+        (g) => ids.has(g.recipientEmployeeId) && days.has(g.occasionDate.getTime()),
+      );
+    },
+  );
 });
 
 const moments = (today: string, viewerId: string | null = VIEWER.id) =>
@@ -384,11 +421,16 @@ describe('privacy', () => {
     const [birthday] = (await moments(TUE)).birthdays;
 
     // The exact shape, so a future field cannot be added without this failing.
+    // The two greeting fields are counts and a boolean about the VIEWER; they
+    // say nothing about the person beyond what the card already shows, and in
+    // particular no sender is ever named here - see `attachGreetings`.
     expect(Object.keys(birthday!).sort()).toEqual([
       'departmentName',
       'designationName',
       'employeeId',
       'fullName',
+      'greetedByMe',
+      'greetingCount',
       'photoUrl',
       'teamName',
     ]);
@@ -442,5 +484,220 @@ describe('a login with no employee record', () => {
     // Nobody is excluded as "self", so the birthday is simply visible.
     expect(result.birthdays.map((b) => b.employeeId)).toEqual(['a']);
     expect(result.anniversaries).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------------------ greetings
+
+/**
+ * Counting the greetings a celebration has, and deciding who may send one.
+ *
+ * Two rules carry the weight here. A greeting belongs to an OCCASION, not to
+ * the day it was typed - which is why a new joiner's welcome is filed under
+ * their hire date and cannot be sent afresh on each day of their first week.
+ * And the right to greet somebody is derived from the sender's own dashboard
+ * rather than checked as a permission, so an employee id in a request body
+ * buys nothing: if the server would not have shown you that person today, it
+ * will not let you greet them today either.
+ */
+describe('greetings on a celebration', () => {
+  const AYESHA = person({ id: 'a', firstName: 'Ayesha', dateOfBirth: day('1994-09-15') });
+
+  it('reports no greetings, and none of mine, before anybody has sent one', async () => {
+    roster = [VIEWER, AYESHA];
+
+    const [birthday] = (await moments(TUE)).birthdays;
+    expect(birthday?.greetingCount).toBe(0);
+    expect(birthday?.greetedByMe).toBe(false);
+  });
+
+  it('counts every colleague who has greeted them', async () => {
+    roster = [VIEWER, AYESHA];
+    greetings = [
+      { recipientEmployeeId: 'a', senderEmployeeId: 'x', occasion: 'BIRTHDAY', occasionDate: day(TUE) },
+      { recipientEmployeeId: 'a', senderEmployeeId: 'y', occasion: 'BIRTHDAY', occasionDate: day(TUE) },
+    ];
+
+    const [birthday] = (await moments(TUE)).birthdays;
+    expect(birthday?.greetingCount).toBe(2);
+    // Counted, but not sent by the viewer - the button should still say "Greet".
+    expect(birthday?.greetedByMe).toBe(false);
+  });
+
+  it('knows when the greeting was the viewer\'s own', async () => {
+    roster = [VIEWER, AYESHA];
+    greetings = [
+      { recipientEmployeeId: 'a', senderEmployeeId: VIEWER.id, occasion: 'BIRTHDAY', occasionDate: day(TUE) },
+    ];
+
+    const [birthday] = (await moments(TUE)).birthdays;
+    expect(birthday?.greetedByMe).toBe(true);
+    expect(birthday?.greetingCount).toBe(1);
+  });
+
+  it('does not count last year\'s birthday greetings against this one', async () => {
+    roster = [VIEWER, AYESHA];
+    greetings = [
+      {
+        recipientEmployeeId: 'a',
+        senderEmployeeId: VIEWER.id,
+        occasion: 'BIRTHDAY',
+        occasionDate: day('2025-09-15'),
+      },
+    ];
+
+    const [birthday] = (await moments(TUE)).birthdays;
+    expect(birthday?.greetingCount).toBe(0);
+    expect(birthday?.greetedByMe).toBe(false);
+  });
+
+  it('keeps a birthday and an anniversary on the same day apart', async () => {
+    // Hired on this day five years ago, and born on this day - both cards show
+    // the same person, and greeting one is not greeting the other.
+    roster = [
+      VIEWER,
+      person({ id: 'both', dateOfBirth: day('1994-09-15'), hireDate: day('2021-09-15') }),
+    ];
+    greetings = [
+      {
+        recipientEmployeeId: 'both',
+        senderEmployeeId: VIEWER.id,
+        occasion: 'BIRTHDAY',
+        occasionDate: day(TUE),
+      },
+    ];
+
+    const view = await moments(TUE);
+    expect(view.birthdays[0]?.greetedByMe).toBe(true);
+    expect(view.anniversaries[0]?.greetedByMe).toBe(false);
+  });
+
+  it("files a new joiner's welcome under their hire date, not today", async () => {
+    // Started Monday; it is now Tuesday, day 2 of the welcome window.
+    roster = [VIEWER, person({ id: 'j', hireDate: day(MON) })];
+    greetings = [
+      {
+        recipientEmployeeId: 'j',
+        senderEmployeeId: VIEWER.id,
+        occasion: 'NEW_JOINER',
+        occasionDate: day(MON),
+      },
+    ];
+
+    const [joiner] = (await moments(TUE)).newJoiners;
+    // Monday's welcome still counts on Tuesday: one welcome per joiner, not one
+    // per day of their first week.
+    expect(joiner?.greetedByMe).toBe(true);
+    expect(joiner?.greetingCount).toBe(1);
+  });
+
+  it('dates a birthday to today and a welcome to the hire date', () => {
+    expect(occasionDateFor({ occasion: 'BIRTHDAY', today: day(TUE), hireDate: day(MON) })).toEqual(
+      day(TUE),
+    );
+    expect(
+      occasionDateFor({ occasion: 'ANNIVERSARY', today: day(TUE), hireDate: day(MON) }),
+    ).toEqual(day(TUE));
+    expect(occasionDateFor({ occasion: 'NEW_JOINER', today: day(TUE), hireDate: day(MON) })).toEqual(
+      day(MON),
+    );
+  });
+});
+
+describe('who may be greeted', () => {
+  it('allows greeting somebody on the list for that occasion', async () => {
+    roster = [VIEWER, person({ id: 'a', dateOfBirth: day('1994-09-15') })];
+    const view = await moments(TUE);
+
+    await expect(
+      resolveGreetableOccasion({
+        moments: view,
+        recipientEmployeeId: 'a',
+        occasion: 'BIRTHDAY',
+        today: day(TUE),
+      }),
+    ).resolves.toEqual(day(TUE));
+  });
+
+  it('refuses an occasion the person is not having today', async () => {
+    // A real colleague, a real birthday - but they are on the birthday list,
+    // not the anniversary one, and the body claims an anniversary.
+    roster = [VIEWER, person({ id: 'a', dateOfBirth: day('1994-09-15') })];
+    const view = await moments(TUE);
+
+    await expect(
+      resolveGreetableOccasion({
+        moments: view,
+        recipientEmployeeId: 'a',
+        occasion: 'ANNIVERSARY',
+        today: day(TUE),
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('refuses a colleague who is not celebrating anything at all', async () => {
+    roster = [VIEWER, person({ id: 'quiet', dateOfBirth: day('1994-03-02') })];
+    const view = await moments(TUE);
+
+    await expect(
+      resolveGreetableOccasion({
+        moments: view,
+        recipientEmployeeId: 'quiet',
+        occasion: 'BIRTHDAY',
+        today: day(TUE),
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('refuses somebody who has left, because they are not on the list', async () => {
+    roster = [
+      VIEWER,
+      person({
+        id: 'gone',
+        dateOfBirth: day('1994-09-15'),
+        status: 'TERMINATED',
+        terminationDate: day('2026-08-31'),
+      }),
+    ];
+    const view = await moments(TUE);
+
+    await expect(
+      resolveGreetableOccasion({
+        moments: view,
+        recipientEmployeeId: 'gone',
+        occasion: 'BIRTHDAY',
+        today: day(TUE),
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('refuses the caller greeting themselves', async () => {
+    // The viewer's own birthday is today, and the viewer is excluded from
+    // every list - so their own id resolves to nothing.
+    roster = [VIEWER];
+    const view = await moments(TUE);
+
+    await expect(
+      resolveGreetableOccasion({
+        moments: view,
+        recipientEmployeeId: VIEWER.id,
+        occasion: 'BIRTHDAY',
+        today: day(TUE),
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("dates a joiner's welcome to their hire date, not the day it is sent", async () => {
+    roster = [VIEWER, person({ id: 'j', hireDate: day(MON) })];
+    const view = await moments(TUE);
+
+    await expect(
+      resolveGreetableOccasion({
+        moments: view,
+        recipientEmployeeId: 'j',
+        occasion: 'NEW_JOINER',
+        today: day(TUE),
+      }),
+    ).resolves.toEqual(day(MON));
   });
 });

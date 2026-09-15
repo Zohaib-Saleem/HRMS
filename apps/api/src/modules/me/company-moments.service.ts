@@ -2,11 +2,13 @@ import type { WeekDay } from '@hrms/shared';
 import type {
   AnniversaryMoment,
   BirthdayMoment,
+  CompanyMomentPerson,
   CompanyMomentsView,
+  MomentOccasion,
   NewJoinerMoment,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
-import { dateColumnToDayKey } from '../../core/zoned-time.js';
+import { dateColumnToDayKey, dayKeyToDateColumn } from '../../core/zoned-time.js';
 import { isShiftWorkingDay } from '../time/attendance-policy.js';
 import { attendancePopulationWhere } from '../time/employment-window.js';
 import { resolvePhotoUrl } from '../employees/employees.service.js';
@@ -65,13 +67,18 @@ const JOINER_LOOKBACK_DAYS = 21;
 /** Month and day, ignoring the year. The only part of a birthday we compare. */
 const monthDay = (value: Date): string => dateColumnToDayKey(value).slice(5);
 
-const personOf = (row: MomentRow) => ({
+const personOf = (row: MomentRow): CompanyMomentPerson => ({
   employeeId: row.id,
   fullName: row.displayName ?? `${row.firstName} ${row.lastName}`,
   photoUrl: resolvePhotoUrl(row),
   departmentName: row.department?.name ?? null,
   teamName: row.team?.name ?? null,
   designationName: row.designation?.name ?? null,
+  // Filled in by `attachGreetings` once the three lists are known. Zero and
+  // false are the honest answer for a company with no greetings at all, which
+  // is every company until somebody sends the first one.
+  greetedByMe: false,
+  greetingCount: 0,
 });
 
 /**
@@ -227,5 +234,165 @@ export async function companyMomentsFor(input: {
   // Longest service first, which is the one people actually remark on.
   anniversaries.sort((a, b) => b.years - a.years);
 
-  return { birthdays, anniversaries, newJoiners };
+  const view: CompanyMomentsView = { birthdays, anniversaries, newJoiners };
+  await attachGreetings(view, { companyId, viewerEmployeeId, today });
+  return view;
+}
+
+// ------------------------------------------------------------------ greetings
+
+/**
+ * The day an occasion falls on, which is what a greeting is filed under.
+ *
+ * A birthday and an anniversary are dated to today - they happen on one day and
+ * the card is only shown on it. A new joiner is dated to their HIRE DATE, since
+ * their welcome window runs five working days: dating a welcome to the day it
+ * was written would let one colleague send five of them, one per day, and each
+ * would look to the database like a different occasion.
+ *
+ * Exported because both halves of the feature must agree. The dashboard counts
+ * greetings against these keys and the endpoint writes them against these keys;
+ * two implementations of the same rule would drift into a card that says you
+ * have not greeted somebody you have.
+ */
+export function occasionDateFor(input: {
+  occasion: MomentOccasion;
+  today: Date;
+  /** The recipient's hire date. Required for a new joiner, ignored otherwise. */
+  hireDate: Date | null;
+}): Date {
+  const { occasion, today, hireDate } = input;
+  if (occasion === 'NEW_JOINER' && hireDate) return hireDate;
+  return today;
+}
+
+/** One greeting's identity: who it is for, what for, and on which day. */
+const greetingKey = (recipientEmployeeId: string, occasion: MomentOccasion, day: string): string =>
+  `${recipientEmployeeId}|${occasion}|${day}`;
+
+/**
+ * Fill in `greetingCount` and `greetedByMe` across all three lists.
+ *
+ * One query, not one per person: the keys of every celebration on the page are
+ * known by the time this runs, so the greetings for all of them are fetched
+ * together and matched in memory. A company where nobody has sent anything
+ * costs a single empty result.
+ *
+ * Sender ids are read and discarded - only whether one of them is the viewer
+ * ever leaves this function. WHO wished a colleague happy birthday is the
+ * recipient's business, and it reaches them through their notifications; it is
+ * not published to the rest of the company via a dashboard card.
+ */
+async function attachGreetings(
+  view: CompanyMomentsView,
+  context: { companyId: string; viewerEmployeeId: string | null; today: Date },
+): Promise<void> {
+  const { companyId, viewerEmployeeId, today } = context;
+
+  const entries: { person: CompanyMomentPerson; occasion: MomentOccasion; day: string }[] = [
+    ...view.birthdays.map((person) => ({
+      person,
+      occasion: 'BIRTHDAY' as const,
+      day: dateColumnToDayKey(today),
+    })),
+    ...view.anniversaries.map((person) => ({
+      person,
+      occasion: 'ANNIVERSARY' as const,
+      day: dateColumnToDayKey(today),
+    })),
+    // A joiner's welcome is filed under their hire date - see `occasionDateFor`.
+    ...view.newJoiners.map((person) => ({
+      person,
+      occasion: 'NEW_JOINER' as const,
+      day: person.hireDate,
+    })),
+  ];
+
+  if (entries.length === 0) return;
+
+  const greetings = await prisma.momentGreeting.findMany({
+    where: {
+      companyId,
+      recipientEmployeeId: { in: [...new Set(entries.map((e) => e.person.employeeId))] },
+      occasionDate: { in: [...new Set(entries.map((e) => e.day))].map(dayKeyToDateColumn) },
+    },
+    select: {
+      recipientEmployeeId: true,
+      senderEmployeeId: true,
+      occasion: true,
+      occasionDate: true,
+    },
+  });
+
+  const counts = new Map<string, number>();
+  const mine = new Set<string>();
+
+  for (const row of greetings) {
+    const key = greetingKey(
+      row.recipientEmployeeId,
+      row.occasion,
+      dateColumnToDayKey(row.occasionDate),
+    );
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (viewerEmployeeId && row.senderEmployeeId === viewerEmployeeId) mine.add(key);
+  }
+
+  for (const entry of entries) {
+    const key = greetingKey(entry.person.employeeId, entry.occasion, entry.day);
+    entry.person.greetingCount = counts.get(key) ?? 0;
+    entry.person.greetedByMe = mine.has(key);
+  }
+}
+
+/**
+ * Whether this viewer may greet this person for this occasion, today.
+ *
+ * The check is deliberately not a permission or a company-membership test. It
+ * re-derives the caller's OWN celebration lists and asks whether the recipient
+ * is on the one they named - so the endpoint can only reach a person the server
+ * itself has already decided to show that caller, on the day it decided to show
+ * them. Every rule the dashboard obeys is therefore inherited for free: the
+ * employment lifecycle, the company boundary, the exclusion of the caller
+ * themselves, and the five-working-day welcome window.
+ *
+ * Returns the occasion's date when the greeting is allowed, and null when it is
+ * not, because the caller needs that date to write the row and there is exactly
+ * one place it should be computed.
+ */
+export async function resolveGreetableOccasion(input: {
+  moments: CompanyMomentsView;
+  recipientEmployeeId: string;
+  occasion: MomentOccasion;
+  today: Date;
+}): Promise<Date | null> {
+  const { moments, recipientEmployeeId, occasion, today } = input;
+
+  if (occasion === 'BIRTHDAY') {
+    const found = moments.birthdays.some((p) => p.employeeId === recipientEmployeeId);
+    return found ? occasionDateFor({ occasion, today, hireDate: null }) : null;
+  }
+
+  if (occasion === 'ANNIVERSARY') {
+    const found = moments.anniversaries.some((p) => p.employeeId === recipientEmployeeId);
+    return found ? occasionDateFor({ occasion, today, hireDate: null }) : null;
+  }
+
+  const joiner = moments.newJoiners.find((p) => p.employeeId === recipientEmployeeId);
+  if (!joiner) return null;
+  return occasionDateFor({ occasion, today, hireDate: dayKeyToDateColumn(joiner.hireDate) });
+}
+
+/** How many greetings a person has for one occasion, after a write. */
+export function countGreetings(input: {
+  recipientEmployeeId: string;
+  occasion: MomentOccasion;
+  occasionDate: Date;
+}): Promise<number> {
+  return prisma.momentGreeting.count({
+    where: {
+      recipientEmployeeId: input.recipientEmployeeId,
+      occasion: input.occasion,
+      occasionDate: input.occasionDate,
+    },
+  });
 }
