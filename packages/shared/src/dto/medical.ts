@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { EmploymentStatus } from './employee.js';
 import type { MedicalCategory } from './medical-policy.js';
 
 /**
@@ -173,6 +174,12 @@ export interface MedicalEligibilityResult {
   /** What the rules were measured against, so a refusal can be explained. */
   employment: {
     status: string;
+    /**
+     * The canonical employment status the decision was made against, so a
+     * screen can say "Internee - not covered" rather than only "not covered".
+     * Null when the record is unclassified.
+     */
+    employmentStatus: EmploymentStatus | null;
     monthsServed: number | null;
     onProbation: boolean;
   };

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   PERMISSIONS,
   type EmployeeDetail,
+  type EmploymentStatus,
   type HolidayRecord,
   type LeaveBalanceRecord,
   type LeaveRequestRecord,
@@ -57,6 +58,8 @@ export interface EmployeeDashboardData {
     managerName: string | null;
     status: string;
     employmentType: string | null;
+    /** Read-only. An employee sees their own stage and cannot change it. */
+    employmentStatus: EmploymentStatus | null;
     hireDate: string | null;
   } | null;
   leave: {
@@ -200,6 +203,7 @@ export function useEmployeeDashboard() {
           managerName: detail?.manager?.fullName ?? null,
           status: detail?.status ?? 'ACTIVE',
           employmentType: detail?.employmentType ?? null,
+          employmentStatus: detail?.employmentStatus ?? null,
           hireDate: detail?.hireDate ?? null,
         }
       : null,

@@ -163,6 +163,7 @@ describe('the policy form', () => {
       'Eligibility',
       'Attendance restrictions',
       'Loan restrictions',
+      'Eligible employment statuses',
       'Employment restrictions',
       'Approval',
       'Policy history',
@@ -191,7 +192,31 @@ describe('what the confirmation will say', () => {
     const changes = changedFields(saved, { ...saved, allowProbation: true });
 
     expect(changes).toEqual([
-      { label: 'Allow probation employees', from: 'No', to: 'Yes' },
+      { label: 'Probation', from: 'No', to: 'Yes' },
+    ]);
+  });
+
+  /*
+   * The eligible employment statuses are three independent switches, not one
+   * setting with three values, so each moves on its own row. Asserting the
+   * saved values first is what proves toFormValues carries all three out of
+   * the record - a field it dropped would read as "unchanged" here forever and
+   * be silently reset to the default on the next save.
+   */
+  it('gives each employment status its own row', () => {
+    expect(saved.allowProbation).toBe(false);
+    expect(saved.allowPermanent).toBe(true);
+    expect(saved.allowInternee).toBe(false);
+
+    const changes = changedFields(saved, {
+      ...saved,
+      allowPermanent: false,
+      allowInternee: true,
+    });
+
+    expect(changes).toEqual([
+      { label: 'Permanent', from: 'Yes', to: 'No' },
+      { label: 'Internee', from: 'No', to: 'Yes' },
     ]);
   });
 

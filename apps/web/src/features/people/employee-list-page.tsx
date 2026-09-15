@@ -5,6 +5,8 @@ import { Download, GitBranch, Plus, Users } from 'lucide-react';
 import {
   EMPLOYEE_STATUSES,
   EMPLOYEE_STATUS_LABELS,
+  EMPLOYMENT_STATUSES,
+  EMPLOYMENT_STATUS_LABELS,
   EMPLOYMENT_TYPES,
   EMPLOYMENT_TYPE_LABELS,
   PERMISSIONS,
@@ -42,6 +44,7 @@ const INITIAL = {
   q: '',
   status: '',
   employmentType: '',
+  employmentStatus: '',
   departmentId: '',
   teamId: '',
   designationId: '',
@@ -103,6 +106,7 @@ export function EmployeeListPage() {
           q: debouncedQuery || undefined,
           status: filters.status || undefined,
           employmentType: filters.employmentType || undefined,
+          employmentStatus: filters.employmentStatus || undefined,
           departmentId: filters.departmentId || undefined,
           teamId: filters.teamId || undefined,
           designationId: filters.designationId || undefined,
@@ -119,6 +123,7 @@ export function EmployeeListPage() {
     filters.q !== '' ||
     filters.status !== '' ||
     filters.employmentType !== '' ||
+    filters.employmentStatus !== '' ||
     filters.departmentId !== '' ||
     filters.teamId !== '' ||
     filters.designationId !== '' ||
@@ -242,6 +247,19 @@ export function EmployeeListPage() {
                   <option key={t} value={t}>{EMPLOYMENT_TYPE_LABELS[t]}</option>
                 ))}
               </NativeSelect>
+
+              {/* Beside Employment type, which it is most often confused with. */}
+              <NativeSelect
+                value={filters.employmentStatus}
+                onChange={(e) => update({ employmentStatus: e.target.value })}
+                aria-label="Filter by employment status"
+                className="w-44"
+              >
+                <option value="">All employment statuses</option>
+                {EMPLOYMENT_STATUSES.map((s) => (
+                  <option key={s} value={s}>{EMPLOYMENT_STATUS_LABELS[s]}</option>
+                ))}
+              </NativeSelect>
             </>
           }
         />
@@ -266,6 +284,9 @@ export function EmployeeListPage() {
                     <SortableTH field="hireDate" activeField={filters.sort} order={filters.order} onSort={handleSort} className="w-32">
                       Hired
                     </SortableTH>
+                    <SortableTH field="employmentStatus" activeField={filters.sort} order={filters.order} onSort={handleSort} className="w-32">
+                      Employment
+                    </SortableTH>
                     <SortableTH field="status" activeField={filters.sort} order={filters.order} onSort={handleSort} className="w-28">
                       Status
                     </SortableTH>
@@ -273,10 +294,10 @@ export function EmployeeListPage() {
                 </THead>
                 <TBody>
                   {query.isLoading ? (
-                    <TableSkeleton rows={8} columns={7} />
+                    <TableSkeleton rows={8} columns={8} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={7} className="p-0">
+                      <TD colSpan={8} className="p-0">
                         <EmptyState
                           icon={Users}
                           title={hasFilters ? 'No employees match your filters' : 'No employees yet'}
@@ -324,6 +345,11 @@ export function EmployeeListPage() {
                         </TD>
                         <TD className="text-[13px]">{row.manager?.fullName ?? '--'}</TD>
                         <TD className="tabular text-[13px] text-muted-foreground">{formatDate(row.hireDate)}</TD>
+                        <TD className="text-[13px]">
+                          {row.employmentStatus
+                            ? EMPLOYMENT_STATUS_LABELS[row.employmentStatus]
+                            : '--'}
+                        </TD>
                         <TD>
                           <Badge variant={STATUS_TONE[row.status]}>
                             {EMPLOYEE_STATUS_LABELS[row.status]}

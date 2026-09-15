@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from './common.js';
+import { EMPLOYMENT_STATUSES } from './employee.js';
 import { MEDICAL_CATEGORIES, type MedicalCategory } from './medical-policy.js';
 import {
   MEDICAL_CLAIM_STATUSES,
@@ -207,6 +208,8 @@ export const medicalClaimQuerySchema = paginationQuerySchema.extend({
   employeeId: z.string().trim().max(64).optional(),
   status: z.enum(MEDICAL_CLAIM_STATUSES).optional(),
   category: z.enum(MEDICAL_CATEGORIES).optional(),
+  /** The claimant's employment status - the employee's own field, by relation. */
+  employmentStatus: z.enum(EMPLOYMENT_STATUSES).optional(),
   /** `mine` limits the list to the caller's own claims. */
   view: z.enum(['all', 'mine']).default('all'),
   /** Benefit year, as a calendar year. Omitted means every year. */

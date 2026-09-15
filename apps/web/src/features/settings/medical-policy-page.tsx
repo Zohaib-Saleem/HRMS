@@ -143,6 +143,7 @@ export function toFormValues(policy: MedicalPolicyRecord): MedicalPolicyInput {
     minEmploymentMonths: policy.minEmploymentMonths,
     allowProbation: policy.allowProbation,
     allowPermanent: policy.allowPermanent,
+    allowInternee: policy.allowInternee,
     blockResigned: policy.blockResigned,
     blockTerminated: policy.blockTerminated,
     annualLimitPerEmployee: policy.annualLimitPerEmployee,
@@ -425,7 +426,21 @@ export function MedicalPolicyPage() {
           <Input type="number" disabled={!canManage} {...form.register('minEmploymentMonths')} />
         </FormField>
 
-        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+        {/*
+          Eligible employment statuses.
+          One switch per value of EMPLOYMENT_STATUSES, read against the
+          employee's own Employment status field - the same field the loan
+          policy reads, which is what stops the two benefits disagreeing about
+          the same person.
+        */}
+        <p className="sm:col-span-2 text-[13px] font-medium text-foreground">
+          Eligible employment statuses
+        </p>
+        <p className="sm:col-span-2 -mt-3 text-[12.5px] text-muted-foreground">
+          Which employment stages the benefit covers. Read from the employee’s
+          Employment status field — the same field the loan policy uses.
+        </p>
+        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-3">
           <Controller
             control={form.control}
             name="allowProbation"
@@ -452,6 +467,22 @@ export function MedicalPolicyPage() {
               />
             )}
           />
+          <Controller
+            control={form.control}
+            name="allowInternee"
+            render={({ field }) => (
+              <Toggle
+                label={MEDICAL_POLICY_LABELS.allowInternee}
+                hint="Off excludes anyone on an internship."
+                checked={field.value}
+                disabled={!canManage}
+                onChange={field.onChange}
+              />
+            )}
+          />
+        </div>
+
+        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
           <Controller
             control={form.control}
             name="blockResigned"

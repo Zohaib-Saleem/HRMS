@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from './common.js';
+import { EMPLOYMENT_STATUSES } from './employee.js';
 
 /**
  * Employee loans and salary advances.
@@ -213,6 +214,13 @@ export const loanCancelSchema = z.object({
 export const loanQuerySchema = paginationQuerySchema.extend({
   employeeId: z.string().trim().max(64).optional(),
   status: z.enum(LOAN_STATUSES).optional(),
+  /**
+   * The borrower's employment status - the employee's own field, reached
+   * through the relation. Not a copy held on the loan: a loan taken out on
+   * probation belongs to whoever that person is TODAY, and a stored copy would
+   * still be filtering them as a probationer a year after they were confirmed.
+   */
+  employmentStatus: z.enum(EMPLOYMENT_STATUSES).optional(),
   /** `mine` limits the list to the caller's own loans. */
   view: z.enum(['all', 'mine']).default('all'),
 });

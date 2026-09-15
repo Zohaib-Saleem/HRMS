@@ -163,7 +163,7 @@ beforeEach(() => {
     status: 'ACTIVE',
     hireDate: new Date('2020-01-01T00:00:00Z'),
     confirmationDate: new Date('2020-07-01T00:00:00Z'),
-    confirmationStatus: 'Permanent',
+    employmentStatus: 'PERMANENT',
     locationId: null,
     contracts: [],
   });

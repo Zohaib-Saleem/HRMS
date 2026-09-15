@@ -65,6 +65,31 @@ enum EmploymentType {
   TEMPORARY
 }
 
+/// What stage an employee's employment has reached.
+///
+/// Three questions the record already had to answer separately, and this is the
+/// third of them. EmployeeStatus says whether somebody is employed at all;
+/// EmploymentType says on what terms - hours, contract, headcount; this says how
+/// far through the arrangement they are. A part-time permanent employee and a
+/// full-time probationer are both ordinary, and no pair of the other two enums
+/// can express either one.
+///
+/// Replaces the free-text `confirmationStatus` the payroll roster was imported
+/// into. Same question, same column, now a closed set - so "Probation",
+/// "probation" and "PROBATION" can no longer be three different answers, and
+/// the loan and medical engines read one canonical value instead of matching
+/// strings. Nullable on purpose: a record nobody has classified yet says
+/// nothing, which is different from saying "permanent".
+enum EmploymentStatus {
+  /// Serving an initial period; not yet confirmed.
+  PROBATION
+  /// Confirmed in post. Normally carries a confirmationDate.
+  PERMANENT
+  /// On an internship. Deliberately NOT EmploymentType.INTERN, which describes
+  /// the contract; a company may run interns on any employment type.
+  INTERNEE
+}
+
 enum WeekDay {
   MONDAY
   TUESDAY
@@ -473,6 +498,7 @@ model Employee {
   phone         String?
   personalPhone String?
   photoUrl      String?
+
   /// Father's name, as carried by the payroll roster this record was imported
   /// from. Kept distinct from middleName: it is a separate person, not part of
   /// this employee's own name.
@@ -490,21 +516,36 @@ model Employee {
   /// Dual reporting - a second manager for matrix organisations.
   secondaryManagerId String?
 
-  employmentType        EmploymentType @default(FULL_TIME)
-  status                EmployeeStatus @default(ACTIVE)
-  hireDate              DateTime?      @db.Date
-  confirmationDate      DateTime?      @db.Date
-  terminationDate       DateTime?      @db.Date
+  employmentType        EmploymentType    @default(FULL_TIME)
+  status                EmployeeStatus    @default(ACTIVE)
+  /**
+   * The employment stage: probation, permanent, or an internship.
+   * The canonical field, and the ONLY one. Loans and medical both read this
+   * column rather than keeping a probation flag of their own, which is what
+   * stops the two benefits disagreeing about the same person.
+   * Null means unclassified, and is left alone rather than guessed at. The
+   * eligibility engines treat null as "this rule has nothing to say", exactly
+   * as they already treat a missing confirmation date - refusing a benefit on
+   * the strength of a field nobody filled in would be a worse answer than
+   * having no answer.
+   * Renamed from `confirmationStatus`, which held the roster's own wording.
+   */
+  employmentStatus      EmploymentStatus?
+  hireDate              DateTime?         @db.Date
+  /// The day a probationer was confirmed. Set alongside employmentStatus when
+  /// it moves to PERMANENT; the two are written together and never apart.
+  confirmationDate      DateTime?         @db.Date
+  terminationDate       DateTime?         @db.Date
   /// The day the employee handed in their resignation. Set when the status is
   /// RESIGNED. Deliberately separate from terminationDate, which is the last
   /// day worked - the two are rarely the same and payroll reads the latter.
-  resignationDate       DateTime?      @db.Date
+  resignationDate       DateTime?         @db.Date
   sourceOfHire          String?
   linkedinUrl           String?
   /// When the next salary increment falls due, as the payroll roster tracks it.
   /// Forward-looking, which is what keeps it off SalaryRevision: that model
   /// records increments that happened, this records one that is owed.
-  nextIncrementDueDate  DateTime?      @db.Date
+  nextIncrementDueDate  DateTime?         @db.Date
   /// Prior experience in whole months, kept as a number so it can be summed.
   priorExperienceMonths Int?
 
@@ -560,10 +601,6 @@ model Employee {
   /// Outsourcing arrangement, where the roster records one.
   vendor                   String?
   familyCode               String?
-  /// "Probation" / "Permanent" as supplied. Deliberately not an enum and not
-  /// folded into `status`: EmployeeStatus answers whether someone is employed,
-  /// this answers whether their employment is confirmed. Two different questions.
-  confirmationStatus       String?
   expectedConfirmationDays Int?
   /// Access template named by the roster. Not a Role: nothing reads it, and
   /// mapping it onto one would grant permissions the import never intended.
@@ -633,6 +670,7 @@ model Employee {
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
+  @@index([companyId, employmentStatus])
   @@index([companyId, departmentId])
   @@index([companyId, designationId])
   @@index([companyId, locationId])
@@ -3125,8 +3163,23 @@ model LoanPolicy {
   /// and the policy in force each time it is asked for.
   maxSalaryMultiplier Decimal @default(1) @db.Decimal(6, 2)
   minEmploymentMonths Int     @default(3)
-  allowProbation      Boolean @default(false)
   minSalary           Decimal @default(0) @db.Decimal(14, 2)
+
+  // --- eligible employment statuses ----------------------------------------
+  // One switch per value of EmploymentStatus, read against the employee's own
+  // `employmentStatus` column. Three booleans rather than a set column because
+  // that is the shape the medical policy already uses for the same question,
+  // and because a per-status switch is what the settings screen renders.
+  //
+  // No status is refused in code. An internship is not inherently ineligible
+  // for a loan - it is ineligible when a company says so, which is what the
+  // default below says and what a company may change.
+
+  /// Probation cover. Also governs the probation signals the enum does not
+  /// carry: an ACTIVE probation contract and a confirmation date still ahead.
+  allowProbation Boolean @default(false)
+  allowPermanent Boolean @default(true)
+  allowInternee  Boolean @default(false)
 
   // --- attendance -----------------------------------------------------------
   minAttendancePercent  Decimal @default(90) @db.Decimal(5, 2)
@@ -3271,11 +3324,18 @@ model MedicalPolicy {
   description String  @default("")
 
   // --- eligibility ----------------------------------------------------------
-  minEmploymentMonths Int     @default(3)
-  allowProbation      Boolean @default(false)
-  allowPermanent      Boolean @default(true)
-  blockResigned       Boolean @default(true)
-  blockTerminated     Boolean @default(true)
+  minEmploymentMonths Int @default(3)
+
+  // One switch per value of EmploymentStatus, read against the employee's own
+  // `employmentStatus` column - the same column the loan policy reads. The
+  // first two already existed and are unchanged; allowInternee completes the
+  // set so an internship is a configured decision rather than an omission.
+  allowProbation Boolean @default(false)
+  allowPermanent Boolean @default(true)
+  allowInternee  Boolean @default(false)
+
+  blockResigned   Boolean @default(true)
+  blockTerminated Boolean @default(true)
 
   // --- annual benefit -------------------------------------------------------
   /// The yearly entitlement per employee, in the company's currency.

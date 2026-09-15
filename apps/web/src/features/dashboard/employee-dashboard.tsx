@@ -7,6 +7,7 @@ import {
   Plane,
   UserRound,
 } from 'lucide-react';
+import { EMPLOYMENT_STATUS_LABELS } from '@hrms/shared';
 import { PageHeader } from '@/components/layout/page-header';
 import { StatCard } from '@/components/ui/stat-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -119,8 +120,21 @@ export function EmployeeDashboard() {
         title={`${greeting()}, ${profile?.firstName ?? ''}`.trim()}
         description={
           profile
-            ? [profile.jobTitle, profile.departmentName].filter(Boolean).join(' · ') ||
-              `Employee ${profile.employeeNumber}`
+            ? /*
+               * The employee's own employment status, shown beside the title
+               * and department they already see here. Read-only: nothing under
+               * /me writes an employee record, and changing it needs
+               * employee.manage on the People screen.
+               */
+              [
+                profile.jobTitle,
+                profile.departmentName,
+                profile.employmentStatus
+                  ? EMPLOYMENT_STATUS_LABELS[profile.employmentStatus]
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ') || `Employee ${profile.employeeNumber}`
             : undefined
         }
       />

@@ -33,6 +33,95 @@ export const EMPLOYMENT_TYPES = [
   'INTERN',
   'TEMPORARY',
 ] as const;
+/**
+ * The employment stage. The canonical list, and the only one.
+ *
+ * Mirrors `enum EmploymentStatus` in schema.prisma exactly. Three separate
+ * questions live on an employee record and this is the third of them:
+ *
+ *   - EMPLOYEE_STATUSES  - is this person employed at all (Active, Resigned...)
+ *   - EMPLOYMENT_TYPES   - on what terms (Full time, Part time, Contract...)
+ *   - EMPLOYMENT_STATUSES - how far through the arrangement they are
+ *
+ * None of the three can stand in for another. A part-time permanent employee
+ * and a full-time probationer are both ordinary people to employ, and the first
+ * two lists cannot express either.
+ *
+ * Loans and medical both read the employee's value of THIS list. Neither keeps
+ * an employment-status field of its own, which is what stops the two benefits
+ * disagreeing about the same person.
+ */
+export const EMPLOYMENT_STATUSES = ['PROBATION', 'PERMANENT', 'INTERNEE'] as const;
+
+export type EmploymentStatus = (typeof EMPLOYMENT_STATUSES)[number];
+
+export const EMPLOYMENT_STATUS_LABELS: Record<EmploymentStatus, string> = {
+  PROBATION: 'Probation',
+  PERMANENT: 'Permanent',
+  INTERNEE: 'Internee',
+};
+
+export const EMPLOYMENT_STATUS_DESCRIPTIONS: Record<EmploymentStatus, string> = {
+  PROBATION: 'Serving an initial period; not yet confirmed.',
+  PERMANENT: 'Confirmed in post, on the confirmation date held with the record.',
+  INTERNEE: 'On an internship. Separate from the Intern employment type, which is the contract.',
+};
+
+export function isEmploymentStatus(value: unknown): value is EmploymentStatus {
+  return typeof value === 'string' && (EMPLOYMENT_STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * The eligible-statuses half of a benefit policy.
+ *
+ * Both the loan policy and the medical policy carry these three switches, under
+ * these three names, and both engines read them through the one function below.
+ * Structural rather than a shared base type on purpose: the two policies are
+ * versioned separately and have nothing else in common, and a type that only
+ * names what is actually shared cannot drag one policy's fields into the other.
+ */
+export interface EmploymentStatusPolicy {
+  allowProbation: boolean;
+  allowPermanent: boolean;
+  allowInternee: boolean;
+}
+
+/**
+ * Whether a policy covers an employment status.
+ *
+ * The single place the question is answered, for every benefit. Nothing here
+ * is hardcoded per status - each one is a switch a company sets, so "interns
+ * cannot apply" is a decision on a settings screen rather than a sentence in
+ * this file.
+ *
+ * A null status is eligible. That is the deliberate reading of an unclassified
+ * record: it says nothing, and the same doctrine already governs a missing
+ * confirmation date. Most of the imported roster carried a status and a few
+ * rows did not, and refusing a benefit on the strength of a field nobody filled
+ * in would be a worse answer than having no answer. The other rules - service
+ * length, salary, attendance - still apply to those people in full.
+ */
+export function isEmploymentStatusEligible(
+  policy: EmploymentStatusPolicy,
+  status: EmploymentStatus | null | undefined,
+): boolean {
+  switch (status) {
+    case 'PROBATION':
+      return policy.allowProbation;
+    case 'PERMANENT':
+      return policy.allowPermanent;
+    case 'INTERNEE':
+      return policy.allowInternee;
+    default:
+      return true;
+  }
+}
+
+/** The statuses a policy covers, for a settings screen and for a summary line. */
+export function eligibleEmploymentStatuses(policy: EmploymentStatusPolicy): EmploymentStatus[] {
+  return EMPLOYMENT_STATUSES.filter((s) => isEmploymentStatusEligible(policy, s));
+}
+
 export const GENDERS = ['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY'] as const;
 export const MARITAL_STATUSES = ['SINGLE', 'MARRIED', 'DIVORCED', 'WIDOWED', 'OTHER'] as const;
 
@@ -121,6 +210,16 @@ const employeeBaseSchema = z
     secondaryManagerId: optionalId,
     employmentType: z.enum(EMPLOYMENT_TYPES).default('FULL_TIME'),
     status: z.enum(EMPLOYEE_STATUSES).default('ACTIVE'),
+    /**
+     * Nullish rather than defaulted. A record nobody has classified stays
+     * unclassified - defaulting it here would write "Probation" onto every
+     * employee the first time anybody saved an unrelated field.
+     *
+     * `z.enum` is the whole of the validation: an arbitrary string is rejected
+     * by the schema before any route sees it, and the column is an enum too, so
+     * there is no path by which a free-text value reaches the database.
+     */
+    employmentStatus: z.enum(EMPLOYMENT_STATUSES).nullish(),
     hireDate: optionalDate,
     confirmationDate: optionalDate,
     // When the next increment falls due, not when the last one happened. The
@@ -182,6 +281,19 @@ export const employeeInputSchema = employeeBaseSchema
   .refine((v) => v.managerId === null || v.managerId !== v.secondaryManagerId, {
     message: 'Secondary manager must be different from the primary manager.',
     path: ['secondaryManagerId'],
+  })
+  /**
+   * Confirming somebody means saying when.
+   *
+   * PERMANENT and a confirmation date are one fact recorded in two columns, and
+   * a record carrying the first without the second cannot answer "since when",
+   * which is the question every later dispute turns on. The same rule is
+   * re-checked against the stored row on update, where the date may already be
+   * on the record.
+   */
+  .refine((v) => v.employmentStatus !== 'PERMANENT' || v.confirmationDate !== null, {
+    message: 'A confirmation date is required when the employment status is Permanent.',
+    path: ['confirmationDate'],
   });
 
 /**
@@ -246,7 +358,21 @@ export const employeeUpdateSchema = employeeBaseSchema
       message: 'Secondary manager must be different from the primary manager.',
       path: ['secondaryManagerId'],
     },
-  );
+  )
+  /**
+   * Confirming somebody means saying when - conditional, for the same reason
+   * the resignation rule above is.
+   *
+   * This can only catch a payload that nulls the date while setting PERMANENT.
+   * A PATCH that sets PERMANENT alone is legitimate when the record already
+   * carries a confirmation date, and the route merges against the stored row to
+   * decide - which is also what lets HR send the status and the date in one
+   * call, or in either order.
+   */
+  .refine((v) => v.employmentStatus !== 'PERMANENT' || v.confirmationDate !== null, {
+    message: 'A confirmation date is required when the employment status is Permanent.',
+    path: ['confirmationDate'],
+  });
 
 export type EmployeeInput = z.infer<typeof employeeInputSchema>;
 export type EmployeeUpdateInput = z.infer<typeof employeeUpdateSchema>;
@@ -257,12 +383,15 @@ export const EMPLOYEE_SORT_FIELDS = [
   'lastName',
   'hireDate',
   'status',
+  'employmentStatus',
   'createdAt',
 ] as const;
 
 export const employeeQuerySchema = paginationQuerySchema.extend({
   status: z.enum(EMPLOYEE_STATUSES).optional(),
   employmentType: z.enum(EMPLOYMENT_TYPES).optional(),
+  /** Omitted means every status, including the unclassified. */
+  employmentStatus: z.enum(EMPLOYMENT_STATUSES).optional(),
   departmentId: z.string().trim().max(64).optional(),
   teamId: z.string().trim().max(64).optional(),
   designationId: z.string().trim().max(64).optional(),
@@ -347,6 +476,8 @@ export interface EmployeeListItem {
   photoUrl: string | null;
   status: EmployeeStatus;
   employmentType: EmploymentType;
+  /** Null when nobody has classified the record. Never a free-text value. */
+  employmentStatus: EmploymentStatus | null;
   hireDate: string | null;
   designation: { id: string; name: string } | null;
   department: { id: string; name: string } | null;

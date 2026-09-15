@@ -161,6 +161,10 @@ describe('the policy form', () => {
     ]) {
       expect(screen.getByText(section)).toBeInTheDocument();
     }
+
+    // Eligibility carries the three employment-status switches as a group of
+    // its own rather than a Section, so it is named here explicitly.
+    expect(screen.getByText('Eligible employment statuses')).toBeInTheDocument();
   });
 
   it('lists all seven medical categories', async () => {
@@ -406,7 +410,31 @@ describe('what the confirmation will say', () => {
   it('reads a switch as Yes and No rather than true and false', () => {
     const changes = changedFields(saved, { ...saved, allowProbation: true });
 
-    expect(changes).toEqual([{ label: 'Allow probation employees', from: 'No', to: 'Yes' }]);
+    expect(changes).toEqual([{ label: 'Probation', from: 'No', to: 'Yes' }]);
+  });
+
+  /*
+   * The eligible employment statuses are three independent switches, not one
+   * setting with three values, so each moves on its own row. Asserting the
+   * saved values first is what proves toFormValues carries all three out of
+   * the record - a field it dropped would read as "unchanged" here forever and
+   * be silently reset to the default on the next save.
+   */
+  it('gives each employment status its own row', () => {
+    expect(saved.allowProbation).toBe(false);
+    expect(saved.allowPermanent).toBe(true);
+    expect(saved.allowInternee).toBe(false);
+
+    const changes = changedFields(saved, {
+      ...saved,
+      allowPermanent: false,
+      allowInternee: true,
+    });
+
+    expect(changes).toEqual([
+      { label: 'Permanent', from: 'Yes', to: 'No' },
+      { label: 'Internee', from: 'No', to: 'Yes' },
+    ]);
   });
 
   it('names the category a category setting belongs to', () => {

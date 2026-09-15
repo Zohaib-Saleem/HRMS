@@ -55,7 +55,7 @@ const employee = (overrides: Record<string, unknown> = {}) => ({
   status: 'ACTIVE',
   hireDate: new Date('2024-01-15T00:00:00Z'),
   confirmationDate: new Date('2024-04-15T00:00:00Z'),
-  confirmationStatus: 'Permanent',
+  employmentStatus: 'PERMANENT',
   contracts: [],
   ...overrides,
 });

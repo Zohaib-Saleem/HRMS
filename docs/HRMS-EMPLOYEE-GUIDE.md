@@ -31,6 +31,16 @@ Some fields you may not see at all. National ID, passport, visa and bank
 account details are restricted and are not returned to accounts without the
 specific permission.
 
+### Your employment status
+
+Your dashboard shows your employment status beside your job title and
+department: **Probation**, **Permanent** or **Internee**. It is how far through
+your employment arrangement you are, and it is not the same as your employment
+type (full time, part time, and so on).
+
+It is set by HR and you cannot change it — which is deliberate, because your
+loan and medical eligibility are read from it. If it looks wrong, ask HR.
+
 ---
 
 ## Attendance
@@ -190,6 +200,7 @@ If you manage people, it also shows requests waiting on you — see the
 ## What you cannot do
 
 - See another employee's record, attendance, leave or payslip
+- Change your own employment status, or anyone else's
 - See salary information, including your own salary structure — you see the
   payslip, not the configuration behind it
 - Create a login for anyone

@@ -46,7 +46,7 @@ const employee = (overrides: Record<string, unknown> = {}) => ({
   status: 'ACTIVE',
   hireDate: new Date('2024-01-15T00:00:00Z'),
   confirmationDate: new Date('2024-04-15T00:00:00Z'),
-  confirmationStatus: 'Permanent',
+  employmentStatus: 'PERMANENT',
   contracts: [],
   ...overrides,
 });
@@ -196,7 +196,7 @@ describe('the minimum employment period', () => {
 
 describe('probation', () => {
   const onProbation = () =>
-    employee({ confirmationStatus: 'Probation', confirmationDate: null });
+    employee({ employmentStatus: 'PROBATION', confirmationDate: null });
 
   it('refuses a probationer while probation cover is off', async () => {
     db.employee.findFirst.mockResolvedValue(onProbation());
@@ -230,7 +230,7 @@ describe('probation', () => {
 
   it('does not read a missing confirmation date as probation', async () => {
     db.employee.findFirst.mockResolvedValue(
-      employee({ confirmationDate: null, confirmationStatus: null }),
+      employee({ confirmationDate: null, employmentStatus: null }),
     );
 
     const result = await evaluate();

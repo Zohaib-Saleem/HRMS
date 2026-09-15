@@ -15,7 +15,12 @@ import {
 import {
   COLUMN_GROUPS,
   EMPLOYEE_MASTER_COLUMNS,
+  EMPLOYEE_STATUSES,
+  EMPLOYEE_STATUS_LABELS,
+  EMPLOYMENT_STATUSES,
+  EMPLOYMENT_STATUS_LABELS,
   LOAN_FILTER_STATUSES,
+  type EmploymentStatus,
   REPORT_PERIOD_LABELS,
   REPORT_PERIOD_PRESETS,
   resolveReportPeriod,
@@ -68,6 +73,7 @@ interface Filters {
   from: string;
   to: string;
   status: string;
+  employmentStatus: string;
   departmentId: string;
   teamId: string;
   designationId: string;
@@ -92,7 +98,7 @@ interface Filters {
 
 const EMPTY: Filters = {
   q: '', period: 'this-month', from: '', to: '',
-  status: '', departmentId: '', teamId: '', designationId: '', locationId: '',
+  status: '', employmentStatus: '', departmentId: '', teamId: '', designationId: '', locationId: '',
   hiredFrom: '', hiredTo: '', incrementDueFrom: '', incrementDueTo: '',
   salaryMin: '', salaryMax: '', leaveTypeId: '', leaveRemainingMin: '', leaveRemainingMax: '',
   loanStatus: 'any', hasActiveLoan: '', loanOutstandingMin: '', loanOutstandingMax: '',
@@ -262,11 +268,31 @@ export function EmployeeMasterReportPage() {
           <Field label="Location">
             <Lookup value={draft.locationId} onChange={(v) => set('locationId', v)} options={lookups.locations} all="All locations" />
           </Field>
+          {/*
+            The employment status - is this person employed - from the shared
+            list rather than a hand-typed one. The old literal offered
+            PROBATION, NOTICE_PERIOD and RETIRED, none of which are values of
+            EmployeeStatus, so picking any of the three filtered the report down
+            to nothing. Probation was the one people actually reached for, and
+            it now has a filter of its own below, which is the field that
+            genuinely holds it.
+          */}
           <Field label="Status">
             <NativeSelect value={draft.status} onChange={(e) => set('status', e.target.value)}>
               <option value="">Any status</option>
-              {['ACTIVE', 'PROBATION', 'NOTICE_PERIOD', 'TERMINATED', 'RESIGNED', 'RETIRED'].map((s) => (
-                <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
+              {EMPLOYEE_STATUSES.map((s) => (
+                <option key={s} value={s}>{EMPLOYEE_STATUS_LABELS[s]}</option>
+              ))}
+            </NativeSelect>
+          </Field>
+          <Field label="Employment status">
+            <NativeSelect
+              value={draft.employmentStatus}
+              onChange={(e) => set('employmentStatus', e.target.value)}
+            >
+              <option value="">All employment statuses</option>
+              {EMPLOYMENT_STATUSES.map((s) => (
+                <option key={s} value={s}>{EMPLOYMENT_STATUS_LABELS[s]}</option>
               ))}
             </NativeSelect>
           </Field>
@@ -527,6 +553,11 @@ function Cell({ row, column, currency }: { row: EmployeeMasterRow; column: Maste
       return row.punchCodes?.length ? <span className="font-mono text-[12px]">{row.punchCodes.join(' / ')}</span> : dash;
     case 'status':
       return <Badge variant={row.status === 'ACTIVE' ? 'success' : 'neutral'}>{row.status.replace(/_/g, ' ')}</Badge>;
+    case 'employmentStatus':
+      // The label, not the enum: the export and the screen both read "Probation".
+      return row.employmentStatus
+        ? text(EMPLOYMENT_STATUS_LABELS[row.employmentStatus as EmploymentStatus])
+        : dash;
     case 'contract':
       return row.contract ? text([row.contract.type, row.contract.startDate].filter(Boolean).join(' · ')) : dash;
     case 'salaryAmount':

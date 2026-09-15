@@ -2,9 +2,11 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import ExcelJS from 'exceljs';
 import {
   EMPLOYEE_MASTER_COLUMNS,
+  EMPLOYMENT_STATUS_LABELS,
   PERMISSIONS,
   employeeMasterQuerySchema,
   type EmployeeMasterReport,
+  type EmploymentStatus,
   type EmployeeMasterRow,
   type Permission,
 } from '@hrms/shared';
@@ -53,6 +55,11 @@ function exportColumns(auth: ReturnType<typeof requireAuthContext>, requested?: 
 function cellValue(row: EmployeeMasterRow, key: string): string | number | null {
   switch (key) {
     case 'punchCodes': return row.punchCodes?.join(' / ') ?? null;
+    // The label, so the spreadsheet reads "Probation" rather than "PROBATION".
+    case 'employmentStatus':
+      return row.employmentStatus
+        ? (EMPLOYMENT_STATUS_LABELS[row.employmentStatus as EmploymentStatus] ?? row.employmentStatus)
+        : null;
     case 'contract':
       return row.contract
         ? [row.contract.type, row.contract.startDate, row.contract.endDate].filter(Boolean).join(' · ')

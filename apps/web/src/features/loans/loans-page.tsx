@@ -2,6 +2,8 @@ import * as React from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { HandCoins, Plus } from 'lucide-react';
 import {
+  EMPLOYMENT_STATUSES,
+  EMPLOYMENT_STATUS_LABELS,
   LOAN_STATUSES,
   LOAN_STATUS_LABELS,
   PERMISSIONS,
@@ -41,7 +43,7 @@ import { LoanDetailPanel } from './loan-detail-panel';
  * the people who can see both and want their own.
  */
 
-const INITIAL = { q: '', status: '', view: 'all' as 'all' | 'mine', page: 1, limit: 20 };
+const INITIAL = { q: '', status: '', employmentStatus: '', view: 'all' as 'all' | 'mine', page: 1, limit: 20 };
 
 export function LoansPage() {
   const { has } = usePermissions();
@@ -76,6 +78,7 @@ export function LoansPage() {
         query: {
           q: debouncedQuery || undefined,
           status: filters.status || undefined,
+          employmentStatus: filters.employmentStatus || undefined,
           view: filters.view,
           page: filters.page,
           limit: filters.limit,
@@ -86,7 +89,11 @@ export function LoansPage() {
 
   const rows = query.data?.data ?? [];
   const meta = query.data?.meta;
-  const hasActiveFilters = filters.q !== '' || filters.status !== '' || filters.view !== 'all';
+  const hasActiveFilters =
+    filters.q !== '' ||
+    filters.status !== '' ||
+    filters.employmentStatus !== '' ||
+    filters.view !== 'all';
 
   return (
     <>
@@ -132,6 +139,27 @@ export function LoansPage() {
                   </option>
                 ))}
               </NativeSelect>
+              {/*
+                The borrower's employment status - the employee's own field,
+                not a copy kept on the loan. Offered only to somebody who can
+                see other people's loans: filtering your own list by your own
+                status answers nothing.
+              */}
+              {canSeeOthers ? (
+                <NativeSelect
+                  aria-label="Employment status"
+                  value={filters.employmentStatus}
+                  onChange={(event) => update({ employmentStatus: event.target.value })}
+                  className="xl:w-48"
+                >
+                  <option value="">All employment statuses</option>
+                  {EMPLOYMENT_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {EMPLOYMENT_STATUS_LABELS[s]}
+                    </option>
+                  ))}
+                </NativeSelect>
+              ) : null}
               {canSeeOthers ? (
                 <NativeSelect
                   aria-label="Whose loans"

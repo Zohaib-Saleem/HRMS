@@ -135,6 +135,8 @@ export function toFormValues(policy: LoanPolicyRecord): LoanPolicyInput {
     maxSalaryMultiplier: policy.maxSalaryMultiplier,
     minEmploymentMonths: policy.minEmploymentMonths,
     allowProbation: policy.allowProbation,
+    allowPermanent: policy.allowPermanent,
+    allowInternee: policy.allowInternee,
     minAttendancePercent: policy.minAttendancePercent,
     maxUnapprovedAbsences: policy.maxUnapprovedAbsences,
     maxLateDays: policy.maxLateDays,
@@ -461,9 +463,16 @@ export function LoanPolicyPage() {
         </div>
       </Section>
 
+      {/*
+        Eligible employment statuses.
+        One switch per value of EMPLOYMENT_STATUSES, read against the
+        employee's own Employment status field - the same field the medical
+        policy reads. Nothing here is decided in code: an internship is
+        ineligible because this box is unticked, not because anything says so.
+      */}
       <Section
-        title="Employment restrictions"
-        description="Which employment records may borrow at all."
+        title="Eligible employment statuses"
+        description="Which employment stages may borrow. Read from the employee's Employment status field - the same field the medical policy uses."
       >
         <div className="grid gap-3 sm:col-span-2 sm:grid-cols-3">
           <Controller
@@ -472,13 +481,47 @@ export function LoanPolicyPage() {
             render={({ field }) => (
               <Toggle
                 label={LOAN_POLICY_LABELS.allowProbation}
-                hint="Off blocks anyone still on probation."
+                hint="Also covers a live probation contract or a confirmation date still ahead."
                 checked={field.value}
                 disabled={!canManage}
                 onChange={field.onChange}
               />
             )}
           />
+          <Controller
+            control={form.control}
+            name="allowPermanent"
+            render={({ field }) => (
+              <Toggle
+                label={LOAN_POLICY_LABELS.allowPermanent}
+                hint="Off blocks confirmed employees."
+                checked={field.value}
+                disabled={!canManage}
+                onChange={field.onChange}
+              />
+            )}
+          />
+          <Controller
+            control={form.control}
+            name="allowInternee"
+            render={({ field }) => (
+              <Toggle
+                label={LOAN_POLICY_LABELS.allowInternee}
+                hint="Off blocks anyone on an internship."
+                checked={field.value}
+                disabled={!canManage}
+                onChange={field.onChange}
+              />
+            )}
+          />
+        </div>
+      </Section>
+
+      <Section
+        title="Employment restrictions"
+        description="Which employment records may borrow at all."
+      >
+        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
           <Controller
             control={form.control}
             name="blockTerminated"

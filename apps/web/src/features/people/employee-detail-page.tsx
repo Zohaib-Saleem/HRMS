@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import {
   EMPLOYEE_STATUS_LABELS,
+  EMPLOYMENT_STATUS_LABELS,
   EMPLOYMENT_TYPE_LABELS,
   PERMISSIONS,
   type EmployeeDetail,
@@ -190,6 +191,11 @@ export function EmployeeDetailPage() {
               <Badge variant={STATUS_TONE[employee.status]}>
                 {EMPLOYEE_STATUS_LABELS[employee.status]}
               </Badge>
+              {employee.employmentStatus ? (
+                <Badge variant="neutral">
+                  {EMPLOYMENT_STATUS_LABELS[employee.employmentStatus]}
+                </Badge>
+              ) : null}
               {employee.hasLogin ? <Badge variant="primary">Has login</Badge> : null}
             </div>
             <p className="mt-0.5 text-[13.5px] text-muted-foreground">
@@ -348,6 +354,20 @@ function OverviewTab({
             <Field label="Status" value={EMPLOYEE_STATUS_LABELS[employee.status]} />
             <Field label="Designation" value={employee.designation?.name} />
             <Field label="Employment type" value={EMPLOYMENT_TYPE_LABELS[employee.employmentType]} />
+            {/*
+              Next to Status and Employment type deliberately: it is the field
+              people mistake for both, and seeing the three together is what
+              makes the difference legible. "Not set" rather than a blank,
+              because an unclassified record is a thing HR can act on.
+            */}
+            <Field
+              label="Employment status"
+              value={
+                employee.employmentStatus
+                  ? EMPLOYMENT_STATUS_LABELS[employee.employmentStatus]
+                  : 'Not set'
+              }
+            />
             <Field label="Hire date" value={formatDate(employee.hireDate)} />
             <Field label="Confirmation date" value={formatDate(employee.confirmationDate)} />
             <Field label="Next increment due" value={formatDate(employee.nextIncrementDueDate)} />

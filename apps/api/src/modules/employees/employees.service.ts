@@ -3,6 +3,7 @@ import type {
   EmployeeDetail,
   EmployeeListItem,
   EmployeeStatus,
+  EmploymentStatus,
   EmploymentType,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
@@ -53,6 +54,9 @@ export function toListItem(row: ListRow): EmployeeListItem {
     photoUrl: row.photoUrl,
     status: row.status as EmployeeStatus,
     employmentType: row.employmentType as EmploymentType,
+    // Carried on the LIST item, not just the detail: People filters and colours
+    // by it, and a second fetch per row to find out would be absurd.
+    employmentStatus: row.employmentStatus as EmploymentStatus | null,
     hireDate: isoDate(row.hireDate),
     designation: row.designation,
     department: row.department,

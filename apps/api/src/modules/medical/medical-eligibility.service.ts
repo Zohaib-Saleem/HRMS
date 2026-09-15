@@ -1,5 +1,8 @@
 import {
+  EMPLOYMENT_STATUS_LABELS,
   MEDICAL_CATEGORY_LABELS,
+  isEmploymentStatusEligible,
+  type EmploymentStatus,
   type MedicalCategoryEntitlement,
   type MedicalEligibilityFailure,
   type MedicalEligibilityResult,
@@ -112,7 +115,7 @@ export async function evaluateMedicalEligibility(
       status: true,
       hireDate: true,
       confirmationDate: true,
-      confirmationStatus: true,
+      employmentStatus: true,
       contracts: {
         where: { status: 'ACTIVE', contractType: 'PROBATION' },
         select: { id: true },
@@ -138,7 +141,12 @@ export async function evaluateMedicalEligibility(
       benefitLimit,
       categoryLimits,
       currency: company.currency,
-      employment: { status: 'UNKNOWN', monthsServed: null, onProbation: false },
+      employment: {
+        status: 'UNKNOWN',
+        employmentStatus: null,
+        monthsServed: null,
+        onProbation: false,
+      },
     };
   }
 
@@ -201,15 +209,25 @@ export async function evaluateMedicalEligibility(
     fail('PROBATION', 'Employees on probation are not covered while probation cover is off.');
   }
 
-  // --- 6. permanent ----------------------------------------------------------
+  // --- 6. employment status --------------------------------------------------
   //
-  // The mirror of the rule above, and just as configurable. A company running a
-  // benefit for probationers only is unusual and is not this code's business to
-  // rule out - the setting exists, so it is honoured.
-  if (!onProbation && !policy.allowPermanent) {
+  // The employee's own `employmentStatus` column, measured against the policy's
+  // three switches. The SAME column and the SAME function the loan engine uses,
+  // so the two benefits cannot end up disagreeing about the same person - which
+  // is the entire reason medical does not keep an employment-status field of
+  // its own.
+  //
+  // This used to read `!onProbation` as "permanent", which was true only while
+  // there were two kinds of employee. An internee is neither, and under the old
+  // test would have been refused or covered according to the PERMANENT switch -
+  // a decision nobody made. Now each status answers to its own setting, and a
+  // company running a benefit for probationers only, or for interns only, is
+  // unusual and none of this code's business to rule out.
+  const employmentStatus = employee.employmentStatus as EmploymentStatus | null;
+  if (employmentStatus !== 'PROBATION' && !isEmploymentStatusEligible(policy, employmentStatus)) {
     fail(
-      'PERMANENT_NOT_ALLOWED',
-      'Permanent employees are not covered under the current medical policy.',
+      employmentStatus === 'PERMANENT' ? 'PERMANENT_NOT_ALLOWED' : 'EMPLOYMENT_STATUS',
+      `${EMPLOYMENT_STATUS_LABELS[employmentStatus as EmploymentStatus]} employees are not covered under the current medical policy.`,
     );
   }
 
@@ -233,6 +251,11 @@ export async function evaluateMedicalEligibility(
     benefitLimit,
     categoryLimits,
     currency: company.currency,
-    employment: { status: employee.status, monthsServed, onProbation },
+    employment: {
+      status: employee.status,
+      employmentStatus,
+      monthsServed,
+      onProbation,
+    },
   };
 }

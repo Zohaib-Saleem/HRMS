@@ -3,7 +3,9 @@ import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
   EMPLOYEE_SORT_FIELDS,
+  EMPLOYMENT_STATUS_LABELS,
   PERMISSIONS,
+  type EmploymentStatus,
   type EmployeeTreeNode,
   educationInputSchema,
   employeeInputSchema,
@@ -49,6 +51,7 @@ const CSV_COLUMNS = [
   'manager',
   'employmentType',
   'status',
+  'employmentStatus',
   'hireDate',
 ] as const;
 
@@ -97,6 +100,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         scopeFilter,
         query.status ? { status: query.status } : {},
         query.employmentType ? { employmentType: query.employmentType } : {},
+        query.employmentStatus ? { employmentStatus: query.employmentStatus } : {},
         query.departmentId ? { departmentId: query.departmentId } : {},
         query.teamId ? { teamId: query.teamId } : {},
         query.designationId ? { designationId: query.designationId } : {},
@@ -210,6 +214,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
             item.manager?.fullName,
             item.employmentType,
             item.status,
+            item.employmentStatus,
             item.hireDate,
           ]
             .map(csvCell)
@@ -393,6 +398,40 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      /**
+       * Probation -> Permanent, merged against the stored record for the same
+       * reason the exit rules are.
+       *
+       * Confirming somebody means saying when. The schema can only judge the
+       * payload, so `{ employmentStatus: 'PERMANENT' }` on its own passes it -
+       * and that call is legitimate when the record already carries a
+       * confirmation date. Merging here is what lets HR send the status and the
+       * date together, in either order, or the status alone against a date
+       * already on file, while still refusing to confirm somebody with no date
+       * anywhere.
+       *
+       * Nothing else moves. The employment status is one field: Active/Inactive
+       * is untouched, the employment type is untouched, and no salary, loan or
+       * medical record is written. Loans and medical read the new value when
+       * they are next asked a question, which is the whole point of their
+       * reading this column rather than keeping a copy.
+       */
+      const mergedEmploymentStatus = input.employmentStatus ?? before.employmentStatus;
+      const mergedConfirmation =
+        input.confirmationDate === undefined
+          ? before.confirmationDate
+            ? before.confirmationDate.toISOString().slice(0, 10)
+            : null
+          : input.confirmationDate;
+
+      if (mergedEmploymentStatus === 'PERMANENT' && !mergedConfirmation) {
+        throw new ValidationError({
+          confirmationDate: [
+            'A confirmation date is required when the employment status is Permanent.',
+          ],
+        });
+      }
+
       let data = toPrismaData({
         ...input,
         employeeNumber: input.employeeNumber ?? before.employeeNumber,
@@ -449,13 +488,33 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
 
       const changes = diff(before as unknown as Record<string, unknown>, data);
       if (changes.changed.length > 0) {
+        /**
+         * An employment-status change is an HR event, and the trail says so.
+         *
+         * No second history table: the audit log already records who changed
+         * what, when, from which address, with a field-level before/after, and
+         * the employee's own timeline reads it back. All that was missing was a
+         * summary a person can read without opening the diff - so a confirmation
+         * appears as "Probation -> Permanent, effective 15 Sep 2026" rather than
+         * as "(employmentStatus, confirmationDate)".
+         */
+        const statusMove = changes.changed.includes('employmentStatus')
+          ? ` ${EMPLOYMENT_STATUS_LABELS[before.employmentStatus as EmploymentStatus] ?? 'Unclassified'} -> ${EMPLOYMENT_STATUS_LABELS[updated.employmentStatus as EmploymentStatus] ?? 'Unclassified'}${
+              updated.employmentStatus === 'PERMANENT' && mergedConfirmation
+                ? `, effective ${mergedConfirmation}`
+                : ''
+            };`
+          : '';
+
         await recordAudit({
           companyId: auth.companyId,
           actorId: auth.userId,
-          action: 'employee.update',
+          action: changes.changed.includes('employmentStatus')
+            ? 'employee.employment-status.update'
+            : 'employee.update',
           entityType: 'Employee',
           entityId: id,
-          summary: `Updated ${updated.firstName} ${updated.lastName} (${changes.changed.join(', ')})${accountNote ? `; ${accountNote}` : ''}`.trim(),
+          summary: `Updated ${updated.firstName} ${updated.lastName}:${statusMove} (${changes.changed.join(', ')})${accountNote ? `; ${accountNote}` : ''}`.trim(),
           before: changes.before,
           after: changes.after,
           request,

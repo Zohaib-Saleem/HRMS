@@ -198,8 +198,16 @@ export const MEDICAL_POLICY_DEFAULTS = {
 
   // eligibility
   minEmploymentMonths: 3,
+  /**
+   * Eligible employment statuses, one switch per value of EMPLOYMENT_STATUSES,
+   * read against the employee's own `employmentStatus` - the same column the
+   * loan policy reads. The first two already existed with these defaults and
+   * are unchanged; `allowInternee` completes the set so an internship is a
+   * configured decision rather than whatever falls out of the other two.
+   */
   allowProbation: false,
   allowPermanent: true,
+  allowInternee: false,
   blockResigned: true,
   blockTerminated: true,
 
@@ -264,6 +272,7 @@ export const medicalPolicySchema = z
     minEmploymentMonths: wholeCount(240),
     allowProbation: z.boolean(),
     allowPermanent: z.boolean(),
+    allowInternee: z.boolean(),
     blockResigned: z.boolean(),
     blockTerminated: z.boolean(),
 
@@ -412,8 +421,9 @@ export const MEDICAL_POLICY_LABELS: Record<keyof MedicalPolicyValues | 'effectiv
   policyName: 'Policy name',
   description: 'Policy description',
   minEmploymentMonths: 'Minimum employment period',
-  allowProbation: 'Allow probation employees',
-  allowPermanent: 'Allow permanent employees',
+  allowProbation: 'Probation',
+  allowPermanent: 'Permanent',
+  allowInternee: 'Internee',
   blockResigned: 'Block resigned employees',
   blockTerminated: 'Block terminated employees',
   annualLimitPerEmployee: 'Annual medical limit per employee',

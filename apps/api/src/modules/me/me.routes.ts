@@ -111,6 +111,10 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         photoUrl: true,
         hireDate: true,
         employmentType: true,
+        // Read-only here, and read-only everywhere an employee can reach.
+        // Nothing under /me writes an employee record, so an employee can see
+        // their own employment status and has no route by which to change it.
+        employmentStatus: true,
         locationId: true,
         department: { select: { name: true } },
         team: { select: { name: true } },
@@ -226,6 +230,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
             : null,
           status: employee.status,
           employmentType: employee.employmentType,
+          employmentStatus: employee.employmentStatus,
           hireDate: employee.hireDate?.toISOString().slice(0, 10) ?? null,
           photoUrl: employee.photoUrl,
         },

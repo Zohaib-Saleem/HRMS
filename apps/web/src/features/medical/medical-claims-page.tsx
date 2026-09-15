@@ -2,6 +2,8 @@ import * as React from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { HeartPulse, Plus } from 'lucide-react';
 import {
+  EMPLOYMENT_STATUSES,
+  EMPLOYMENT_STATUS_LABELS,
   MEDICAL_CATEGORIES,
   MEDICAL_CATEGORY_LABELS,
   MEDICAL_CLAIM_STATUSES,
@@ -54,6 +56,7 @@ const INITIAL = {
   q: '',
   status: '',
   category: '',
+  employmentStatus: '',
   view: 'all' as 'all' | 'mine',
   page: 1,
   limit: 20,
@@ -98,6 +101,7 @@ export function MedicalClaimsPage() {
           q: debouncedQuery || undefined,
           status: filters.status || undefined,
           category: filters.category || undefined,
+          employmentStatus: filters.employmentStatus || undefined,
           view: filters.view,
           page: filters.page,
           limit: filters.limit,
@@ -109,7 +113,11 @@ export function MedicalClaimsPage() {
   const rows = query.data?.data ?? [];
   const meta = query.data?.meta;
   const hasActiveFilters =
-    filters.q !== '' || filters.status !== '' || filters.category !== '' || filters.view !== 'all';
+    filters.q !== '' ||
+    filters.status !== '' ||
+    filters.category !== '' ||
+    filters.employmentStatus !== '' ||
+    filters.view !== 'all';
 
   const columns = hasOversight ? 7 : 6;
 
@@ -170,6 +178,26 @@ export function MedicalClaimsPage() {
                   </option>
                 ))}
               </NativeSelect>
+              {/*
+                The claimant's employment status - the employee's own field.
+                Offered only with oversight, for the same reason as on Loans:
+                filtering your own claims by your own status answers nothing.
+              */}
+              {hasOversight ? (
+                <NativeSelect
+                  aria-label="Employment status"
+                  value={filters.employmentStatus}
+                  onChange={(event) => update({ employmentStatus: event.target.value })}
+                  className="xl:w-48"
+                >
+                  <option value="">All employment statuses</option>
+                  {EMPLOYMENT_STATUSES.map((s) => (
+                    <option key={s} value={s}>
+                      {EMPLOYMENT_STATUS_LABELS[s]}
+                    </option>
+                  ))}
+                </NativeSelect>
+              ) : null}
               {hasOversight ? (
                 <NativeSelect
                   aria-label="Whose claims"

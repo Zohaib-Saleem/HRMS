@@ -55,7 +55,18 @@ export const LOAN_EVALUATION_MONTHS_LABELS: Record<LoanEvaluationMonths, string>
 export const LOAN_POLICY_DEFAULTS = {
   maxSalaryMultiplier: 1,
   minEmploymentMonths: 3,
+  /**
+   * Eligible employment statuses, one switch per value of EMPLOYMENT_STATUSES.
+   *
+   * These defaults reproduce the rule that was already in force: probation was
+   * refused unless a company said otherwise, and everybody else was allowed.
+   * `allowInternee` starts false because an internship is the case a company
+   * most often means to exclude - but it is a setting, not a law, and turning it
+   * on is a checkbox on Settings -> Loans -> Loan Policy.
+   */
   allowProbation: false,
+  allowPermanent: true,
+  allowInternee: false,
   minAttendancePercent: 90,
   maxUnapprovedAbsences: 3,
   maxLateDays: 10,
@@ -96,6 +107,8 @@ export const loanPolicySchema = z.object({
     .min(0)
     .max(240),
   allowProbation: z.boolean(),
+  allowPermanent: z.boolean(),
+  allowInternee: z.boolean(),
   minAttendancePercent: z.coerce.number().min(0).max(100),
   maxUnapprovedAbsences: z.coerce.number().int().min(0).max(365),
   maxLateDays: z.coerce.number().int().min(0).max(365),
@@ -178,7 +191,9 @@ export const loanPolicyHistoryQuerySchema = paginationQuerySchema;
 export const LOAN_POLICY_LABELS: Record<keyof LoanPolicyInput, string> = {
   maxSalaryMultiplier: 'Maximum loan multiple',
   minEmploymentMonths: 'Minimum employment period',
-  allowProbation: 'Allow probation employees',
+  allowProbation: 'Probation',
+  allowPermanent: 'Permanent',
+  allowInternee: 'Internee',
   minAttendancePercent: 'Minimum attendance',
   maxUnapprovedAbsences: 'Maximum unapproved absences',
   maxLateDays: 'Maximum late days',

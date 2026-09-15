@@ -98,6 +98,8 @@ export const employeeMasterQuerySchema = z.object({
   designationId: z.string().trim().max(64).optional(),
   locationId: z.string().trim().max(64).optional(),
   employmentType: z.string().trim().max(32).optional(),
+  /** PROBATION / PERMANENT / INTERNEE. Omitted means every status. */
+  employmentStatus: z.string().trim().max(32).optional(),
   hiredFrom: isoDay.optional(),
   hiredTo: isoDay.optional(),
   incrementDueFrom: isoDay.optional(),
@@ -163,6 +165,8 @@ export interface EmployeeMasterRow {
   locationName: string | null;
   managerName: string | null;
   employmentType: string;
+  /** The canonical employment stage. Null when nobody has classified the row. */
+  employmentStatus: string | null;
   terminationDate: string | null;
   resignationDate: string | null;
 
@@ -298,6 +302,7 @@ export const EMPLOYEE_MASTER_COLUMNS: readonly MasterColumn[] = [
   { key: 'locationName', label: 'Location', group: 'Employment' },
   { key: 'managerName', label: 'Reports To', group: 'Employment' },
   { key: 'employmentType', label: 'Employment Type', group: 'Employment' },
+  { key: 'employmentStatus', label: 'Employment Status', group: 'Employment', default: true },
   { key: 'terminationDate', label: 'Termination Date', group: 'Employment' },
   { key: 'resignationDate', label: 'Resignation Date', group: 'Employment' },
   { key: 'contract', label: 'Contract', group: 'Employment', permission: 'contract.read' },

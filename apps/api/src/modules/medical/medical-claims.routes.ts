@@ -231,6 +231,7 @@ export const medicalClaimRoutes: FastifyPluginAsync = async (app) => {
         query.employeeId ? { employeeId: query.employeeId } : {},
         query.status ? { status: query.status } : {},
         query.category ? { category: query.category } : {},
+        query.employmentStatus ? { employee: { employmentStatus: query.employmentStatus } } : {},
         query.year
           ? {
               OR: [

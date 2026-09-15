@@ -62,6 +62,8 @@ function policy(overrides: Record<string, unknown> = {}) {
     maxSalaryMultiplier: LOAN_POLICY_DEFAULTS.maxSalaryMultiplier,
     minEmploymentMonths: LOAN_POLICY_DEFAULTS.minEmploymentMonths,
     allowProbation: LOAN_POLICY_DEFAULTS.allowProbation,
+    allowPermanent: LOAN_POLICY_DEFAULTS.allowPermanent,
+    allowInternee: LOAN_POLICY_DEFAULTS.allowInternee,
     minSalary: LOAN_POLICY_DEFAULTS.minSalary,
     minAttendancePercent: LOAN_POLICY_DEFAULTS.minAttendancePercent,
     maxUnapprovedAbsences: LOAN_POLICY_DEFAULTS.maxUnapprovedAbsences,
@@ -135,7 +137,7 @@ function setup(input: {
           status: 'ACTIVE',
           hireDate: new Date('2020-01-01T00:00:00Z'),
           confirmationDate: new Date('2020-07-01T00:00:00Z'),
-          confirmationStatus: 'Permanent',
+          employmentStatus: 'PERMANENT',
           locationId: null,
           contracts: [],
           ...input.employee,
@@ -405,10 +407,10 @@ describe('employment rules', () => {
   });
 
   it('refuses a probation employee while probation applications are off', async () => {
-    setup({ employee: { confirmationStatus: 'Probation' } });
+    setup({ employee: { employmentStatus: 'PROBATION' } });
     expect((await evaluate()).failedRules).toContain('PROBATION');
 
-    setup({ employee: { confirmationStatus: 'Probation' }, policy: { allowProbation: true } });
+    setup({ employee: { employmentStatus: 'PROBATION' }, policy: { allowProbation: true } });
     expect((await evaluate()).failedRules).not.toContain('PROBATION');
   });
 
@@ -545,13 +547,16 @@ describe('supporting rules', () => {
     expect(completedMonths(new Date('2026-01-15T00:00:00Z'), new Date('2026-04-15T00:00:00Z'))).toBe(3);
   });
 
-  it('reads probation from a contract, the roster wording or an unreached date', () => {
+  it('reads probation from the employment status, a contract or an unreached date', () => {
     const now = new Date('2026-07-15T00:00:00Z');
-    const base = { confirmationDate: null, confirmationStatus: null, contracts: [] };
+    const base = { confirmationDate: null, employmentStatus: null, contracts: [] };
 
     expect(isOnProbation(base, now)).toBe(false);
     expect(isOnProbation({ ...base, contracts: [{ id: 'c1' }] }, now)).toBe(true);
-    expect(isOnProbation({ ...base, confirmationStatus: 'probation' }, now)).toBe(true);
+    expect(isOnProbation({ ...base, employmentStatus: 'PROBATION' }, now)).toBe(true);
+    // PERMANENT and INTERNEE are not probation, whatever else is on the record.
+    expect(isOnProbation({ ...base, employmentStatus: 'PERMANENT' }, now)).toBe(false);
+    expect(isOnProbation({ ...base, employmentStatus: 'INTERNEE' }, now)).toBe(false);
     expect(
       isOnProbation({ ...base, confirmationDate: new Date('2026-12-01T00:00:00Z') }, now),
     ).toBe(true);

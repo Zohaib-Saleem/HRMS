@@ -36,8 +36,9 @@ designation, location, hire date, and employment type.
 | Manager, secondary manager | no | **Drives the approval chain** |
 | Employment type | defaulted | Full time, part time, contract, intern, temporary |
 | Status | defaulted | Active, On leave, Suspended, Terminated |
+| Employment status | no | Probation, Permanent, Internee — or unset. **Loans and medical read it** — see below |
 | Hire date | no | Payroll clamps the period to it. Missing → warning |
-| Confirmation date, termination date | no | |
+| Confirmation date, termination date | no | Confirmation date is required to make somebody Permanent |
 | Source of hire, LinkedIn, prior experience | no | Descriptive |
 | Date of birth, gender, marital status, nationality, blood group | no | |
 | Present/permanent address, emergency contact | no | |
@@ -58,6 +59,59 @@ sparingly.
 
 **People → open an employee → Edit.** Same fields. Changes are audited with a
 field-level before/after diff.
+
+### Employment status
+
+**People → open an employee → Edit → Employment status.** How far through the
+employment arrangement somebody is:
+
+| Value | Meaning |
+|---|---|
+| **Probation** | Serving an initial period; not yet confirmed |
+| **Permanent** | Confirmed in post, on the confirmation date held with the record |
+| **Internee** | On an internship |
+| *Not set* | Nobody has classified this record |
+
+This is the third of three questions an employee record answers, and none of
+them can stand in for another:
+
+| | The question | Values |
+|---|---|---|
+| **Status** | Are they employed at all? | Active, On leave, Suspended, Terminated |
+| **Employment type** | On what terms? | Full time, part time, contract, intern, temporary |
+| **Employment status** | How far through the arrangement? | Probation, Permanent, Internee |
+
+**Internee is not the Intern employment type.** The type is the contract; the
+status is the stage. A record can hold either without the other.
+
+**Confirming somebody needs a date.** Moving a record to *Permanent* is refused
+unless a confirmation date is set — in the same edit or in an earlier one.
+Clearing the confirmation date on a Permanent record is refused for the same
+reason. Changing the status writes nothing else: not the Active/Inactive
+status, not the employment type, not the punch code, not the salary, and no
+loan or medical record. The move is audited as
+`employee.employment-status.update` with the old and new value.
+
+**Who can change it.** `employee.manage` — Super Admin and HR Admin by default.
+A manager holds `employee.read` and so can *see* a report's employment status
+and cannot move it. An employee sees their own on their dashboard and has no
+route by which to change it.
+
+**Where it shows.** People carries it as a column and as a filter, and so does
+the Employee Master Report — filter, column and export alike, spelled
+*Probation* rather than `PROBATION`. An unclassified record reads *Not set* on
+the employee's detail panel and as a dash in the lists. Filtering People by a
+status narrows to that status; asking for none returns everybody, unclassified
+records included.
+
+**What reads it.** The loan policy and the medical policy each carry three
+switches — one per value — under **Eligible employment statuses**. Neither
+benefit keeps an employment-status field of its own, which is what stops the
+two disagreeing about the same person. Nothing is ineligible in code: an
+internship is refused a loan because that switch is off, not because anything
+says so. A record with *no* status set is not refused by these switches — an
+unfilled field says nothing either way, and the other rules (service length,
+salary, attendance) still apply to those people in full.
 
 ### Work experience
 
@@ -603,9 +657,13 @@ locked-out person needs to know which one they are looking at:
 
 | | What it means | Where it lives |
 |---|---|---|
-| **Employment status** | Whether they work here | The employee record |
+| **Status** | Whether they work here | The employee record |
 | **Account status** | Whether the login can sign in | The user record |
 | **Sessions** | Whether they are signed in *right now* | Session rows |
+
+Not to be confused with **Employment status** (Probation / Permanent /
+Internee), which is a fourth thing again and says nothing about signing in —
+see **Employment status** in *Employee management*.
 
 They move independently. Somebody can be employed with no account, have an
 account with no sessions, or be signed out everywhere while their account stays

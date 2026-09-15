@@ -7,6 +7,9 @@ import { Lock } from 'lucide-react';
 import {
   EMPLOYEE_STATUSES,
   EMPLOYEE_STATUS_LABELS,
+  EMPLOYMENT_STATUSES,
+  EMPLOYMENT_STATUS_DESCRIPTIONS,
+  EMPLOYMENT_STATUS_LABELS,
   EMPLOYMENT_TYPES,
   EMPLOYMENT_TYPE_LABELS,
   GENDERS,
@@ -88,6 +91,10 @@ export function EmployeeFormDrawer({
       secondaryManagerId: employee?.secondaryManager?.id ?? '',
       employmentType: employee?.employmentType ?? 'FULL_TIME',
       status: employee?.status ?? 'ACTIVE',
+      // Null, never a default. A new record is unclassified until somebody
+      // classifies it; defaulting to Probation would put a status on 80 people
+      // that nobody chose, and both benefit engines would then act on it.
+      employmentStatus: employee?.employmentStatus ?? null,
       hireDate: employee?.hireDate ?? '',
       confirmationDate: employee?.confirmationDate ?? '',
       nextIncrementDueDate: employee?.nextIncrementDueDate ?? '',
@@ -118,6 +125,18 @@ export function EmployeeFormDrawer({
 
   const { register, handleSubmit, formState, watch, setError, reset } = form;
   const departmentId = watch('departmentId');
+
+  /*
+   * The employment status as the form currently holds it, and what the record
+   * arrived as.
+   *
+   * The pair is what makes Probation -> Permanent a visible transition rather
+   * than a field edit: the confirmation date announces itself as required the
+   * moment Permanent is chosen, and stays prompted while an employee who WAS on
+   * probation has not been given one.
+   */
+  const employmentStatus = watch('employmentStatus') || null;
+  const wasProbation = employee?.employmentStatus === 'PROBATION';
 
   // Teams belong to a department, so the options narrow as soon as one is picked.
   const teamOptions = lookups.teams.filter(
@@ -273,10 +292,50 @@ export function EmployeeFormDrawer({
                     ))}
                   </NativeSelect>
                 </FormField>
+                {/*
+                  Employment status sits between Status and the dates, because
+                  that is the order the questions are actually asked in: is this
+                  person employed, on what terms, how far through, since when.
+                */}
+                <FormField
+                  label="Employment status"
+                  htmlFor="emp-employmentStatus"
+                  error={formState.errors.employmentStatus?.message}
+                  hint={
+                    employmentStatus
+                      ? EMPLOYMENT_STATUS_DESCRIPTIONS[employmentStatus]
+                      : 'Not set. Separate from Status and from Employment type.'
+                  }
+                >
+                  <NativeSelect id="emp-employmentStatus" {...register('employmentStatus')}>
+                    <option value="">Not set</option>
+                    {EMPLOYMENT_STATUSES.map((s) => (
+                      <option key={s} value={s}>{EMPLOYMENT_STATUS_LABELS[s]}</option>
+                    ))}
+                  </NativeSelect>
+                </FormField>
                 <FormField label="Hire date" htmlFor="emp-hireDate" error={formState.errors.hireDate?.message}>
                   <Input type="date" {...register('hireDate')} />
                 </FormField>
-                <FormField label="Confirmation date" htmlFor="emp-confirmationDate" error={formState.errors.confirmationDate?.message}>
+                {/*
+                  Confirming somebody means saying when, so the hint turns into
+                  a requirement the moment Permanent is chosen. The server
+                  enforces the same rule against the stored record - this only
+                  says so before the round trip.
+                */}
+                <FormField
+                  label="Confirmation date"
+                  htmlFor="emp-confirmationDate"
+                  error={formState.errors.confirmationDate?.message}
+                  required={employmentStatus === 'PERMANENT'}
+                  hint={
+                    employmentStatus === 'PERMANENT'
+                      ? 'Required: the day this employee was confirmed.'
+                      : wasProbation
+                        ? 'Set this when confirming the employee as Permanent.'
+                        : undefined
+                  }
+                >
                   <Input type="date" {...register('confirmationDate')} />
                 </FormField>
                 <FormField label="Next increment due" htmlFor="emp-nextIncrementDueDate" error={formState.errors.nextIncrementDueDate?.message} hint="When the next salary review falls due.">

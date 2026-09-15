@@ -1,5 +1,8 @@
 import {
+  EMPLOYMENT_STATUS_LABELS,
+  isEmploymentStatusEligible,
   monthlyDeductionFor,
+  type EmploymentStatus,
   type LoanEligibilityFailure,
   type LoanEligibilityResult,
   type LoanEligibilityRule,
@@ -156,7 +159,7 @@ export async function evaluateLoanEligibility(
       status: true,
       hireDate: true,
       confirmationDate: true,
-      confirmationStatus: true,
+      employmentStatus: true,
       locationId: true,
       contracts: {
         where: { status: 'ACTIVE', contractType: 'PROBATION' },
@@ -194,6 +197,29 @@ export async function evaluateLoanEligibility(
         `You have completed ${monthsServed} month${monthsServed === 1 ? '' : 's'} of service. The minimum is ${policy.minEmploymentMonths}.`,
       );
     }
+  }
+
+  // --- employment status ----------------------------------------------------
+  //
+  // The employee's own `employmentStatus` column, measured against the policy's
+  // three switches. The SAME column and the SAME function the medical engine
+  // uses, so a person refused here for being an internee is refused there for
+  // the same reason, in the same words, from the same value.
+  //
+  // Nothing about a status is decided in this file. Whether an internee may
+  // borrow is `policy.allowInternee`, and a company that wants to say yes says
+  // it on the settings screen.
+  //
+  // PROBATION is excluded here and reported by the rule below instead, which
+  // carries the same switch and also catches the two probation signals the enum
+  // cannot: an ACTIVE probation contract and a confirmation date still ahead.
+  // Reporting it twice would put the same refusal on screen twice.
+  const employmentStatus = employee.employmentStatus as EmploymentStatus | null;
+  if (employmentStatus !== 'PROBATION' && !isEmploymentStatusEligible(policy, employmentStatus)) {
+    fail(
+      'EMPLOYMENT_STATUS',
+      `${EMPLOYMENT_STATUS_LABELS[employmentStatus as EmploymentStatus]} employees cannot apply under the current loan policy.`,
+    );
   }
 
   // --- probation ------------------------------------------------------------
@@ -477,23 +503,34 @@ export function completedMonths(from: Date, now: Date): number {
 /**
  * Whether somebody is still on probation.
  *
- * Three signals, any of which is enough, and none of which is invented: an
- * ACTIVE contract of type PROBATION, the roster's own "Probation" wording, or a
- * confirmation date that has not arrived. A missing confirmation date says
- * nothing either way and is deliberately not read as probation - most of the
- * existing roster has none, and treating silence as probation would block a
- * whole company on a field nobody filled in.
+ * Three signals, any of which is enough, and none of which is invented: the
+ * employee's own `employmentStatus` of PROBATION, an ACTIVE contract of type
+ * PROBATION, or a confirmation date that has not arrived. A missing
+ * confirmation date says nothing either way and is deliberately not read as
+ * probation - most of the existing roster has none, and treating silence as
+ * probation would block a whole company on a field nobody filled in.
+ *
+ * The first signal used to be a string comparison against the roster's own
+ * "Probation" wording, lowercased and trimmed in the hope that every import had
+ * spelled it the same way. It is now the canonical enum, so there is one
+ * spelling and it is checked by the database.
+ *
+ * The other two signals are why this function still exists rather than
+ * collapsing into `employmentStatus === 'PROBATION'`. A record can carry a live
+ * probation contract, or a confirmation date next month, while nobody has got
+ * round to setting the status - and someone in that position is on probation
+ * whatever the column says.
  */
 export function isOnProbation(
   employee: {
     confirmationDate: Date | null;
-    confirmationStatus: string | null;
+    employmentStatus: EmploymentStatus | string | null;
     contracts: ReadonlyArray<{ id: string }>;
   },
   now: Date,
 ): boolean {
   if (employee.contracts.length > 0) return true;
-  if (employee.confirmationStatus?.trim().toLowerCase() === 'probation') return true;
+  if (employee.employmentStatus === 'PROBATION') return true;
   if (employee.confirmationDate && employee.confirmationDate.getTime() > now.getTime()) return true;
   return false;
 }

@@ -194,6 +194,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         query.view === 'mine' ? { employeeId: caller.employeeId ?? '__none__' } : {},
         query.employeeId ? { employeeId: query.employeeId } : {},
         query.status ? { status: query.status } : {},
+        query.employmentStatus ? { employee: { employmentStatus: query.employmentStatus } } : {},
         query.q
           ? {
               OR: [

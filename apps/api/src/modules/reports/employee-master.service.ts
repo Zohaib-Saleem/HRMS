@@ -111,6 +111,7 @@ export async function buildEmployeeMasterReport(
       query.designationId ? { designationId: query.designationId } : {},
       query.locationId ? { locationId: query.locationId } : {},
       query.employmentType ? { employmentType: query.employmentType as never } : {},
+      query.employmentStatus ? { employmentStatus: query.employmentStatus as never } : {},
       query.hiredFrom ? { hireDate: { gte: new Date(`${query.hiredFrom}T00:00:00.000Z`) } } : {},
       query.hiredTo ? { hireDate: { lte: new Date(`${query.hiredTo}T00:00:00.000Z`) } } : {},
       query.incrementDueFrom
@@ -505,6 +506,7 @@ function toRow(
     locationName: e.location?.name ?? null,
     managerName: e.manager ? nameOf(e.manager) : null,
     employmentType: e.employmentType,
+    employmentStatus: e.employmentStatus,
     terminationDate: day(e.terminationDate),
     resignationDate: day(e.resignationDate),
 
