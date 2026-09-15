@@ -3,8 +3,6 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { toast } from 'sonner';
 import { CalendarCheck, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import {
-  ATTENDANCE_STATUSES,
-  ATTENDANCE_STATUS_LABELS,
   DERIVED_ATTENDANCE_STATUS_LABELS,
   PERMISSIONS,
   type AttendanceTotals,
@@ -18,7 +16,7 @@ import {
 import { api, errorMessage } from '@/lib/api';
 import { useDebounced } from '@/lib/use-debounced';
 import { cn, formatDate } from '@/lib/utils';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useLookups } from '@/lib/lookups';
 import { usePermissions } from '@/features/auth/session-context';
 import { PageHeader } from '@/components/layout/page-header';
@@ -26,11 +24,12 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input, NativeSelect } from '@/components/ui/field';
 import { ListToolbar } from '@/components/ui/list-toolbar';
-import { Pagination } from '@/components/ui/pagination';
+import { PAGE_SIZES, Pagination } from '@/components/ui/pagination';
 import { ListSkeleton, TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { LATE_TEXT, STATUS_BADGE, STATUS_TEXT, minutesLabel, timeLabel } from './attendance-ui';
+import { TEAM_ATTENDANCE_FILTERS, teamAttendanceQuery } from './team-attendance-filter';
 
 /**
  * Team attendance.
@@ -45,6 +44,8 @@ import { LATE_TEXT, STATUS_BADGE, STATUS_TEXT, minutesLabel, timeLabel } from '.
 interface TeamResponse extends Paginated<TeamAttendanceRow> {
   totals: AttendanceTotals;
   range: { from: string; to: string };
+  /** True when a filtered read hit the server's 2,000-person ceiling. */
+  truncated?: boolean;
 }
 
 interface TeamSummaryResponse {
@@ -55,30 +56,89 @@ interface TeamSummaryResponse {
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
+const DEFAULT_LIMIT = 20;
+
+const readInt = (value: string | null, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+/**
+ * Rows per page, as the server would accept it.
+ *
+ * A hand-edited `?limit=5000` is clamped here rather than sent: the API caps
+ * the page at 100 and would answer 100 while the footer promised 5,000, which
+ * is the exact disagreement this screen exists to have stopped having.
+ */
+const readLimit = (value: string | null): number => {
+  const parsed = readInt(value, DEFAULT_LIMIT);
+  return PAGE_SIZES.includes(parsed) ? parsed : DEFAULT_LIMIT;
+};
+
 export function TeamAttendancePage() {
   const { has } = usePermissions();
   const { lookups } = useLookups();
   const canManage = has(PERMISSIONS.ATTENDANCE_MANAGE);
   const queryClient = useQueryClient();
 
-  const [filters, setFilters] = React.useState(() => ({
-    q: '',
-    status: '',
-    departmentId: '',
-    teamId: '',
-    from: todayIso(),
-    to: todayIso(),
-    page: 1,
-    limit: 20,
-  }));
+  /**
+   * The filters live in the URL, not in component state.
+   *
+   * It is the same convention the payroll preview already uses, and it is what
+   * lets the dashboard drill down: a figure there is a link to this screen
+   * carrying the status and the date it was counted for. A refresh keeps the
+   * filter, back and forward move between filters, and the address bar is a
+   * shareable description of what is on screen.
+   */
+  const [params, setParams] = useSearchParams();
+
+  const filters = React.useMemo(() => {
+    const from = params.get('from') || todayIso();
+    return {
+      q: params.get('q') ?? '',
+      status: params.get('status') ?? '',
+      departmentId: params.get('departmentId') ?? '',
+      teamId: params.get('teamId') ?? '',
+      from,
+      // A link that names one day need only say so once.
+      to: params.get('to') || from,
+      page: readInt(params.get('page'), 1),
+      limit: readLimit(params.get('limit')),
+    };
+  }, [params]);
+
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const debouncedQuery = useDebounced(filters.q, 350);
 
   const update = React.useCallback(
-    (patch: Partial<typeof filters>) =>
-      setFilters((prev) => ({ ...prev, ...patch, ...('page' in patch ? {} : { page: 1 }) })),
-    [],
+    (patch: Partial<Record<keyof typeof filters, string | number>>, replace = false) =>
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          for (const [key, value] of Object.entries(patch)) {
+            // A default is an absent parameter, so the URL stays readable and
+            // two ways of describing the same screen produce the same address.
+            const empty =
+              value === '' ||
+              value === undefined ||
+              (key === 'page' && value === 1) ||
+              (key === 'limit' && value === DEFAULT_LIMIT);
+            if (empty) next.delete(key);
+            else next.set(key, String(value));
+          }
+          // Changing anything but the page returns to page one: page four of a
+          // filter that now has one page is an empty table.
+          if (!('page' in patch)) next.delete('page');
+          return next;
+        },
+        { replace },
+      ),
+    [setParams],
   );
+
+  // "Late" and "Overtime" are flags rather than statuses, so the single filter
+  // the screen shows becomes whichever parameter the API actually takes.
+  const { status, flag } = teamAttendanceQuery(filters.status);
 
   const query = useQuery({
     queryKey: ['attendance', 'team', { ...filters, q: debouncedQuery }],
@@ -88,7 +148,8 @@ export function TeamAttendancePage() {
           page: filters.page,
           limit: filters.limit,
           q: debouncedQuery || undefined,
-          status: filters.status || undefined,
+          status,
+          flag,
           departmentId: filters.departmentId || undefined,
           teamId: filters.teamId || undefined,
           from: filters.from,
@@ -201,21 +262,12 @@ export function TeamAttendancePage() {
       <Card className="overflow-hidden">
         <ListToolbar
           search={filters.q}
-          onSearchChange={(q) => update({ q })}
+          // Replaced rather than pushed: one history entry per keystroke would
+          // make the back button spell the search term out backwards.
+          onSearchChange={(q) => update({ q }, true)}
           placeholder="Search name or employee number"
           hasActiveFilters={hasFilters}
-          onReset={() =>
-            setFilters({
-              q: '',
-              status: '',
-              departmentId: '',
-              teamId: '',
-              from: todayIso(),
-              to: todayIso(),
-              page: 1,
-              limit: 20,
-            })
-          }
+          onReset={() => setParams(new URLSearchParams())}
           filters={
             <>
               <NativeSelect
@@ -263,8 +315,10 @@ export function TeamAttendancePage() {
                 className="w-36"
               >
                 <option value="">All statuses</option>
-                {ATTENDANCE_STATUSES.map((s) => (
-                  <option key={s} value={s}>{ATTENDANCE_STATUS_LABELS[s]}</option>
+                {TEAM_ATTENDANCE_FILTERS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
                 ))}
               </NativeSelect>
             </>
@@ -336,6 +390,13 @@ export function TeamAttendancePage() {
                 </TBody>
               </Table>
             </TableWrapper>
+
+            {query.data?.truncated ? (
+              <p className="border-t border-border px-5 py-2 text-[11.5px] text-muted-foreground">
+                Filtered across the first 2,000 people in your scope. Narrow by department or
+                team to be sure of the rest.
+              </p>
+            ) : null}
 
             {query.data?.meta ? (
               <Pagination

@@ -49,6 +49,7 @@ import {
   emptyMonthlyTotals as emptyTotals,
   shiftOnDate,
   tallyDerived as tally,
+  type DerivedDay,
 } from './attendance.service.js';
 import {
   computeAttendance,
@@ -65,6 +66,32 @@ const MAX_RANGE_DAYS = 62;
 
 /** Same reasoning for the team summary's width: a ceiling, not a page. */
 const SUMMARY_EMPLOYEE_CAP = 2000;
+
+/**
+ * The employee shape a team attendance row is built from.
+ *
+ * Shared between the paginated read and the filtered one so the two can never
+ * select different columns and produce rows that disagree about the same
+ * person - and so both are ordered identically, which is what makes slicing the
+ * filtered list into pages behave like database pagination.
+ */
+const teamEmployeeSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  displayName: true,
+  employeeNumber: true,
+  locationId: true,
+  department: { select: { name: true } },
+  team: { select: { id: true, name: true } },
+} satisfies Prisma.EmployeeSelect;
+
+type TeamEmployee = Prisma.EmployeeGetPayload<{ select: typeof teamEmployeeSelect }>;
+
+const TEAM_ORDER: Prisma.EmployeeOrderByWithRelationInput[] = [
+  { firstName: 'asc' },
+  { lastName: 'asc' },
+];
 
 function assertUsableRange(from: Date, to: Date): void {
   if (to < from) {
@@ -530,33 +557,68 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       ],
     };
 
+    /**
+     * Status and flag narrow by DERIVED day, and no SQL can express that: what
+     * a day is comes from the shift calendar, the holiday list, approved leave
+     * and the punch, resolved per employee in `deriveRangeForEmployees`.
+     *
+     * Which is why a filtered page used to arrive short. The page was cut by
+     * the database first and the non-matching rows dropped afterwards, so a
+     * request for 20 rows of "absent" fetched 20 employees, kept the eight who
+     * were absent, and still reported `total` as all 80 people in scope - the
+     * table ended after eight rows under a footer reading "Showing 1 to 20 of
+     * 80". The same mismatch left later pages blank.
+     *
+     * So a narrowed request derives the whole scope - under the same ceiling
+     * the team summary uses - filters it, and only then cuts it into pages.
+     * `meta` and the rows it describes are one set. An unfiltered request is
+     * untouched and still paginates in the database.
+     */
+    const narrowing = Boolean(query.status || query.flag);
+    const matchesFilter = (day: DerivedDay): boolean =>
+      (!query.status || day.status === query.status) &&
+      (!query.flag || day.flags.includes(query.flag));
+
     const { skip, take } = toSkipTake(query.page, query.limit);
-    const [total, employees] = await Promise.all([
-      prisma.employee.count({ where }),
-      prisma.employee.findMany({
+
+    let total: number;
+    let employees: TeamEmployee[];
+    let derived: Map<string, DerivedDay[]>;
+    let truncated = false;
+
+    if (narrowing) {
+      const candidates = await prisma.employee.findMany({
         where,
-        skip,
-        take,
-        orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          displayName: true,
-          employeeNumber: true,
-          locationId: true,
-          department: { select: { name: true } },
-          team: { select: { id: true, name: true } },
-        },
-      }),
-    ]);
+        take: SUMMARY_EMPLOYEE_CAP,
+        orderBy: TEAM_ORDER,
+        select: teamEmployeeSelect,
+      });
+      truncated = candidates.length === SUMMARY_EMPLOYEE_CAP;
+      derived = await deriveRangeForEmployees(auth.companyId, candidates, from, to);
+      const matched = candidates.filter((e) => (derived.get(e.id) ?? []).some(matchesFilter));
+      total = matched.length;
+      employees = matched.slice(skip, skip + take);
+    } else {
+      const [count, page] = await Promise.all([
+        prisma.employee.count({ where }),
+        prisma.employee.findMany({
+          where,
+          skip,
+          take,
+          orderBy: TEAM_ORDER,
+          select: teamEmployeeSelect,
+        }),
+      ]);
+      total = count;
+      employees = page;
+      derived = await deriveRangeForEmployees(auth.companyId, employees, from, to);
+    }
 
-    const derived = await deriveRangeForEmployees(auth.companyId, employees, from, to);
-
-    // The shift each person is on at the end of the range, for the roster column.
+    // The shift each person is on at the end of the range, for the roster
+    // column. One query per person, so only ever for the page being returned.
     const shifts = await Promise.all(employees.map((e) => shiftOnDate(e.id, to)));
 
-    const rows: TeamAttendanceRow[] = employees.map((employee, index) => {
+    const data: TeamAttendanceRow[] = employees.map((employee, index) => {
       const days = derived.get(employee.id) ?? [];
       return {
         employeeId: employee.id,
@@ -566,20 +628,19 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         teamId: employee.team?.id ?? null,
         teamName: employee.team?.name ?? null,
         shiftName: shifts[index]?.name ?? null,
-        days: query.status ? days.filter((d) => d.status === query.status) : days,
+        days: narrowing ? days.filter(matchesFilter) : days,
         totals: tally(days),
       };
     });
 
-    // A status filter is about finding people, so drop anyone with no match.
-    const data = query.status ? rows.filter((r) => r.days.length > 0) : rows;
-    const totals = tally(rows.flatMap((r) => r.days));
+    const totals = tally(data.flatMap((r) => r.days));
 
     return reply.send({
       data,
       meta: buildMeta(query.page, query.limit, total),
       totals,
       range: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+      truncated,
     });
   });
 

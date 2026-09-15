@@ -34,6 +34,7 @@ import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/t
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { useAuthenticatedSession, usePermissions } from '@/features/auth/session-context';
 import { STATUS_TONE } from '@/features/time/attendance-ui';
+import { teamAttendancePath } from '@/features/time/team-attendance-filter';
 import { DonutChart, RateMeter, SliceLegend, TrendChart, TrendLegend } from './dashboard-charts';
 import type { Slice } from './dashboard-charts';
 import {
@@ -165,6 +166,16 @@ export function CompanyDashboard() {
   const dayLoading = dayQuery.isLoading;
   const workingDay = today.scored > 0;
 
+  /**
+   * The day every attendance figure on this page was counted for.
+   *
+   * The same value `useAttendanceToday` asked the API for, so a drill-down
+   * lands on exactly the day the reader clicked rather than on whatever the
+   * destination would have defaulted to. The trend card's range picker does
+   * not touch it - that scopes the chart and the punch list, not these counts.
+   */
+  const date = todayIso();
+
   return (
     <div className="space-y-6">
       <Hero
@@ -201,7 +212,7 @@ export function CompanyDashboard() {
             icon={UserRound}
             tone="present"
             loading={dayLoading}
-            to="/attendance/team"
+            to={teamAttendancePath({ status: 'PRESENT', date })}
             permission={PERMISSIONS.ATTENDANCE_READ}
           />
           <Kpi
@@ -211,7 +222,7 @@ export function CompanyDashboard() {
             icon={UserMinus}
             tone="absent"
             loading={dayLoading}
-            to="/attendance/team"
+            to={teamAttendancePath({ status: 'ABSENT', date })}
             permission={PERMISSIONS.ATTENDANCE_READ}
           />
           <Kpi
@@ -221,7 +232,7 @@ export function CompanyDashboard() {
             icon={AlarmClock}
             tone="late"
             loading={dayLoading}
-            to="/attendance/team"
+            to={teamAttendancePath({ status: 'LATE', date })}
             permission={PERMISSIONS.ATTENDANCE_READ}
           />
           <Kpi
@@ -231,8 +242,12 @@ export function CompanyDashboard() {
             icon={CalendarClock}
             tone="leave"
             loading={dayLoading}
-            to="/leave/requests"
-            permission={PERMISSIONS.LEAVE_READ}
+            // The figure is a count of attendance days classified ON_LEAVE, so
+            // it drills into those days. The leave register answers a different
+            // question - which requests exist - and disagreed with this tile
+            // whenever a request spanned a weekend.
+            to={teamAttendancePath({ status: 'ON_LEAVE', date })}
+            permission={PERMISSIONS.ATTENDANCE_READ}
           />
           <Kpi
             label="Departments"
@@ -261,7 +276,8 @@ export function CompanyDashboard() {
             icon={Percent}
             tone={rate === null ? 'neutral' : rate >= 90 ? 'present' : rate >= 75 ? 'late' : 'absent'}
             loading={dayLoading}
-            to="/attendance/team"
+            // A rate is not a status, so this one carries the day and no filter.
+            to={teamAttendancePath({ date })}
             permission={PERMISSIONS.ATTENDANCE_READ}
           />
         </div>
@@ -270,7 +286,7 @@ export function CompanyDashboard() {
       {canReadAttendance ? (
         <>
           <div className="grid gap-4 xl:grid-cols-3">
-            <OverviewCard counts={today} rate={rate} loading={dayLoading} />
+            <OverviewCard counts={today} rate={rate} loading={dayLoading} date={date} />
             <TrendCard
               trend={trend}
               range={range}
@@ -457,7 +473,18 @@ function Kpi({
       />
       <div className="flex items-start justify-between gap-3 p-4 pt-5 sm:p-5 sm:pt-6">
         <div className="min-w-0 space-y-1">
-          <p className="truncate text-[12.5px] font-medium text-muted-foreground">{label}</p>
+          <p className="flex items-center gap-1 text-[12.5px] font-medium text-muted-foreground">
+            <span className="truncate">{label}</span>
+            {/* The one mark that separates a tile you can open from a tile that
+                only reports. Present from the start on touch, where there is no
+                hover to reveal it with. */}
+            {linked ? (
+              <ChevronRight
+                className="size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100 sm:opacity-0"
+                aria-hidden
+              />
+            ) : null}
+          </p>
           {loading ? (
             <Skeleton className="h-8 w-14" />
           ) : (
@@ -486,7 +513,14 @@ function Kpi({
   return linked ? (
     <Link
       to={to}
-      className={cn(shell, 'transition-shadow hover:shadow-sm focus-visible:shadow-sm')}
+      className={cn(
+        shell,
+        // Hover and focus both move the border to the focus hue and lift the
+        // card, so the tile reads as a control on a pointer and on a keyboard.
+        // Touch gets neither, which is why the chevron above is not hover-only
+        // below the `sm` breakpoint.
+        'group transition-all duration-150 hover:border-ring hover:shadow-md focus-visible:border-ring focus-visible:shadow-md',
+      )}
     >
       {body}
     </Link>
@@ -501,30 +535,58 @@ function OverviewCard({
   counts,
   rate,
   loading,
+  date,
 }: {
   counts: ReturnType<typeof tallyDays>;
   rate: number | null;
   loading: boolean;
+  /** The day these counts describe, carried into every drill-down. */
+  date: string;
 }) {
   // The ring order is the validated one - each neighbouring pair was checked
   // for colour-vision separation in this sequence, so it is not free to change.
   // Late days are taken out of present and half day so nobody is drawn twice.
+  //
+  // Each slice links to the same day on team attendance, filtered to what the
+  // slice counts. The filter is the one the API already classifies by, so the
+  // list is the same fact this ring is drawn from rather than a second reading
+  // of it - see team-attendance-filter.
   const slices: Slice[] = [
     {
       key: 'present',
       label: 'Present, on time',
       value: counts.present - counts.latePresent,
       color: 'var(--chart-present)',
+      to: teamAttendancePath({ status: 'PRESENT', date }),
     },
     {
       key: 'half-day',
       label: 'Half day',
       value: counts.halfDay - counts.lateHalfDay,
       color: 'var(--chart-half-day)',
+      to: teamAttendancePath({ status: 'HALF_DAY', date }),
     },
-    { key: 'late', label: 'Late', value: counts.late, color: 'var(--chart-late)' },
-    { key: 'leave', label: 'On leave', value: counts.onLeave, color: 'var(--chart-leave)' },
-    { key: 'absent', label: 'Absent', value: counts.absent, color: 'var(--chart-absent)' },
+    {
+      key: 'late',
+      label: 'Late',
+      value: counts.late,
+      color: 'var(--chart-late)',
+      to: teamAttendancePath({ status: 'LATE', date }),
+    },
+    {
+      key: 'leave',
+      label: 'On leave',
+      value: counts.onLeave,
+      color: 'var(--chart-leave)',
+      to: teamAttendancePath({ status: 'ON_LEAVE', date }),
+    },
+    {
+      key: 'absent',
+      label: 'Absent',
+      value: counts.absent,
+      color: 'var(--chart-absent)',
+      to: teamAttendancePath({ status: 'ABSENT', date }),
+    },
   ];
 
   return (

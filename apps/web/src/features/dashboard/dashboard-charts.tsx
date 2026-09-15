@@ -1,3 +1,5 @@
+import { ChevronRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import type { TrendPoint } from './dashboard-data';
 
@@ -25,6 +27,14 @@ export interface Slice {
   value: number;
   /** A CSS colour, always a validated `--chart-*` token. */
   color: string;
+  /**
+   * Where the slice drills down to, when it drills down at all.
+   *
+   * Optional because the legend is also used to describe a chart nobody can
+   * click into; a slice without one stays a plain row rather than becoming a
+   * link that goes nowhere.
+   */
+  to?: string;
 }
 
 // -------------------------------------------------------------------- donut
@@ -115,23 +125,46 @@ export function SliceLegend({ slices }: { slices: Slice[] }) {
 
   return (
     <ul className="min-w-0 flex-1 space-y-1">
-      {slices.map((slice) => (
-        <li
-          key={slice.key}
-          className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-accent/45"
-        >
-          <span
-            className="size-2.5 shrink-0 rounded-[3px]"
-            style={{ backgroundColor: slice.color }}
-            aria-hidden
-          />
-          <span className="min-w-0 flex-1 truncate text-[13px]">{slice.label}</span>
-          <span className="tabular text-[13px] font-semibold">{slice.value}</span>
-          <span className="tabular w-10 text-right text-[12px] text-muted-foreground">
-            {total > 0 ? `${Math.round((slice.value / total) * 100)}%` : '--'}
-          </span>
-        </li>
-      ))}
+      {slices.map((slice) => {
+        const body = (
+          <>
+            <span
+              className="size-2.5 shrink-0 rounded-[3px]"
+              style={{ backgroundColor: slice.color }}
+              aria-hidden
+            />
+            <span className="min-w-0 flex-1 truncate text-[13px]">{slice.label}</span>
+            <span className="tabular text-[13px] font-semibold">{slice.value}</span>
+            <span className="tabular w-10 text-right text-[12px] text-muted-foreground">
+              {total > 0 ? `${Math.round((slice.value / total) * 100)}%` : '--'}
+            </span>
+          </>
+        );
+        // The row already lifts on hover, which on a plain legend is decoration
+        // and on a linked one is the affordance; the chevron is what tells the
+        // two apart, and it is the only thing the link adds to the layout.
+        const shell = 'flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors';
+
+        return (
+          <li key={slice.key}>
+            {slice.to ? (
+              <Link
+                to={slice.to}
+                className={`${shell} group hover:bg-accent focus-visible:bg-accent`}
+                aria-label={`${slice.label}: ${slice.value}. Open in team attendance.`}
+              >
+                {body}
+                <ChevronRight
+                  className="size-3.5 shrink-0 text-muted-foreground/60 transition-colors group-hover:text-foreground"
+                  aria-hidden
+                />
+              </Link>
+            ) : (
+              <span className={`${shell} hover:bg-accent/45`}>{body}</span>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }

@@ -1190,7 +1190,7 @@ export function AttendanceRulesPage() {
         ) : null}
       </div>
 
-      <div className="space-y-4 xl:sticky xl:top-20">
+      <div className="space-y-4 xl:sticky xl:top-6">
         {live ? (
           <Examples
             rules={live}

@@ -122,6 +122,15 @@ const isoDate = z
 export const attendanceQuerySchema = paginationQuerySchema.extend({
   employeeId: z.string().trim().max(64).optional(),
   status: z.enum(ATTENDANCE_STATUSES).optional(),
+  /**
+   * Narrows to days carrying a flag, for the questions statuses cannot answer.
+   *
+   * "Late" and "overtime" are not statuses and never have been - a late day is
+   * a PRESENT day that was late - so the dashboard's Late tile drills down on
+   * the flag the deriver already puts on the day, exactly as the correction
+   * centre's `/monthly` search does. Nothing new is computed for it.
+   */
+  flag: z.enum(ATTENDANCE_FLAGS).optional(),
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
   // Narrowing only. These never widen what the caller may see - the data scope

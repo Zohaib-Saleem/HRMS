@@ -20,7 +20,13 @@ function readCollapsed(): boolean {
 }
 
 /**
- * Application shell: fixed sidebar, sticky top bar, scrollable content column.
+ * Application shell: fixed sidebar, fixed top bar, scrollable content column.
+ *
+ * The shell owns the viewport (`h-dvh` + `overflow-hidden`), so the document
+ * itself never scrolls. The only vertical scrollport on desktop is `<main>`;
+ * the sidebar and header sit outside it and therefore stay put. A sidebar with
+ * more nav than fits scrolls inside its own `<nav>`, not the page.
+ *
  * Below `lg` the sidebar becomes a drawer.
  */
 export function AppShell() {
@@ -50,17 +56,15 @@ export function AppShell() {
   React.useEffect(() => setLeafTitle(null), [location.pathname]);
 
   return (
-    <div className="flex h-full bg-background">
-      {/* Desktop sidebar */}
+    <div className="flex h-dvh overflow-hidden bg-background">
+      {/* Desktop sidebar - full viewport height, outside the scrollport. */}
       <aside
         className={cn(
-          'hidden shrink-0 border-r border-sidebar-border transition-[width] duration-200 lg:block',
+          'hidden h-full shrink-0 border-r border-sidebar-border transition-[width] duration-200 lg:block',
           collapsed ? 'w-16' : 'w-60',
         )}
       >
-        <div className="sticky top-0 h-dvh">
-          <SidebarNav collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
-        </div>
+        <SidebarNav collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
       </aside>
 
       {/* Mobile drawer */}
@@ -79,8 +83,8 @@ export function AppShell() {
       </Dialog.Root>
 
       {/* Main column */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface/85 px-4 backdrop-blur-md sm:px-6">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="relative z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface/85 px-4 backdrop-blur-md sm:px-6">
           <button
             type="button"
             onClick={() => setMobileOpen(true)}
@@ -114,7 +118,9 @@ export function AppShell() {
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        {/* The page's scrollport. `min-h-0` lets it shrink inside the flex
+            column instead of pushing the shell past the viewport. */}
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-[1400px]">
             {/*
               Routes are code-split, so the first visit to a screen fetches its

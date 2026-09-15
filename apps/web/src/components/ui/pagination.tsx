@@ -10,7 +10,8 @@ interface PaginationProps {
   disabled?: boolean;
 }
 
-const PAGE_SIZES = [10, 20, 50, 100];
+/** Exported so a screen reading its page size out of the URL clamps to the same set. */
+export const PAGE_SIZES = [10, 20, 50, 100];
 
 export function Pagination({ meta, onPageChange, onLimitChange, disabled }: PaginationProps) {
   const { page, limit, total, totalPages } = meta;
