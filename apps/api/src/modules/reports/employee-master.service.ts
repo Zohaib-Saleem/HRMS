@@ -11,7 +11,11 @@ import {
 import type { AuthContext } from '../../auth/session.js';
 import { employeeScopeFilter } from '../../auth/scope.js';
 import { prisma } from '../../core/db.js';
-import { deriveRangeForEmployees, tallyDerived } from '../time/attendance.service.js';
+import {
+  deriveRangeForEmployees,
+  tallyDerived,
+  type DerivableEmployee,
+} from '../time/attendance.service.js';
 import { balancesForEmployee, foldPaidBalances } from '../leave/leave.service.js';
 import { loanTotals, toNumber } from '../loans/loans.service.js';
 
@@ -249,7 +253,10 @@ async function punchCodesFor(companyId: string, ids: string[]): Promise<Map<stri
 /** The attendance engine, over the whole cohort in one pass. */
 async function attendanceFor(
   companyId: string,
-  employees: ReadonlyArray<{ id: string; locationId: string | null }>,
+  // The full employee rows, lifecycle columns included: attendance totals are
+  // scored over the days somebody was employed for, and the deriver is what
+  // decides which those are.
+  employees: ReadonlyArray<DerivableEmployee>,
   from: Date,
   to: Date,
 ): Promise<Map<string, EmployeeMasterRow['attendance']>> {

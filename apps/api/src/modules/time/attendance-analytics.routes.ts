@@ -12,6 +12,7 @@ import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import { dateColumnToDayKey, dayKeyToDateColumn } from '../../core/zoned-time.js';
 import { deriveRangeForEmployees } from './attendance.service.js';
+import { EMPLOYMENT_WINDOW_SELECT, attendancePopulationWhere } from './employment-window.js';
 import { aggregateDailyTotals, datesInRange, emptySummary } from './attendance-analytics.service.js';
 
 /**
@@ -124,9 +125,11 @@ export const attendanceAnalyticsRoutes: FastifyPluginAsync = async (app) => {
         query.departmentId ? { departmentId: query.departmentId } : {},
         query.teamId ? { teamId: query.teamId } : {},
         // Nobody is absent for a month before they joined or after they left.
-        // The same two clauses the reports apply, for the same reason.
-        { OR: [{ hireDate: null }, { hireDate: { lte: to } }] },
-        { OR: [{ terminationDate: null }, { terminationDate: { gte: from } }] },
+        // The one clause every attendance population applies, for the same
+        // reason - and the days INSIDE the month that fall outside their
+        // employment are dropped by the deriver, which is what this pair of
+        // rules could never do on its own.
+        attendancePopulationWhere(from, to),
       ],
     };
 
@@ -134,7 +137,7 @@ export const attendanceAnalyticsRoutes: FastifyPluginAsync = async (app) => {
       where,
       take: EMPLOYEE_CAP + 1,
       // Only what the deriver needs. The chart shows no names, so it reads none.
-      select: { id: true, locationId: true },
+      select: { id: true, locationId: true, ...EMPLOYMENT_WINDOW_SELECT },
     });
 
     const truncated = rows.length > EMPLOYEE_CAP;

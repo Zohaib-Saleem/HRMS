@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../../core/db.js';
 import { toDateOnly } from '../leave/leave.service.js';
 import { deriveRangeForEmployees } from './attendance.service.js';
+import { EMPLOYMENT_WINDOW_SELECT, attendancePopulationWhere } from './employment-window.js';
 
 /**
  * Automatic absence finalisation.
@@ -57,14 +58,20 @@ export async function markAbsencesForDate(input: {
     where: {
       AND: [
         { companyId: input.companyId },
-        // Someone who had not started, or had already left, cannot be absent.
-        { status: { not: 'TERMINATED' } },
-        { OR: [{ hireDate: null }, { hireDate: { lte: date } }] },
-        { OR: [{ terminationDate: null }, { terminationDate: { gte: date } }] },
+        /**
+         * Someone who had not started, or had already left, cannot be absent.
+         *
+         * The one lifecycle rule, shared with every screen that counts an
+         * absence, rather than three clauses maintained here. The old
+         * `status != TERMINATED` line went with them: it never covered a
+         * resignation, so a resigned employee kept being marked absent every
+         * night for a job they no longer had.
+         */
+        attendancePopulationWhere(date, date),
         input.employeeFilter ?? {},
       ],
     },
-    select: { id: true, locationId: true },
+    select: { id: true, locationId: true, ...EMPLOYMENT_WINDOW_SELECT },
   });
 
   const result: AbsenceRunResult = {

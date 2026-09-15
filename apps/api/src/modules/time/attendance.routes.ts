@@ -40,6 +40,10 @@ import {
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
 import { summariseByTeam, teamFilterClause } from './team-attendance.service.js';
+import {
+  EMPLOYMENT_WINDOW_SELECT,
+  attendancePopulationWhere,
+} from './employment-window.js';
 import { clockBoundary, dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import {
   assertCheckInIpAllowed,
@@ -84,6 +88,9 @@ const teamEmployeeSelect = {
   locationId: true,
   department: { select: { name: true } },
   team: { select: { id: true, name: true } },
+  // Which days of the range this person was employed for. The deriver refuses
+  // to classify the others; see employment-window.
+  ...EMPLOYMENT_WINDOW_SELECT,
 } satisfies Prisma.EmployeeSelect;
 
 type TeamEmployee = Prisma.EmployeeGetPayload<{ select: typeof teamEmployeeSelect }>;
@@ -553,6 +560,16 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         query.employeeId ? { id: query.employeeId } : {},
         teamFilterClause(query.teamId),
         query.departmentId ? { departmentId: query.departmentId } : {},
+        /**
+         * Only people employed at some point in the range.
+         *
+         * In the database rather than after the page is cut, because `total`
+         * has to count the same population the rows come from - the identical
+         * reason the status filter below derives the whole scope before
+         * paginating. Someone who left before the range starts is not a row
+         * with no days; they are not a row.
+         */
+        attendancePopulationWhere(from, to),
         ...searchClauses,
       ],
     };
@@ -676,6 +693,9 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         query.employeeId ? { id: query.employeeId } : {},
         teamFilterClause(query.teamId),
         query.departmentId ? { departmentId: query.departmentId } : {},
+        // The same population as `/team`, so the tile and the table it links
+        // to cannot count different people.
+        attendancePopulationWhere(from, to),
       ],
     };
 
@@ -689,6 +709,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         locationId: true,
         department: { select: { name: true } },
         team: { select: { id: true, name: true } },
+        ...EMPLOYMENT_WINDOW_SELECT,
       },
     });
 
@@ -755,7 +776,15 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
           { companyId: auth.companyId },
           scopeFilter,
           query.employeeId ? { id: query.employeeId } : {},
-          { status: { not: 'TERMINATED' } },
+          /**
+           * Employed during the period, by the one lifecycle rule.
+           *
+           * Replaces `status != TERMINATED`, which was wrong in both
+           * directions: it dropped a person terminated mid-period out of the
+           * period they actually worked, and it kept a resignation - a
+           * different exit status - in every period after they had gone.
+           */
+          attendancePopulationWhere(from, to),
         ],
       },
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
@@ -767,6 +796,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         employeeNumber: true,
         locationId: true,
         department: { select: { name: true } },
+        ...EMPLOYMENT_WINDOW_SELECT,
       },
     });
 

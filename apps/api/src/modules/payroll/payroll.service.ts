@@ -9,7 +9,7 @@ import type {
 import { prisma } from '../../core/db.js';
 import { logger } from '../../core/logger.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
-import { deriveRangeForEmployees } from '../time/attendance.service.js';
+import { deriveRangeForEmployees, type DerivableEmployee } from '../time/attendance.service.js';
 import {
   calculate,
   type AdjustmentInput,
@@ -279,7 +279,7 @@ interface EmployeeFacts {
  */
 export async function gatherFacts(input: {
   companyId: string;
-  employees: ReadonlyArray<{ id: string; locationId: string | null }>;
+  employees: ReadonlyArray<DerivableEmployee>;
   from: Date;
   to: Date;
   /**
@@ -293,7 +293,26 @@ export async function gatherFacts(input: {
   const employeeIds = employees.map((e) => e.id);
 
   const [derived, timesheets, assignments] = await Promise.all([
-    deriveRangeForEmployees(companyId, employees, from, to),
+    /**
+     * The whole period, including any days after somebody left.
+     *
+     * Deliberate, and the one place that opts out of the employment-window
+     * rule. Everywhere a human READS an attendance figure, a day after the
+     * exit is not theirs and is not shown. What a period PAYS is a different
+     * question with money on the end of it: a run covering a mid-period
+     * leaver has always seen their post-exit days as ABSENT and priced the
+     * final settlement on that basis. Dropping those days here would change
+     * settlement amounts as a side effect of a display fix, with no payroll
+     * test watching it happen.
+     *
+     * That existing treatment is very probably wrong - nobody is absent from
+     * a job they have left - but correcting it means changing what people are
+     * paid, and that wants its own change with its own tests and sign-off,
+     * not this one.
+     */
+    deriveRangeForEmployees(companyId, employees, from, to, {
+      restrictToEmploymentWindow: false,
+    }),
     // Only APPROVED timesheets. A submitted-but-undecided one is not approval,
     // and treating it as such would pay for hours nobody agreed to.
     prisma.timesheet.findMany({
@@ -624,7 +643,18 @@ export async function computePayroll(input: {
     }),
     gatherFacts({
       companyId,
-      employees: employees.map((e) => ({ id: e.id, locationId: e.locationId })),
+      employees: employees.map((e) => ({
+        id: e.id,
+        locationId: e.locationId,
+        // Carried only to satisfy `DerivableEmployee`, which requires the
+        // lifecycle columns so that no attendance caller can forget them.
+        // This call opts out of reading them (see gatherFacts), so they
+        // change nothing about what a run pays.
+        status: e.status,
+        hireDate: e.hireDate,
+        terminationDate: e.terminationDate,
+        resignationDate: e.resignationDate,
+      })),
       from,
       to,
       fallbackScheduledMinutes: settings.fallbackScheduledMinutes,

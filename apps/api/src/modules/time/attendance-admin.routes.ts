@@ -23,6 +23,7 @@ import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import { resolveAttendancePolicy } from './attendance-policy.js';
+import { EMPLOYMENT_WINDOW_SELECT, attendancePopulationWhere } from './employment-window.js';
 import {
   deriveRangeForEmployees,
   emptyMonthlyTotals,
@@ -227,6 +228,9 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
             { employeeNumber: { contains: term, mode: 'insensitive' as const } },
           ],
         })),
+        // Only people employed at some point in the month. Narrowed in the
+        // database so `count` and the page it describes see one population.
+        attendancePopulationWhere(from, to),
       ],
     };
 
@@ -247,6 +251,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
           locationId: true,
           department: { select: { name: true } },
           team: { select: { name: true } },
+          ...EMPLOYMENT_WINDOW_SELECT,
         },
       }),
     ]);
@@ -455,9 +460,9 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
         { companyId: auth.companyId },
         scopeFilter,
         // People who had left before the day, or had not joined yet, are not
-        // absent - they were not expected.
-        { OR: [{ terminationDate: null }, { terminationDate: { gte: date } }] },
-        { OR: [{ hireDate: null }, { hireDate: { lte: date } }] },
+        // absent - they were not expected. The one lifecycle rule, so this
+        // day's counts and the drill-down behind them agree.
+        attendancePopulationWhere(date, date),
         query.departmentId ? { departmentId: query.departmentId } : {},
         query.teamId ? { teamId: query.teamId } : {},
       ],
@@ -476,6 +481,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
         locationId: true,
         department: { select: { id: true, name: true } },
         team: { select: { id: true, name: true } },
+        ...EMPLOYMENT_WINDOW_SELECT,
       },
     });
 

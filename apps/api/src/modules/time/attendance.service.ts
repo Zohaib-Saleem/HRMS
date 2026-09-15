@@ -10,6 +10,11 @@ import { ForbiddenError, ValidationError } from '../../core/errors.js';
 import { toDateOnly } from '../leave/leave.service.js';
 import { todayInZone } from '../../core/zoned-time.js';
 import {
+  EMPLOYMENT_WINDOW_SELECT,
+  isEmployeeInAttendancePopulation,
+  type EmploymentWindowFields,
+} from './employment-window.js';
+import {
   attendanceFlags,
   computeAttendance,
   effectiveShift,
@@ -190,19 +195,58 @@ export function assignmentOn<T extends { effectiveFrom: Date; effectiveTo: Date 
 }
 
 /**
+ * Everything the deriver needs to know about a person.
+ *
+ * The lifecycle columns are REQUIRED rather than optional, and that is the
+ * whole point of the type: a caller that forgets to select them gets a
+ * compiler error instead of a month of absences for somebody who had already
+ * left. `EMPLOYMENT_WINDOW_SELECT` spreads the four of them into any `select`.
+ */
+export type DerivableEmployee = { id: string; locationId: string | null } & EmploymentWindowFields;
+
+/**
  * Derivation for several employees at once.
  *
  * The per-employee version delegates here so the team view does not fan out
  * into four queries per person - the whole range is fetched once and grouped in
  * memory. One implementation, so a team row and a personal row can never
  * disagree about the same day.
+ *
+ * Days outside the employment are not classified at all - see
+ * `isEmployeeInAttendancePopulation`. Skipping them here, rather than in each
+ * of the dozen callers, is what makes the rule impossible to apply
+ * inconsistently: the team page, the dashboard counts and their drill-downs,
+ * every report, every export and an individual's own calendar are all sums of
+ * the days this function returns, so a day it declines to emit cannot be
+ * counted as present, absent, half day, late, overtime, leave, a holiday or a
+ * weekend anywhere downstream.
  */
+export interface DeriveRangeOptions {
+  /**
+   * Whether days outside the employment are skipped. Defaults to true, which
+   * is the rule described above and what every attendance figure in the
+   * product wants.
+   *
+   * Payroll, and only payroll, passes false. Not because the days are
+   * meaningful there - they are not - but because what a period PAYS is a
+   * separate decision from what it DISPLAYS, and this fix was scoped to the
+   * second. A run covering somebody who left mid-period currently sees their
+   * post-exit days as ABSENT and prices them accordingly; silently changing
+   * that would move money on a final settlement with no test watching. It is
+   * a real bug and it wants its own change, with payroll tests and somebody's
+   * sign-off - see the note at the call site in payroll.service.ts.
+   */
+  restrictToEmploymentWindow?: boolean;
+}
+
 export async function deriveRangeForEmployees(
   companyId: string,
-  employees: ReadonlyArray<{ id: string; locationId: string | null }>,
+  employees: ReadonlyArray<DerivableEmployee>,
   from: Date,
   to: Date,
+  options: DeriveRangeOptions = {},
 ): Promise<Map<string, DerivedDay[]>> {
+  const restrictToEmploymentWindow = options.restrictToEmploymentWindow ?? true;
   const result = new Map<string, DerivedDay[]>();
   if (employees.length === 0) return result;
 
@@ -264,6 +308,18 @@ export async function deriveRangeForEmployees(
     const days: DerivedDay[] = [];
 
     for (let d = new Date(from); d <= to; d.setUTCDate(d.getUTCDate() + 1)) {
+      /**
+       * Days this person was not employed for are not theirs to answer for.
+       *
+       * Checked before anything else is read, so a date outside the employment
+       * produces no day at all rather than a day that has to be filtered out
+       * again by whoever is counting. Their real days inside the employment are
+       * untouched, and no stored record is read, written or hidden by this -
+       * a terminated employee's September 1st to 10th still derive exactly as
+       * they always did.
+       */
+      if (restrictToEmploymentWindow && !isEmployeeInAttendancePopulation(employee, d)) continue;
+
       const key = dateKey(d);
       const record = recordByDate.get(key);
       const holidayName = holidayByDate.get(key) ?? null;
@@ -419,7 +475,7 @@ export async function deriveRange(
 ): Promise<DerivedDay[]> {
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
-    select: { id: true, locationId: true },
+    select: { id: true, locationId: true, ...EMPLOYMENT_WINDOW_SELECT },
   });
 
   const byEmployee = await deriveRangeForEmployees(companyId, [employee], from, to);

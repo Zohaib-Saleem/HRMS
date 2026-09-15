@@ -277,6 +277,22 @@ export async function attendanceDayDetail(input: {
     deriveRange(companyId, employeeId, date, date),
   ]);
 
+  /**
+   * A day outside the employment is not a day this person has.
+   *
+   * The deriver declines to classify one - see `isEmployeeInAttendancePopulation`
+   * - so there is nothing to explain, correct or adjust. The correction centre
+   * only ever lists days it derived, so this is reachable by hand-typed date
+   * alone; answering "not found" is the truth, and is what keeps the
+   * non-null assertion below honest.
+   */
+  const processed = derived[0];
+  if (!processed) {
+    throw new NotFoundError(
+      `Attendance for ${dayKey}: that employee was not employed on that date`,
+    );
+  }
+
   const window = effectiveShift(assignedShift, policy);
 
   /**
@@ -368,7 +384,7 @@ export async function attendanceDayDetail(input: {
       assigned: assignedShift !== null,
     },
     rules: ruleView(policy, assignedShift),
-    processed: derived[0]!,
+    processed,
     fromPunches,
     rawPunches,
     adjustments: adjustments.map(toAdjustmentRecord),

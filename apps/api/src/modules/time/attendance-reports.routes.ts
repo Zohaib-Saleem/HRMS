@@ -17,6 +17,7 @@ import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import { dayKeyToDateColumn, dateColumnToDayKey } from '../../core/zoned-time.js';
 import { deriveRangeForEmployees, shiftOnDate, type DerivedDay } from './attendance.service.js';
+import { EMPLOYMENT_WINDOW_SELECT, attendancePopulationWhere } from './employment-window.js';
 import {
   ADJUSTMENT_INCLUDE,
   toAdjustmentRecord,
@@ -145,11 +146,12 @@ export const attendanceReportRoutes: FastifyPluginAsync = async (app) => {
         lastName: true,
         displayName: true,
         employeeNumber: true,
-        hireDate: true,
         locationId: true,
         department: { select: { name: true } },
         team: { select: { name: true } },
         designation: { select: { name: true } },
+        // Carries hireDate as well, which the file header already showed.
+        ...EMPLOYMENT_WINDOW_SELECT,
       },
     });
     if (!employee) throw new NotFoundError('Employee');
@@ -312,8 +314,9 @@ export const attendanceReportRoutes: FastifyPluginAsync = async (app) => {
             }
           : {},
         // Nobody is absent for a period before they joined or after they left.
-        { OR: [{ hireDate: null }, { hireDate: { lte: to } }] },
-        { OR: [{ terminationDate: null }, { terminationDate: { gte: from } }] },
+        // One rule, shared with the screens, so a report and the table it was
+        // run from cannot describe different people.
+        attendancePopulationWhere(from, to),
       ],
     };
 
@@ -331,6 +334,7 @@ export const attendanceReportRoutes: FastifyPluginAsync = async (app) => {
         department: { select: { id: true, name: true } },
         team: { select: { id: true, name: true } },
         designation: { select: { name: true } },
+        ...EMPLOYMENT_WINDOW_SELECT,
       },
     });
 
