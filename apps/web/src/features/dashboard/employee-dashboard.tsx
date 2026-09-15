@@ -19,6 +19,8 @@ import { AttendanceToday } from '@/features/time/attendance-today';
 import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
 import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
+import { MyAttendanceBarsCard } from './my-attendance-bars-card';
+import { CompanyMoments } from './company-moments';
 import { useEmployeeDashboard, type LeaveRequestView } from './employee-dashboard-data';
 
 /**
@@ -111,7 +113,8 @@ export function EmployeeDashboard() {
   }
 
   const profile = data?.profile ?? null;
-  const totals = data?.attendanceMonth?.totals;
+  const attendanceMonth = data?.attendanceMonth ?? null;
+  const totals = attendanceMonth?.totals;
   const loading = query.isLoading;
 
   return (
@@ -142,6 +145,21 @@ export function EmployeeDashboard() {
       {/* Today: the reusable card, so check-in behaves identically here and on
           the attendance screen rather than being reimplemented. */}
       <AttendanceToday />
+
+      {/* B. My attendance: the month as bars, drawn by the same component the
+          /attendance page uses and from the very request the figures below are
+          counted from. Above the tiles because it is the shape of the month;
+          the tiles are its totals. */}
+      {attendanceMonth ? (
+        <div className="mt-4">
+          <MyAttendanceBarsCard
+            days={attendanceMonth.days}
+            employeeName={profile?.fullName ?? 'You'}
+            month={attendanceMonth.month}
+            loading={loading}
+          />
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -354,6 +372,12 @@ export function EmployeeDashboard() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* D. Company updates. Renders nothing at all on a day with no birthday,
+          no anniversary and no new joiner - see company-moments. */}
+      <div className="mt-4">
+        <CompanyMoments moments={data?.moments ?? null} />
       </div>
     </>
   );

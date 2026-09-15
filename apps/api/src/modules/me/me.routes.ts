@@ -13,6 +13,7 @@ import { resolveAttendancePolicy, resolvePolicyFor } from '../time/attendance-po
 import { balancesForEmployee } from '../leave/leave.service.js';
 import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import { resolvePhotoUrl } from '../employees/employees.service.js';
+import { companyMomentsFor } from './company-moments.service.js';
 
 /**
  * The session context endpoint. One request gives the shell everything it needs
@@ -355,5 +356,43 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({
       data: sessions.map((s) => ({ ...s, isCurrent: s.id === auth.sessionId })),
     });
+  });
+
+  /**
+   * Whose birthday it is, who is celebrating a year, and who has just joined.
+   *
+   * On `/me` rather than under `/employees` on purpose. Every other route that
+   * returns other people's records is behind `employee.read`, and an ordinary
+   * employee does not have it - yet a birthday card is precisely the thing the
+   * portal exists for. So this is scoped the way the rest of `/me` is: the
+   * subject is the session, there is no employee id in the request to tamper
+   * with, and what comes back is the narrowest employee view in the product.
+   * See the DTO for what is deliberately absent from it.
+   *
+   * A login with no employee record still gets a valid, empty answer rather
+   * than an error - the dashboard hides all three sections and carries on.
+   */
+  app.get('/company-moments', async (request, reply) => {
+    const auth = requireAuthContext(request);
+
+    const [employee, policy] = await Promise.all([
+      prisma.employee.findFirst({
+        where: { companyId: auth.companyId, userId: auth.userId },
+        select: { id: true, locationId: true },
+      }),
+      resolveAttendancePolicy(auth.companyId),
+    ]);
+
+    const today = dayKeyToDateColumn(todayInZone(policy.timeZone));
+
+    const data = await companyMomentsFor({
+      companyId: auth.companyId,
+      viewerEmployeeId: employee?.id ?? null,
+      today,
+      weekendDays: policy.weekendDays,
+      locationId: employee?.locationId ?? null,
+    });
+
+    return reply.send({ data });
   });
 };

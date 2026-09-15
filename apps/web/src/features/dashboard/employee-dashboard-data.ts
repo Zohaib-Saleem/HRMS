@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   PERMISSIONS,
+  type CompanyMomentsView,
   type EmployeeDetail,
   type EmploymentStatus,
   type HolidayRecord,
@@ -73,6 +74,15 @@ export interface EmployeeDashboardData {
   } | null;
   attendanceMonth: {
     month: string;
+    /**
+     * The month's derived days, exactly as the attendance engine scored them.
+     *
+     * Carried rather than dropped so the dashboard's bars are drawn from the
+     * request the totals above were already counted from. There is no second
+     * fetch and no second derivation: /attendance/summary is the one source,
+     * and the bars, the totals and the /attendance page all read it.
+     */
+    days: AttendanceDay[];
     totals: {
       present: number;
       halfDay: number;
@@ -85,6 +95,14 @@ export interface EmployeeDashboardData {
       workedMinutes: number;
     };
   } | null;
+  /**
+   * Colleagues' birthdays, anniversaries and new joiners.
+   *
+   * Null while loading or where the request failed, which the dashboard treats
+   * the same way as empty: the sections hide. A celebration card is never
+   * worth an error state.
+   */
+  moments: CompanyMomentsView | null;
 }
 
 interface SummaryResponse {
@@ -126,6 +144,7 @@ export function useEmployeeDashboard() {
   const employeeLinked = session.employeeLinked ?? employee !== null;
 
   const { from, to, month } = monthRange();
+  const today = isoDay(new Date());
 
   const detailQuery = useQuery({
     queryKey: ['employees', employeeId],
@@ -181,7 +200,25 @@ export function useEmployeeDashboard() {
     retry: false,
   });
 
-  const today = isoDay(new Date());
+  /**
+   * Colleagues to celebrate today.
+   *
+   * On `/me` because it is the caller's own dashboard: the server resolves the
+   * subject from the session and decides who counts as a colleague, so there is
+   * no employee id here to tamper with and no `employee.read` to require. An
+   * ordinary employee has neither, and celebrating a birthday should not need
+   * them.
+   *
+   * Never retried and never allowed to fail the screen - see the return below.
+   */
+  const momentsQuery = useQuery({
+    queryKey: ['me', 'company-moments', today],
+    queryFn: () => api.get<CompanyMomentsView>('/me/company-moments'),
+    enabled: employeeLinked,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+
   const detail = detailQuery.data;
   const requests = requestsQuery.data?.data ?? [];
   const summary = attendanceQuery.data;
@@ -225,6 +262,7 @@ export function useEmployeeDashboard() {
     attendanceMonth: summary
       ? {
           month,
+          days: summary.days,
           totals: {
             present: summary.totals.present,
             halfDay: summary.totals.halfDay,
@@ -242,6 +280,7 @@ export function useEmployeeDashboard() {
           },
         }
       : null,
+    moments: momentsQuery.data ?? null,
   };
 
   /**
@@ -260,6 +299,7 @@ export function useEmployeeDashboard() {
       void attendanceQuery.refetch();
       void balancesQuery.refetch();
       void requestsQuery.refetch();
+      void momentsQuery.refetch();
     },
   };
 }

@@ -350,7 +350,17 @@ describe('the dashboard card', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('leads with the reason when somebody is not eligible', async () => {
+  /**
+   * The card used to render a "Not eligible" badge and the reason underneath.
+   *
+   * It no longer does, and that is the point rather than a regression: the
+   * employee portal hides a benefit somebody cannot use instead of explaining
+   * the refusal to them on every load. Somebody on probation does not need a
+   * daily reminder that probationers are excluded. The reasons are still served
+   * by the API and still shown on /medical itself, which is the screen you go
+   * to when you want the answer.
+   */
+  it('hides itself completely when somebody is not eligible', async () => {
     serve(
       benefit({
         eligibility: {
@@ -361,9 +371,11 @@ describe('the dashboard card', () => {
         },
       }),
     );
-    renderWith(<MyMedicalCard />);
+    const { container } = renderWith(<MyMedicalCard />);
 
-    await waitFor(() => expect(screen.getByText('Not eligible')).toBeInTheDocument());
-    expect(screen.getByText(/switched off/)).toBeInTheDocument();
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+    expect(screen.queryByText('Medical')).not.toBeInTheDocument();
+    expect(screen.queryByText('Not eligible')).not.toBeInTheDocument();
+    expect(screen.queryByText(/switched off/)).not.toBeInTheDocument();
   });
 });

@@ -235,10 +235,27 @@ export function EmployeeAttendanceBars({
   days,
   employeeName,
   loading = false,
+  plotHeight = PLOT_HEIGHT,
+  showLegend = true,
+  hint = true,
 }: {
   days: AttendanceDay[];
   employeeName: string;
   loading?: boolean;
+  /**
+   * How tall the plot is drawn, in pixels. Defaults to the full-page height.
+   *
+   * The dashboard passes a shorter one: the same chart, the same data and the
+   * same colours, in the room a summary card can spare. It is a dimension and
+   * nothing else - no figure, threshold or status is affected by it, and the
+   * bars stay proportional to one another because every height in here is a
+   * percentage of the axis the data itself set.
+   */
+  plotHeight?: number;
+  /** The colour key. Off on the dashboard, where /attendance carries it. */
+  showLegend?: boolean;
+  /** The "hover a bar" line. Off where space is tight. */
+  hint?: boolean;
 }) {
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [selected, setSelected] = React.useState<string | null>(null);
@@ -366,7 +383,7 @@ export function EmployeeAttendanceBars({
         {/* The axis sits outside the scroller: a scale that slides away is not a scale. */}
         <div
           className="relative w-9 shrink-0 sm:w-10"
-          style={{ height: PLOT_HEIGHT }}
+          style={{ height: plotHeight }}
           aria-hidden
         >
           {ticks.map((tick) => (
@@ -394,7 +411,7 @@ export function EmployeeAttendanceBars({
           >
             <div
               className="pointer-events-none absolute inset-x-0 top-0"
-              style={{ height: PLOT_HEIGHT }}
+              style={{ height: plotHeight }}
             >
               {ticks.map((tick) => (
                 <div
@@ -410,14 +427,14 @@ export function EmployeeAttendanceBars({
             {anchor ? (
               <div
                 className="pointer-events-none absolute top-0 z-20 w-px bg-foreground/25"
-                style={{ left: anchor.trackX, height: PLOT_HEIGHT }}
+                style={{ left: anchor.trackX, height: plotHeight }}
                 aria-hidden
               />
             ) : null}
 
             <div
               className="relative flex w-full items-end"
-              style={{ height: PLOT_HEIGHT, gap: GAP }}
+              style={{ height: plotHeight, gap: GAP }}
               role="list"
               aria-label={`Worked hours per day for ${employeeName}`}
             >
@@ -478,13 +495,13 @@ export function EmployeeAttendanceBars({
         ) : null}
       </div>
 
-      {shown ? null : (
+      {shown || !hint ? null : (
         <p className="text-[12.5px] text-muted-foreground">
           Hover a bar, or tap one on a phone, for that day&apos;s figures.
         </p>
       )}
 
-      <BarsLegend />
+      {showLegend ? <BarsLegend /> : null}
     </div>
   );
 }

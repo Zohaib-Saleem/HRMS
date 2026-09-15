@@ -20,3 +20,4 @@ export * from './dto/payroll.js';
 export * from './dto/user.js';
 export * from './dto/docs.js';
 export * from './dto/reports.js';
+export * from './dto/company-moments.js';
