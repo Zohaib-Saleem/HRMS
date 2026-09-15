@@ -14,30 +14,41 @@ import type {
 } from '@hrms/shared';
 
 /**
- * The employee portal's new dashboard sections.
+ * The employee portal's dashboard sections.
  *
- * Three rules are worth pinning, because each of them is the sort of thing that
+ * Four rules are worth pinning, because each of them is the sort of thing that
  * regresses quietly:
  *
  *   1. A celebration section with nobody in it is not rendered AT ALL - not an
  *      empty card, not a heading. An employee's dashboard should be quiet on a
  *      quiet day.
- *   2. The medical card disappears for somebody the server says is not
+ *   2. The celebrations are near the TOP, above attendance and leave. They
+ *      spent a release at the foot of the page, where nobody saw them.
+ *   3. The medical card disappears for somebody the server says is not
  *      eligible, rather than telling them so every morning.
- *   3. The bars are the attendance page's own component, drawing the days the
+ *   4. The bars are the attendance page's own component, drawing the days the
  *      dashboard already fetched, with height taken from worked minutes.
  */
 
+const SESSION = {
+  user: {
+    firstName: 'Ada',
+    fullName: 'Ada Lovelace',
+    employee: { id: 'e-ada', employeeNumber: 'E-1', jobTitle: 'Engineer' },
+  },
+  company: { name: 'Example Ltd' },
+  employeeLinked: true,
+};
+
 vi.mock('@/features/auth/session-context', () => ({
   usePermissions: () => ({ has: () => true, hasAny: () => true, hasAll: () => true }),
-  useAuthenticatedSession: () => ({
-    user: { firstName: 'Ada', fullName: 'Ada Lovelace' },
-    company: { name: 'Example Ltd' },
-  }),
+  useSession: () => ({ session: SESSION, isLoading: false }),
+  useAuthenticatedSession: () => SESSION,
   Can: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 import { CompanyMoments } from './company-moments';
+import { EmployeeDashboard } from './employee-dashboard';
 import { MyAttendanceBarsCard } from './my-attendance-bars-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
 import { api } from '@/lib/api';
@@ -92,7 +103,7 @@ describe('birthdays on the dashboard', () => {
   it("shows today's birthday with a friendly message", () => {
     view(<CompanyMoments moments={moments({ birthdays: [person({ employeeId: 'a' })] })} />);
 
-    expect(screen.getByText('Birthdays')).toBeInTheDocument();
+    expect(screen.getByText('Birthdays today')).toBeInTheDocument();
     expect(screen.getByText('Ayesha Khan')).toBeInTheDocument();
     expect(screen.getByText('Birthday today')).toBeInTheDocument();
   });
@@ -120,7 +131,7 @@ describe('birthdays on the dashboard', () => {
 
   it('hides the section entirely when nobody has a birthday', () => {
     view(<CompanyMoments moments={moments({ anniversaries: [{ ...person({ employeeId: 'x' }), years: 2 }] })} />);
-    expect(screen.queryByText('Birthdays')).not.toBeInTheDocument();
+    expect(screen.queryByText('Birthdays today')).not.toBeInTheDocument();
   });
 
   it('never renders a date of birth, because the API does not send one', () => {
@@ -168,8 +179,9 @@ describe('welcome new joiner', () => {
 
   it('welcomes the new person by name', () => {
     view(<CompanyMoments moments={moments({ newJoiners: [joiner()] })} />);
-    expect(screen.getByText('Welcome to the team')).toBeInTheDocument();
-    expect(screen.getByText('Welcome Noor Fatima to the team!')).toBeInTheDocument();
+    expect(screen.getByText('New joiners')).toBeInTheDocument();
+    expect(screen.getByText('Noor Fatima')).toBeInTheDocument();
+    expect(screen.getByText('Welcome to the team!')).toBeInTheDocument();
   });
 
   it('shows several joiners at once', () => {
@@ -183,19 +195,20 @@ describe('welcome new joiner', () => {
         })}
       />,
     );
-    expect(screen.getByText('Welcome Noor Fatima to the team!')).toBeInTheDocument();
-    expect(screen.getByText('Welcome Omar Sheikh to the team!')).toBeInTheDocument();
+    expect(screen.getByText('Noor Fatima')).toBeInTheDocument();
+    expect(screen.getByText('Omar Sheikh')).toBeInTheDocument();
+    expect(screen.getAllByText('Welcome to the team!')).toHaveLength(2);
   });
 
   it('hides the section entirely when nobody has just joined', () => {
     view(<CompanyMoments moments={moments({ birthdays: [person({ employeeId: 'a' })] })} />);
-    expect(screen.queryByText('Welcome to the team')).not.toBeInTheDocument();
+    expect(screen.queryByText('New joiners')).not.toBeInTheDocument();
   });
 });
 
 // --------------------------------------------------------- the whole block
 
-describe('the company updates block', () => {
+describe('the celebrations block', () => {
   it('renders nothing at all on a quiet day', () => {
     const { container } = view(<CompanyMoments moments={moments()} />);
     expect(container).toBeEmptyDOMElement();
@@ -206,9 +219,38 @@ describe('the company updates block', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows the heading once anything is worth celebrating', () => {
+  it('heads the block with the company the employee works for', () => {
+    view(
+      <CompanyMoments
+        moments={moments({ birthdays: [person({ employeeId: 'a' })] })}
+        companyName="GamEmpires"
+      />,
+    );
+    expect(screen.getByText('Today at GamEmpires')).toBeInTheDocument();
+  });
+
+  it('describes itself when the session does not name the company', () => {
     view(<CompanyMoments moments={moments({ birthdays: [person({ employeeId: 'a' })] })} />);
-    expect(screen.getByText('Company updates')).toBeInTheDocument();
+    expect(screen.getByText('Celebrations & new joiners')).toBeInTheDocument();
+  });
+
+  it('lays the cards out in one row that wraps rather than overflowing', () => {
+    const { container } = view(
+      <CompanyMoments
+        moments={moments({
+          birthdays: [person({ employeeId: 'a' })],
+          anniversaries: [{ ...person({ employeeId: 'b' }), years: 5 }],
+          newJoiners: [
+            { ...person({ employeeId: 'c' }), hireDate: '2026-09-14', workingDay: 2 },
+          ],
+        })}
+      />,
+    );
+    // Wrapping, not a fixed column count: three cards share a wide dashboard
+    // and stack on a phone without either one being dropped or clipped.
+    const row = container.querySelector('.flex-wrap');
+    expect(row).toBeTruthy();
+    expect(row?.children).toHaveLength(3);
   });
 });
 
@@ -359,5 +401,116 @@ describe('my attendance bars', () => {
       <MyAttendanceBarsCard days={[]} employeeName="Ada" month="2026-09" />,
     );
     expect(container.querySelectorAll('[data-bar-key]')).toHaveLength(0);
+  });
+});
+
+// ------------------------------------------------------- where things sit
+
+/**
+ * Position, not just presence.
+ *
+ * The celebration cards were at the very bottom of the dashboard, under leave
+ * balances and holidays, and an employee reliably missed them. These cases pin
+ * the order itself: birthdays, anniversaries and joiners render above the
+ * attendance month and the leave balance, exactly once each, and only on a day
+ * when there is something to say.
+ */
+describe('the employee dashboard in the order an employee reads it', () => {
+  const PAGED = { data: [], meta: { page: 1, limit: 20, total: 0, totalPages: 0 } };
+
+  const routeApi = (served: CompanyMomentsView) => {
+    vi.mocked(api.getPage).mockResolvedValue(PAGED as never);
+    vi.mocked(api.get).mockImplementation((path: string) => {
+      if (path === '/me/company-moments') return Promise.resolve(served as never);
+      if (path === '/attendance/summary')
+        return Promise.resolve({
+          days: [],
+          totals: {
+            present: 12,
+            halfDay: 0,
+            absent: 1,
+            onLeave: 0,
+            holiday: 0,
+            weekend: 4,
+            upcoming: 3,
+            offDay: 0,
+            workedMinutes: 5760,
+            expectedMinutes: 6240,
+            lateMinutes: 0,
+          },
+        } as never);
+      if (path === '/leave/balances/me') return Promise.resolve([] as never);
+      // No check-in widget and no medical card in these cases: neither is what
+      // is being measured, and both render themselves away when absent.
+      if (path === '/attendance/today') return Promise.resolve(null as never);
+      if (path === '/medical/benefit')
+        return Promise.resolve({ eligibility: { eligible: false, reasons: [] } } as never);
+      return Promise.resolve({} as never);
+    });
+  };
+
+  const celebrations = moments({
+    birthdays: [person({ employeeId: 'b1', fullName: 'Ayesha Khan' })],
+    anniversaries: [{ ...person({ employeeId: 'a1', fullName: 'Kaleem Maqbool' }), years: 5 }],
+    newJoiners: [
+      {
+        ...person({ employeeId: 'n1', fullName: 'Noor Fatima' }),
+        hireDate: '2026-09-14',
+        workingDay: 2,
+      },
+    ],
+  });
+
+  /**
+   * The whole dashboard, read as text once every one of its requests has
+   * settled.
+   *
+   * Waiting on the query client rather than on a piece of copy is what makes
+   * the "nothing to celebrate" case trustworthy: a card that is merely still
+   * loading is indistinguishable from one that is absent, and asserting
+   * absence too early would pass no matter what this screen rendered.
+   */
+  const dashboardText = async (served: CompanyMomentsView): Promise<string> => {
+    routeApi(served);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const { container } = render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <EmployeeDashboard />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    return container.textContent ?? '';
+  };
+
+  it('puts the celebrations above attendance, leave and what is coming up', async () => {
+    const text = await dashboardText(celebrations);
+
+    const moment = text.indexOf('Today at Example Ltd');
+    expect(moment).toBeGreaterThan(-1);
+    expect(moment).toBeLessThan(text.indexOf('My attendance'));
+    expect(moment).toBeLessThan(text.indexOf('Leave balance'));
+    expect(moment).toBeLessThan(text.indexOf('Coming up'));
+  });
+
+  it('renders each celebration card exactly once - none left at the bottom', async () => {
+    const text = await dashboardText(celebrations);
+
+    for (const title of ['Birthdays today', 'Work anniversaries', 'New joiners']) {
+      expect(text.split(title).length - 1).toBe(1);
+    }
+  });
+
+  it('shows nothing of the block on a day with nothing to celebrate', async () => {
+    const text = await dashboardText(moments());
+
+    expect(text).not.toContain('Today at Example Ltd');
+    expect(text).not.toContain('Birthdays today');
+    expect(text).not.toContain('Work anniversaries');
+    expect(text).not.toContain('New joiners');
+    // The rest of the dashboard is untouched by a quiet day.
+    expect(text).toContain('Leave balance');
+    expect(text).toContain('Coming up');
   });
 });

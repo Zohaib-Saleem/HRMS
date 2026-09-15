@@ -19,6 +19,7 @@ import { AttendanceToday } from '@/features/time/attendance-today';
 import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
 import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
+import { useAuthenticatedSession } from '@/features/auth/session-context';
 import { MyAttendanceBarsCard } from './my-attendance-bars-card';
 import { CompanyMoments } from './company-moments';
 import { useEmployeeDashboard, type LeaveRequestView } from './employee-dashboard-data';
@@ -70,6 +71,9 @@ export function EmployeeDashboard() {
    * took the whole dashboard down with it when it 404'd.
    */
   const query = useEmployeeDashboard();
+  // Named, not hardcoded: the heading over the celebration cards reads "Today
+  // at <company>", and this product serves more than one company.
+  const companyName = useAuthenticatedSession().company?.name ?? null;
 
   if (query.isError) {
     return (
@@ -142,11 +146,20 @@ export function EmployeeDashboard() {
         }
       />
 
+      {/* Company moments, immediately under the greeting: birthdays, work
+          anniversaries and new joiners. They used to sit at the foot of the
+          dashboard, below leave and holidays, where an employee found out about
+          a colleague's birthday the day after it happened. Compact, and absent
+          entirely on a day with nothing to celebrate - which is why it carries
+          its own margin rather than sitting in a spacer div that would leave a
+          gap here on a quiet day. See company-moments. */}
+      <CompanyMoments moments={data?.moments ?? null} companyName={companyName} />
+
       {/* Today: the reusable card, so check-in behaves identically here and on
           the attendance screen rather than being reimplemented. */}
       <AttendanceToday />
 
-      {/* B. My attendance: the month as bars, drawn by the same component the
+      {/* My attendance: the month as bars, drawn by the same component the
           /attendance page uses and from the very request the figures below are
           counted from. Above the tiles because it is the shape of the month;
           the tiles are its totals. */}
@@ -194,16 +207,6 @@ export function EmployeeDashboard() {
         />
       </div>
 
-      {/* Self-service, above the reference cards below: these are the two
-          things an employee comes here to DO, rather than to read. Each card
-          renders itself away when the permission behind it is absent, so a
-          narrow role gets a shorter dashboard rather than a broken one. */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <MyCorrectionsCard />
-        <MyLoansCard />
-        <MyMedicalCard />
-      </div>
-
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-2">
@@ -247,45 +250,6 @@ export function EmployeeDashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Your leave requests</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <Skeleton className="h-20 w-full" />
-            ) : data?.leave?.recent.length ? (
-              <ul className="divide-y">
-                {data.leave.recent.map((request) => (
-                  <li key={request.id} className="flex items-center justify-between gap-3 py-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{request.leaveTypeName}</p>
-                      <p className="text-muted-foreground text-xs">
-                        {rangeLabel(request)} · {request.totalDays} day
-                        {request.totalDays === 1 ? '' : 's'}
-                      </p>
-                    </div>
-                    <Badge variant={STATUS_TONE[request.status] ?? 'neutral'}>
-                      {request.status.toLowerCase()}
-                    </Badge>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyState
-                icon={Plane}
-                title="No requests yet"
-                description="Leave you request will appear here with its approval status."
-                action={
-                  <Button variant="outline" size="sm" asChild>
-                    <Link to="/leave/me">Request leave</Link>
-                  </Button>
-                }
-              />
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>Coming up</CardTitle>
           </CardHeader>
           <CardContent>
@@ -319,6 +283,45 @@ export function EmployeeDashboard() {
                 icon={CalendarDays}
                 title="Nothing scheduled"
                 description="Upcoming company holidays and your approved leave will show here."
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Your leave requests</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <Skeleton className="h-20 w-full" />
+            ) : data?.leave?.recent.length ? (
+              <ul className="divide-y">
+                {data.leave.recent.map((request) => (
+                  <li key={request.id} className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{request.leaveTypeName}</p>
+                      <p className="text-muted-foreground text-xs">
+                        {rangeLabel(request)} · {request.totalDays} day
+                        {request.totalDays === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                    <Badge variant={STATUS_TONE[request.status] ?? 'neutral'}>
+                      {request.status.toLowerCase()}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                icon={Plane}
+                title="No requests yet"
+                description="Leave you request will appear here with its approval status."
+                action={
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/leave/me">Request leave</Link>
+                  </Button>
+                }
               />
             )}
           </CardContent>
@@ -374,10 +377,16 @@ export function EmployeeDashboard() {
         </Card>
       </div>
 
-      {/* D. Company updates. Renders nothing at all on a day with no birthday,
-          no anniversary and no new joiner - see company-moments. */}
-      <div className="mt-4">
-        <CompanyMoments moments={data?.moments ?? null} />
+      {/* Self-service, after the reference cards above: these are things an
+          employee comes here to DO rather than to read, and they sit below the
+          month, the leave balance and what is coming up because those answer
+          the questions somebody lands on this page with. Each card renders
+          itself away when the permission behind it is absent, so a narrow role
+          gets a shorter dashboard rather than a broken one. */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <MyCorrectionsCard />
+        <MyLoansCard />
+        <MyMedicalCard />
       </div>
     </>
   );
