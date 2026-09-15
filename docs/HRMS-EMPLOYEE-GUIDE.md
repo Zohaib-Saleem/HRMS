@@ -41,6 +41,16 @@ type (full time, part time, and so on).
 It is set by HR and you cannot change it — which is deliberate, because your
 loan and medical eligibility are read from it. If it looks wrong, ask HR.
 
+### Your photo
+
+Open your own profile and click your avatar — the circle with your initials in
+it, which carries a small camera badge. From there you can upload a photo,
+replace it, or remove it. Removing it puts your initials back.
+
+JPG, PNG or WebP, up to 5 MB. Your photo then appears wherever your name does.
+
+You can change the photo on your own record and on nobody else's.
+
 ---
 
 ## Attendance
@@ -200,6 +210,7 @@ If you manage people, it also shows requests waiting on you — see the
 ## What you cannot do
 
 - See another employee's record, attendance, leave or payslip
+- Change another employee's profile photo
 - Change your own employment status, or anyone else's
 - See salary information, including your own salary structure — you see the
   payslip, not the configuration behind it

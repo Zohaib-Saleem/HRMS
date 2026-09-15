@@ -12,6 +12,7 @@ import { deriveRange, shiftOnDate } from '../time/attendance.service.js';
 import { resolveAttendancePolicy, resolvePolicyFor } from '../time/attendance-policy.js';
 import { balancesForEmployee } from '../leave/leave.service.js';
 import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
+import { resolvePhotoUrl } from '../employees/employees.service.js';
 
 /**
  * The session context endpoint. One request gives the shell everything it needs
@@ -62,6 +63,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
               jobTitle: user.employee.jobTitle,
               departmentName: user.employee.department?.name ?? null,
               teamName: user.employee.team?.name ?? null,
+              photoUrl: resolvePhotoUrl(user.employee),
             }
           : null,
       },
@@ -109,6 +111,8 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         jobTitle: true,
         status: true,
         photoUrl: true,
+        photoObjectKey: true,
+        photoUpdatedAt: true,
         hireDate: true,
         employmentType: true,
         // Read-only here, and read-only everywhere an employee can reach.
@@ -232,7 +236,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
           employmentType: employee.employmentType,
           employmentStatus: employee.employmentStatus,
           hireDate: employee.hireDate?.toISOString().slice(0, 10) ?? null,
-          photoUrl: employee.photoUrl,
+          photoUrl: resolvePhotoUrl(employee),
         },
         today: {
           date: todayKey,

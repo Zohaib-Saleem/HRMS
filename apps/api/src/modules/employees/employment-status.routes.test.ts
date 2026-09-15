@@ -160,6 +160,8 @@ function seed(): void {
     designationId: null,
     locationId: null,
     photoUrl: null,
+    photoObjectKey: null,
+    photoUpdatedAt: null,
     middleName: null,
     displayName: null,
     workEmail: null,

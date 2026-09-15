@@ -27,6 +27,18 @@ function findEnvFile(): string | undefined {
 const envFile = findEnvFile();
 if (envFile) loadDotenv({ path: envFile });
 
+/**
+ * Where uploads land when nothing says otherwise.
+ *
+ * The repository root when one was found - that is the same directory the .env
+ * sits in, and the one a developer expects a `storage/` folder to appear in.
+ * Otherwise the working directory, which is all a bare `node dist/main.js` has
+ * to go on. A deployment should not rely on either; it should set STORAGE_ROOT.
+ */
+function defaultStorageRoot(): string {
+  return resolve(envFile ? dirname(envFile) : process.cwd(), 'storage');
+}
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -62,6 +74,22 @@ const schema = z.object({
    * own, and forgetting this setting holds records rather than releasing them.
    */
   CONNECTOR_INGEST_LIVE_SERIALS: z.string().optional(),
+
+  /**
+   * Where uploaded files are kept.
+   *
+   * A directory on the server's own disk - there is no bucket and no external
+   * service to pay for. Everything under it is addressed by opaque key; see
+   * `core/storage/object-store.ts`, which is the only module that turns one
+   * into a path.
+   *
+   * The default puts it beside the repository in development, which is where
+   * anybody running `npm run dev` would look for it. In a container there is no
+   * repository to sit beside, so the deployment sets this explicitly and mounts
+   * a volume at it - a photo has to survive the next image build, and anything
+   * inside the container filesystem does not.
+   */
+  STORAGE_ROOT: z.string().min(1).default(defaultStorageRoot()),
 
   // --- Mail -----------------------------------------------------------------
   // `console` writes the message to the log instead of sending it, which is the

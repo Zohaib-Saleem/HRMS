@@ -29,6 +29,13 @@ import type { EmployeeDetail, EmployeeProfileSummary } from '@hrms/shared';
 
 let permissions = new Set<string>();
 
+/**
+ * Who the signed-in user is, for the "is this my own record?" question the
+ * header asks before offering the photo control. Null by default: these tests
+ * are about an administrator looking at somebody else.
+ */
+let ownEmployeeId: string | null = null;
+
 vi.mock('@/features/auth/session-context', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/auth/session-context')>();
   return {
@@ -37,6 +44,15 @@ vi.mock('@/features/auth/session-context', async (importOriginal) => {
       has: (p: string) => permissions.has(p),
       hasAny: (list: string[]) => list.some((p) => permissions.has(p)),
       hasAll: (list: string[]) => list.every((p) => permissions.has(p)),
+    }),
+    useSession: () => ({
+      session: { user: { employee: ownEmployeeId ? { id: ownEmployeeId } : null } },
+      permissions: new Set(permissions),
+      isLoading: false,
+      error: null,
+      isError: false,
+      refetch: () => Promise.resolve(),
+      clear: () => undefined,
     }),
     Can: ({ permission, children }: { permission: string; children: React.ReactNode }) =>
       permissions.has(permission) ? <>{children}</> : null,
@@ -173,6 +189,7 @@ function renderProfile() {
 
 beforeEach(() => {
   permissions = new Set(ALL);
+  ownEmployeeId = null;
 
   vi.mocked(api.get).mockImplementation((path: string) => {
     if (path.endsWith('/profile-summary')) return Promise.resolve(SUMMARY as never);
@@ -278,6 +295,55 @@ describe('Employee 360 profile', () => {
     expect(await screen.findByText('BSc')).toBeInTheDocument();
     expect(screen.getByText('NCBA&E')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Edit BSc' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The avatar in the profile header.
+ *
+ * The header keeps the circle it always had; what is new is that it can be
+ * clicked. Who gets to click it is the same question the API answers, asked
+ * again in the UI so nobody is shown a control that would be refused: anybody
+ * with `employee.manage`, and anybody looking at their own record.
+ */
+describe('the profile photo control', () => {
+  const photoButton = () => screen.queryByRole('button', { name: /change profile photo/i });
+
+  it('offers the camera control to somebody who can manage employees', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Awais Zahid' });
+
+    expect(photoButton()).toBeInTheDocument();
+  });
+
+  it('offers it to an employee on their own record, with no manage grant', async () => {
+    permissions = new Set(['employee.read']);
+    ownEmployeeId = 'emp-1';
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Awais Zahid' });
+
+    expect(photoButton()).toBeInTheDocument();
+  });
+
+  it('withholds it from a reader looking at somebody else', async () => {
+    // A manager: they can open the profile and see the face, and that is all.
+    permissions = new Set(['employee.read']);
+    ownEmployeeId = 'emp-99';
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Awais Zahid' });
+
+    expect(photoButton()).not.toBeInTheDocument();
+  });
+
+  it('opens the photo dialog on the existing avatar', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Awais Zahid' });
+
+    await userEvent.click(photoButton()!);
+
+    expect(await screen.findByRole('heading', { name: 'Profile photo' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /upload photo/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
 });
 

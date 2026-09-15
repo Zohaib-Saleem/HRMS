@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Briefcase,
   Building2,
+  Camera,
   Lock,
   Mail,
   MapPin,
@@ -36,8 +37,9 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
-import { Can, usePermissions } from '@/features/auth/session-context';
+import { Can, useSession, usePermissions } from '@/features/auth/session-context';
 import { EmployeeFormDrawer } from './employee-form-drawer';
+import { EmployeePhotoDialog } from './employee-photo-dialog';
 import { EmployeeContracts } from '@/features/employment/employee-contracts';
 import { EmployeePolicies } from '@/features/employment/employee-policies';
 import { EmployeeLoans } from '@/features/loans/employee-loans';
@@ -87,8 +89,10 @@ export function EmployeeDetailPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const { has } = usePermissions();
+  const { session } = useSession();
   const [tab, setTab] = React.useState<Tab>('Overview');
   const [editing, setEditing] = React.useState(false);
+  const [managingPhoto, setManagingPhoto] = React.useState(false);
 
   const query = useQuery({
     queryKey: ['employees', id],
@@ -149,6 +153,20 @@ export function EmployeeDetailPage() {
     );
   }
 
+  /**
+   * Who may change the photo on this profile.
+   *
+   * `employee.manage` for anybody else's - the same grant that already governs
+   * every other edit to an employee record - or your own record whatever you
+   * hold, which is the rule the API enforces and the reason an ordinary member
+   * of staff can put up their own photograph and nobody else's.
+   *
+   * A courtesy either way: hiding the button is not the control. The endpoint
+   * makes the same decision and is the one that counts.
+   */
+  const isOwnRecord = session?.user.employee?.id === employee.id;
+  const canManagePhoto = has(PERMISSIONS.EMPLOYEE_MANAGE) || isOwnRecord;
+
   const handleTerminate = async () => {
     const today = new Date().toISOString().slice(0, 10);
     const ok = await confirm({
@@ -183,7 +201,37 @@ export function EmployeeDetailPage() {
 
       <Card className="mb-5">
         <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center">
-          <Avatar name={employee.fullName} photoUrl={employee.photoUrl} colorKey={employee.id} size="xl" />
+          {canManagePhoto ? (
+            <button
+              type="button"
+              onClick={() => setManagingPhoto(true)}
+              // The avatar itself is the control, with the camera badge as the
+              // affordance - the same gesture people already expect from every
+              // other profile screen they use.
+              className="group relative shrink-0 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              aria-label={`Change profile photo for ${employee.fullName}`}
+            >
+              <Avatar
+                name={employee.fullName}
+                photoUrl={employee.photoUrl}
+                colorKey={employee.id}
+                size="xl"
+              />
+              <span
+                className="absolute -bottom-0.5 -right-0.5 grid size-7 place-items-center rounded-full border-2 border-surface bg-primary text-primary-foreground shadow-sm transition-transform group-hover:scale-105"
+                aria-hidden
+              >
+                <Camera className="size-3.5" />
+              </span>
+            </button>
+          ) : (
+            <Avatar
+              name={employee.fullName}
+              photoUrl={employee.photoUrl}
+              colorKey={employee.id}
+              size="xl"
+            />
+          )}
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -305,6 +353,17 @@ export function EmployeeDetailPage() {
       {tab === 'Reports' ? <ReportsTab employee={employee} onOpen={(rid) => navigate(`/people/${rid}`)} /> : null}
 
       <EmployeeFormDrawer open={editing} employee={employee} onClose={() => setEditing(false)} />
+
+      {canManagePhoto ? (
+        <EmployeePhotoDialog
+          open={managingPhoto}
+          onOpenChange={setManagingPhoto}
+          employeeId={employee.id}
+          employeeName={employee.fullName}
+          photoUrl={employee.photoUrl}
+          hasPhoto={employee.hasPhoto}
+        />
+      ) : null}
     </>
   );
 }
@@ -618,7 +677,12 @@ function ReportsTab({
                 onClick={() => onOpen(report.id)}
                 className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-accent/50"
               >
-                <Avatar name={report.fullName} colorKey={report.id} size="sm" />
+                <Avatar
+                  name={report.fullName}
+                  photoUrl={report.photoUrl}
+                  colorKey={report.id}
+                  size="sm"
+                />
                 <div className="min-w-0">
                   <p className="truncate text-[13.5px] font-medium">{report.fullName}</p>
                   <p className="truncate text-[12px] text-muted-foreground">

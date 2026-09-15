@@ -50,6 +50,9 @@ type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 interface RequestOptions {
   method?: Method;
   body?: unknown;
+  /** Sent verbatim instead of `body`, for endpoints that take raw bytes. */
+  raw?: Blob;
+  contentType?: string;
   query?: Record<string, string | number | boolean | undefined | null>;
   signal?: AbortSignal;
 }
@@ -67,15 +70,24 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, query, signal } = options;
+  const { method = 'GET', body, raw, contentType, query, signal } = options;
+
+  const headers: Record<string, string> = {};
+  if (raw !== undefined) {
+    // An empty type means the browser could not identify the file. Let the
+    // server sniff the bytes rather than asserting something untrue.
+    if (contentType) headers['Content-Type'] = contentType;
+  } else if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   let response: Response;
   try {
     response = await fetch(buildUrl(path, query), {
       method,
       credentials: 'same-origin',
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers,
+      body: raw !== undefined ? raw : body === undefined ? undefined : JSON.stringify(body),
       signal,
     });
   } catch (error) {
@@ -136,6 +148,19 @@ export const api = {
     request<T>(path, { ...options, method: 'GET' }),
 
   post: <T>(path: string, body?: unknown) => unwrap<T>(path, { method: 'POST', body }),
+
+  /**
+   * Posts a file as the raw request body.
+   *
+   * Not multipart: one file, no fields, and a multipart envelope would only add
+   * a filename - the one part of an upload that must never be trusted anyway.
+   * The server names the stored object itself.
+   *
+   * `Content-Type` is the blob's own, which the server treats as a hint and
+   * then checks against the file's actual header.
+   */
+  upload: <T>(path: string, file: Blob) =>
+    unwrap<T>(path, { method: 'POST', raw: file, contentType: file.type }),
   patch: <T>(path: string, body?: unknown) => unwrap<T>(path, { method: 'PATCH', body }),
   put: <T>(path: string, body?: unknown) => unwrap<T>(path, { method: 'PUT', body }),
   delete: <T>(path: string) => unwrap<T>(path, { method: 'DELETE' }),

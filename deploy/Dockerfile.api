@@ -50,6 +50,13 @@ COPY --from=builder /build/apps/api/dist ./apps/api/dist
 COPY --from=builder /build/apps/api/prisma ./apps/api/prisma
 COPY --from=builder /build/apps/api/package.json ./apps/api/package.json
 
+# The mount point for the uploads volume, created HERE rather than left to
+# Docker. A named volume mounted at a path the image does not contain is created
+# root-owned, and the API runs as `node` - so the first photo upload would fail
+# with EACCES. Docker copies the image directory's ownership onto a new volume,
+# which is what makes this line the fix rather than a convenience.
+RUN mkdir -p /app/storage && chown node:node /app/storage
+
 # Run unprivileged. The image's own `node` user already exists.
 USER node
 

@@ -6,6 +6,7 @@ export * from './dto/company.js';
 export * from './dto/device.js';
 export * from './dto/organisation.js';
 export * from './dto/employee.js';
+export * from './dto/employee-photo.js';
 export * from './dto/employment.js';
 export * from './dto/approvals.js';
 export * from './dto/time.js';

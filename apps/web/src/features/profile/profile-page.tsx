@@ -46,13 +46,25 @@ export function ProfilePage() {
         <div className="space-y-5">
           <Card>
             <CardContent className="flex flex-col items-center py-7 text-center">
-              <span
-                className="grid size-16 place-items-center rounded-full text-xl font-semibold text-white"
-                style={{ backgroundColor: user.avatarColor }}
-                aria-hidden
-              >
-                {initials(user.firstName, user.lastName)}
-              </span>
+              {/* The employee photo when there is one; the account's initials
+                  circle, unchanged, when there is not. Uploading one is done on
+                  the employee profile, which is where the record lives. */}
+              {user.employee?.photoUrl ? (
+                <img
+                  src={user.employee.photoUrl}
+                  alt=""
+                  className="size-16 rounded-full bg-muted object-cover"
+                  aria-hidden
+                />
+              ) : (
+                <span
+                  className="grid size-16 place-items-center rounded-full text-xl font-semibold text-white"
+                  style={{ backgroundColor: user.avatarColor }}
+                  aria-hidden
+                >
+                  {initials(user.firstName, user.lastName)}
+                </span>
+              )}
               <p className="mt-3 text-[15px] font-semibold">{user.fullName}</p>
               <p className="text-[13px] text-muted-foreground">{user.email}</p>
 

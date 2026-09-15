@@ -113,6 +113,39 @@ says so. A record with *no* status set is not refused by these switches — an
 unfilled field says nothing either way, and the other rules (service length,
 salary, attendance) still apply to those people in full.
 
+### Profile photo
+
+**People → open an employee → click the avatar** (the camera badge on the
+circle). Upload a photo, replace the one on file, or remove it. Removing it
+returns the avatar to the employee's initials — which is what every screen
+showed before photos existed, so nothing breaks by having none.
+
+JPG, PNG or WebP, up to 5 MB. The browser scales the image down before it is
+sent and the server checks the format by reading the file's own header, so a
+file renamed `photo.jpg` is refused whatever it claims to be.
+
+Who can do it:
+
+- **Super Admin** and **HR Admin** — anyone within their data scope, through
+  `employee.manage`. This is the same grant that governs every other edit to an
+  employee record; there is no separate photo permission to hand out.
+- **Any employee** — their own record, and only their own. The same
+  self-service principle as changing their own name or password.
+- **Managers** can *see* a report's photo (they hold `employee.read`) and
+  cannot change it.
+
+Uploads, replacements and removals are audited as `employee.photo.upload`,
+`employee.photo.change` and `employee.photo.remove`. The image itself is never
+written to the audit log — only its format and size.
+
+The photo appears wherever the person does: People, the profile header, the org
+chart, direct reports, and the account menu for their own login.
+
+The files are kept on the server's own disk, not in the database and not with
+any outside service. They are served through the API behind the same permission
+as the record, so a photo URL is not something that can be shared with somebody
+who could not already open the profile.
+
 ### Work experience
 
 Prior employment before joining. Add and remove entries on the employee's

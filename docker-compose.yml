@@ -51,6 +51,12 @@ services:
       # host, so the only route in is the two container networks.
       API_HOST: 0.0.0.0
       API_PORT: "4000"
+      # Uploaded files (employee profile photos) live on the named volume
+      # below, NOT in the container filesystem - anything written there is
+      # discarded by the next image build.
+      STORAGE_ROOT: /app/storage
+    volumes:
+      - hrms_uploads:/app/storage
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/health || exit 1"]
       interval: 30s
@@ -86,6 +92,12 @@ services:
 volumes:
   hrms_db_data:
     name: hrms_db_data
+  # Uploaded files. Separate from the database volume because it holds employee
+  # photographs rather than rows: a backup of one is not a backup of the other,
+  # and restoring the database alone would leave every avatar pointing at a file
+  # that is not there.
+  hrms_uploads:
+    name: hrms_uploads
 
 networks:
   # Private to HRMS. The database lives only here.

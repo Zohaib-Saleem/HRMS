@@ -17,6 +17,8 @@ export interface SessionUser {
     jobTitle: string | null;
     departmentName: string | null;
     teamName: string | null;
+    /** The employee's own avatar, or null for initials. */
+    photoUrl: string | null;
   } | null;
 }
 

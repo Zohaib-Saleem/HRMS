@@ -497,12 +497,35 @@ model Employee {
   personalEmail String?
   phone         String?
   personalPhone String?
+  /**
+   * A link to a photograph hosted somewhere else, as typed into the record.
+   * Kept exactly as it was. It is the fallback the avatar falls back TO: an
+   * uploaded photo takes precedence, and nothing in the upload path ever
+   * writes this column - so a company that had been pasting links keeps them,
+   * and removing an uploaded photo reveals the link again rather than losing it.
+   */
   photoUrl      String?
+
+  // --- profile photo (uploaded) ---------------------------------------------
+  // The file itself lives in the object store, not here. Three columns is what
+  // it takes to serve one back without a second lookup: which object, what it
+  // is, and when it last changed - the last of which is the ETag and the
+  // cache-buster. Deliberately NOT the bytes: an employee list would otherwise
+  // drag several megabytes of image through every query that selects a row.
+
+  /// Object-store key, e.g. `employee-photos/<companyId>/<employeeId>/<uuid>.jpg`.
+  /// Never a filesystem path, and never sent to a browser.
+  photoObjectKey   String?
+  /// The image format, as sniffed from the file's own header on upload.
+  photoContentType String?
+  /// When the current photo was stored. Serves as the ETag and the `?v=` on the
+  /// URL, so a replaced photo is picked up by an <img> already on screen.
+  photoUpdatedAt   DateTime?
 
   /// Father's name, as carried by the payroll roster this record was imported
   /// from. Kept distinct from middleName: it is a separate person, not part of
   /// this employee's own name.
-  fatherName    String?
+  fatherName String?
 
   // --- job ------------------------------------------------------------------
   /// Retained alongside designationId as a free-text fallback for imported

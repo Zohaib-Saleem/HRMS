@@ -12,6 +12,7 @@ import { teamRoutes } from './organisation/teams.routes.js';
 import { designationRoutes } from './organisation/designations.routes.js';
 import { locationRoutes } from './organisation/locations.routes.js';
 import { employeeRoutes } from './employees/employees.routes.js';
+import { employeePhotoRoutes } from './employees/employee-photo.routes.js';
 import { approvalRoutes } from './approvals/approvals.routes.js';
 import { notificationRoutes } from './notifications/notifications.routes.js';
 import {
@@ -85,6 +86,10 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/designations', plugin: designationRoutes },
   { prefix: '/locations', plugin: locationRoutes },
   { prefix: '/employees', plugin: employeeRoutes },
+  // A separate plugin on the same prefix, because it needs a different gate:
+  // the routes above all require `employee.read`, and an employee who holds no
+  // such grant may still manage the photo on their own record.
+  { prefix: '/employees', plugin: employeePhotoRoutes },
 
   // --- phase 3: approvals, notifications and the time foundation ---------
   { prefix: '/approvals', plugin: approvalRoutes },

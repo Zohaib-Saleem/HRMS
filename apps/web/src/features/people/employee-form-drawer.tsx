@@ -392,7 +392,7 @@ export function EmployeeFormDrawer({
                 <FormField label="LinkedIn" htmlFor="emp-linkedin" error={formState.errors.linkedinUrl?.message} className="sm:col-span-2">
                   <Input {...register('linkedinUrl')} placeholder="https://" />
                 </FormField>
-                <FormField label="Photo URL" htmlFor="emp-photo" error={formState.errors.photoUrl?.message} className="sm:col-span-2" hint="File uploads arrive with the Documents module.">
+                <FormField label="Photo URL" htmlFor="emp-photo" error={formState.errors.photoUrl?.message} className="sm:col-span-2" hint="A link to a photo hosted elsewhere. To upload one, use the camera button on the profile header - an uploaded photo takes precedence over this link.">
                   <Input {...register('photoUrl')} placeholder="https://" />
                 </FormField>
                 <FormField label="Notes" htmlFor="emp-notes" error={formState.errors.notes?.message} className="sm:col-span-2">

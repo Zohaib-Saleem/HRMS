@@ -473,7 +473,17 @@ export interface EmployeeListItem {
   workEmail: string | null;
   phone: string | null;
   jobTitle: string | null;
+  /**
+   * What to render in the avatar, or null for initials.
+   *
+   * Either the API path an uploaded photo is served from, or - when there is no
+   * upload - whatever link was typed into the record's Photo URL field. The
+   * upload wins; see `resolvePhotoUrl` on the API side, which is the only place
+   * that decides between the two.
+   */
   photoUrl: string | null;
+  /** True when `photoUrl` points at an uploaded photo rather than a typed link. */
+  hasPhoto: boolean;
   status: EmployeeStatus;
   employmentType: EmploymentType;
   /** Null when nobody has classified the record. Never a free-text value. */
@@ -539,7 +549,12 @@ export interface EmployeeDetail extends EmployeeListItem {
   updatedAt: string;
   workExperience: EmployeeWorkExperienceRecord[];
   education: EmployeeEducationRecord[];
-  directReports: Array<{ id: string; fullName: string; jobTitle: string | null }>;
+  directReports: Array<{
+    id: string;
+    fullName: string;
+    jobTitle: string | null;
+    photoUrl: string | null;
+  }>;
   restricted?: {
     nationalId: string | null;
     passportNumber: string | null;

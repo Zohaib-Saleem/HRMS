@@ -33,6 +33,14 @@ apps/connector/connector.config.json
 apps/connector/connector.state.json
 !apps/connector/connector.config.example.json
 
+# Uploaded files (employee profile photos). The development default for
+# STORAGE_ROOT; the deployment mounts a volume elsewhere. Employee PII.
+#
+# Anchored to the repository root on purpose. A bare `storage/` matches a
+# directory of that name at ANY depth, which silently swallowed the API's own
+# `apps/api/src/core/storage/` source directory.
+/storage/
+
 # misc
 .cache/
 coverage/

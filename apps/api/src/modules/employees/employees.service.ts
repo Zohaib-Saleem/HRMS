@@ -6,8 +6,33 @@ import type {
   EmploymentStatus,
   EmploymentType,
 } from '@hrms/shared';
+import { employeePhotoUrl } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { ValidationError } from '../../core/errors.js';
+
+/** The four columns any avatar needs, wherever the row was selected. */
+export interface PhotoColumns {
+  id: string;
+  photoUrl: string | null;
+  photoObjectKey: string | null;
+  photoUpdatedAt: Date | null;
+}
+
+/**
+ * Which of the two photos an avatar should render.
+ *
+ * An uploaded photo wins over a typed link, and this is the only place that
+ * decides so - every response that carries a `photoUrl` goes through here, which
+ * is what makes the rule impossible to get inconsistently right on one screen.
+ *
+ * The URL handed out is the API's own, never a filesystem path: the bytes sit
+ * behind the same session and the same permission check as the rest of the
+ * record. Removing an upload falls back to the link, and then to initials.
+ */
+export function resolvePhotoUrl(row: PhotoColumns): string | null {
+  if (!row.photoObjectKey) return row.photoUrl;
+  return employeePhotoUrl(row.id, row.photoUpdatedAt?.toISOString() ?? null);
+}
 
 export const LIST_INCLUDE = {
   designation: { select: { id: true, name: true } },
@@ -31,7 +56,15 @@ export const DETAIL_INCLUDE = {
     // same way a termination always has.
     where: { status: { notIn: ['TERMINATED', 'RESIGNED'] } },
     orderBy: [{ firstName: 'asc' }],
-    select: { id: true, firstName: true, lastName: true, jobTitle: true },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      jobTitle: true,
+      photoUrl: true,
+      photoObjectKey: true,
+      photoUpdatedAt: true,
+    },
   },
 } satisfies Prisma.EmployeeInclude;
 
@@ -51,7 +84,8 @@ export function toListItem(row: ListRow): EmployeeListItem {
     workEmail: row.workEmail,
     phone: row.phone,
     jobTitle: row.designation?.name ?? row.jobTitle,
-    photoUrl: row.photoUrl,
+    photoUrl: resolvePhotoUrl(row),
+    hasPhoto: row.photoObjectKey !== null,
     status: row.status as EmployeeStatus,
     employmentType: row.employmentType as EmploymentType,
     // Carried on the LIST item, not just the detail: People filters and colours
@@ -128,6 +162,7 @@ export function toDetail(row: DetailRow, includeRestricted: boolean): EmployeeDe
       id: r.id,
       fullName: fullName(r.firstName, r.lastName),
       jobTitle: r.jobTitle,
+      photoUrl: resolvePhotoUrl(r),
     })),
   };
 

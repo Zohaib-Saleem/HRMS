@@ -55,13 +55,27 @@ export function UserMenu() {
         className="flex items-center gap-2.5 rounded-lg py-1 pl-1 pr-2 transition-colors hover:bg-accent data-[state=open]:bg-accent"
         aria-label="Account menu"
       >
-        <span
-          className="grid size-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold text-white"
-          style={{ backgroundColor: user.avatarColor }}
-          aria-hidden
-        >
-          {initials(user.firstName, user.lastName)}
-        </span>
+        {/*
+          The employee's own profile photo when there is one, and the account's
+          initials circle - unchanged - when there is not. Same size, same
+          shape, so the header does not move either way.
+        */}
+        {user.employee?.photoUrl ? (
+          <img
+            src={user.employee.photoUrl}
+            alt=""
+            className="size-8 shrink-0 rounded-full bg-muted object-cover"
+            aria-hidden
+          />
+        ) : (
+          <span
+            className="grid size-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold text-white"
+            style={{ backgroundColor: user.avatarColor }}
+            aria-hidden
+          >
+            {initials(user.firstName, user.lastName)}
+          </span>
+        )}
         <span className="hidden min-w-0 text-left sm:block">
           <span className="block max-w-36 truncate text-[13px] font-medium leading-tight">
             {user.fullName}
