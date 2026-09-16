@@ -188,6 +188,7 @@ beforeEach(() => {
   db.caseMessage.create.mockImplementation(messageTable.create);
   db.caseAttachment.findMany.mockResolvedValue([]);
   db.notification.create.mockResolvedValue({ id: 'notification-1' });
+  db.auditLog.create.mockResolvedValue({ id: 'audit-1' });
 
   db.employee.findFirst.mockImplementation((args: { where: { userId?: string } }) => {
     const match = AGENT_EMPLOYEES.find((e) => e.userId === args.where.userId);
@@ -797,5 +798,204 @@ describe('re-routing a misfiled case', () => {
     });
 
     expect(response.statusCode).toBe(409);
+  });
+});
+
+describe('the company-wide desk', () => {
+  /**
+   * What the `Helpdesk Manager` role actually is: `case.read.all` plus the four
+   * action grants. Deliberately played by the agent whose own employee record
+   * has NO department, because that is the claim worth pinning - a company-wide
+   * reader does not depend on where they sit on the org chart, which is the
+   * whole reason the role exists for desks nobody is recorded against.
+   */
+  const MANAGER: Permission[] = [
+    PERMISSIONS.CASE_READ_ALL,
+    PERMISSIONS.CASE_ASSIGN,
+    PERMISSIONS.CASE_UPDATE,
+    PERMISSIONS.CASE_RESPOND,
+    PERMISSIONS.CASE_NOTE_INTERNAL,
+  ];
+
+  const managerApp = () => appAs(MANAGER, ROVING.userId);
+
+  it('reads a case in a department its holder is not in', async () => {
+    seedBothQueues();
+    const app = await managerApp();
+
+    const response = await app.inject({ method: 'GET', url: '/cases/queue/case-fin' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ data: { abilities: { canUpdate: boolean } } }>().data.abilities.canUpdate).toBe(
+      true,
+    );
+  });
+
+  it('moves, assigns and re-routes a case in any department', async () => {
+    seedBothQueues();
+    const app = await managerApp();
+
+    const moved = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-fin/status',
+      payload: { status: 'IN_PROGRESS' },
+    });
+    const assigned = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-fin/assign',
+      payload: { assignedUserId: IT_AGENT.userId },
+    });
+    const routed = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-fin/route',
+      payload: { departmentId: 'dep-it', categoryId: 'cat-it-email' },
+    });
+
+    expect([moved.statusCode, assigned.statusCode, routed.statusCode]).toEqual([200, 200, 200]);
+    expect(caseTable.rows.find((row) => row.id === 'case-fin')).toMatchObject({
+      status: 'IN_PROGRESS',
+      departmentId: 'dep-it',
+    });
+  });
+
+  it('replies and notes on a case in any department', async () => {
+    seedBothQueues();
+    const app = await managerApp();
+
+    const reply = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-fin/messages',
+      payload: { message: 'Payroll are looking at this now.' },
+    });
+    const note = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-fin/messages',
+      payload: { message: 'Third one about the same run.', internal: true },
+    });
+
+    expect(reply.statusCode).toBe(201);
+    expect(note.statusCode).toBe(201);
+    expect(messageTable.rows.map((row) => row.isInternal)).toEqual([false, true]);
+  });
+});
+
+describe('the trail every desk action leaves', () => {
+  /**
+   * Audit is not decoration here. A case is a record of something somebody
+   * asked for and of what was done about it, and "who closed this and when" is
+   * the question asked months later - so every act that changes the case is
+   * pinned to an entry, by action name, actor and entity.
+   */
+  const entries = () =>
+    db.auditLog.create.mock.calls.map(
+      (call) => (call[0] as { data: Record<string, unknown> }).data,
+    );
+
+  beforeEach(() => {
+    caseTable.rows.push(caseRow({ id: 'case-it' }));
+  });
+
+  it('records a status change, with what it moved from and to', async () => {
+    const app = await appAs();
+
+    await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-it/status',
+      payload: { status: 'RESOLVED', note: 'Replaced the battery.' },
+    });
+
+    expect(entries()[0]).toMatchObject({
+      action: 'case.status.change',
+      entityType: 'Case',
+      entityId: 'case-it',
+      actorId: IT_AGENT.userId,
+      companyId: COMPANY,
+      before: expect.objectContaining({ status: 'OPEN' }),
+      after: expect.objectContaining({ status: 'RESOLVED' }),
+    });
+    // The note's TEXT is not in the trail - it lives on the case, where the
+    // people entitled to read it already are.
+    expect(JSON.stringify(entries()[0])).not.toContain('Replaced the battery');
+  });
+
+  it('records an assignment and an unassignment', async () => {
+    const app = await appAs();
+
+    await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-it/assign',
+      payload: { assignedUserId: FIN_AGENT.userId },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-it/assign',
+      payload: { assignedUserId: null },
+    });
+
+    expect(entries().map((entry) => entry.action)).toEqual(['case.assign', 'case.assign']);
+    expect(entries()[1]).toMatchObject({
+      before: { assignedUserId: FIN_AGENT.userId },
+      after: { assignedUserId: null },
+    });
+  });
+
+  it('records a priority change and a re-route', async () => {
+    const app = await appAs();
+
+    await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-it/priority',
+      payload: { priority: 'URGENT' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-it/route',
+      payload: { departmentId: 'dep-fin', categoryId: 'cat-fin-salary' },
+    });
+
+    expect(entries().map((entry) => entry.action)).toEqual([
+      'case.priority.change',
+      'case.route',
+    ]);
+    expect(entries()[0]).toMatchObject({ before: { priority: 'NORMAL' }, after: { priority: 'URGENT' } });
+  });
+
+  it('tells a reply and a note apart in the trail', async () => {
+    const app = await appAs();
+
+    await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-it/messages',
+      payload: { message: 'Fixed - try it now.' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-it/messages',
+      payload: { message: 'Second failure this month.', internal: true },
+    });
+
+    expect(entries().map((entry) => entry.action)).toEqual(['case.respond', 'case.note']);
+    expect(JSON.stringify(entries())).not.toContain('Second failure this month');
+  });
+});
+
+describe('paging the queue', () => {
+  it('asks the database for one page rather than sending everything', async () => {
+    for (let index = 0; index < 25; index += 1) {
+      caseTable.rows.push(caseRow({ id: `case-${index}`, subject: `Case ${index}` }));
+    }
+    const app = await appAs();
+
+    const first = await app.inject({ method: 'GET', url: '/cases/queue?limit=10' });
+    const third = await app.inject({ method: 'GET', url: '/cases/queue?limit=10&page=3' });
+
+    const firstBody = first.json<{ data: unknown[]; meta: Record<string, number> }>();
+    const thirdBody = third.json<{ data: unknown[]; meta: Record<string, number> }>();
+
+    expect(firstBody.data).toHaveLength(10);
+    expect(firstBody.meta).toMatchObject({ page: 1, limit: 10, total: 25, totalPages: 3 });
+    expect(thirdBody.data).toHaveLength(5);
+    // The page is the DATABASE's page: skip and take reached Prisma.
+    expect(db.case.findMany.mock.calls[1]?.[0]).toMatchObject({ skip: 20, take: 10 });
   });
 });

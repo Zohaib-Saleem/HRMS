@@ -209,11 +209,21 @@ export function table(initial: Row[] = []) {
       rows.push(row);
       return Promise.resolve(row);
     }),
+    /*
+     * Replaces the stored row rather than mutating it, which is not a detail.
+     * Prisma hands back a fresh object on every read, so a row fetched BEFORE
+     * an update keeps the values it was fetched with - and route code leans on
+     * exactly that when it audits `before` from the row it already had. A
+     * stand-in that mutated in place would report the new value as the old one
+     * and fail an honest test, which is how a test kit starts being worked
+     * around instead of fixed.
+     */
     update: vi.fn((args: { where: Row; data: Row }) => {
-      const row = rows.find((candidate) => matches(candidate, args.where));
-      if (!row) throw new Error('testkit: update matched no row');
-      Object.assign(row, args.data, { updatedAt: new Date() });
-      return Promise.resolve(row);
+      const index = rows.findIndex((candidate) => matches(candidate, args.where));
+      if (index === -1) throw new Error('testkit: update matched no row');
+      const updated = { ...rows[index], ...args.data, updatedAt: new Date() };
+      rows[index] = updated;
+      return Promise.resolve(updated);
     }),
     groupBy: vi.fn((args: { by: string[]; where?: unknown }) => {
       const buckets = new Map<string, number>();
