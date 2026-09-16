@@ -1025,3 +1025,201 @@ is read from its own leading bytes, not from what the browser called it, and
 anything else is refused. Files on internal notes are internal too. Downloads go
 through an endpoint that re-checks the case against the caller, so a file is
 exactly as private as the case it belongs to.
+
+---
+
+## 16. Lunch (the daily order and its cash)
+
+An operational process, not a finance module. An employee orders lunch, the
+office boy brings it, the employee pays the office boy, and the office boy marks
+the order paid. That is the whole of it.
+
+**Nothing here touches payroll.** There is no salary deduction, no payroll
+integration, no finance approval, no reconciliation step, no company subsidy, no
+payment gateway and no online payment. None of those is a gap to be filled
+later: lunch is cash settled on the day, and a deduction would put a month
+between ordering a biryani and accounting for it. If somebody asks for lunch to
+come out of salaries, that is a change to what this module *is*, not a feature
+request against it.
+
+### Three screens
+
+**Lunch** (`lunch.order.read.own`) is every employee's own — what they ordered
+today, what it comes to, and whether they have paid. No data scope widens it.
+
+**Lunch collection** (`lunch.collection.read`) is the office boy's screen: the
+day's orders and the six figures that settle it.
+
+**Settings → Lunch menu** (`lunch.menu.manage`) is what may be ordered and what
+it costs.
+
+### The grants
+
+| Grant | Lets somebody |
+|---|---|
+| `lunch.order.create` | Order lunch for themselves. The request carries ids and quantities only — the server prices it |
+| `lunch.order.read.own` | See their own orders and payment status |
+| `lunch.order.cancel.own` | Call off their own order **while it is unpaid and the kitchen has not started it** |
+| `lunch.order.fulfil` | Move an order along the round: preparing, ready, delivered |
+| `lunch.order.cancel.any` | Cancel **anybody's** order with a written reason, and decide what happens to money already paid. Not available once an order is delivered |
+| `lunch.collection.read` | See a day's orders and totals. Oversight, not money: an administrator may hold this alone |
+| `lunch.payment.mark` | Record that somebody handed the money over |
+| `lunch.payment.correct` | Undo or amend a payment already recorded. Needs a written reason, and is audited |
+| `lunch.menu.manage` | Add, re-price and retire menu items |
+
+Every system role holds the first three — everybody eats. HR Admin also holds
+`lunch.menu.manage` and `lunch.collection.read`. **Nobody holds
+`lunch.payment.mark`, `lunch.payment.correct`, `lunch.order.fulfil` or
+`lunch.order.cancel.any` by default**: give them through a custom role to
+whoever actually runs the lunch round. Keeping `mark` and `correct` on different
+people is worth doing where there is somebody to give the second to, and the
+same goes for `cancel.any` — it is the ability to decide where cash that has
+already changed hands ends up.
+
+### The lunch round
+
+`ORDERED → PREPARING → READY → DELIVERED`, forwards only, moved along by
+somebody holding `lunch.order.fulfil`. The server refuses a skipped step and
+refuses to walk an order backwards — which is also what stops the delivered rule
+below being stepped around by moving an order back to READY first.
+
+An order can be paid at any point along it. Paying on delivery is the ordinary
+case.
+
+### Cancelling an order
+
+| Who | When |
+|---|---|
+| The employee, their own | While it is **ORDERED and unpaid**. Once the kitchen has started it, or once it is paid for, it is no longer theirs to call off |
+| The operator, anybody's | **ORDERED, PREPARING or READY**, paid or not, with a compulsory reason |
+
+**A delivered order cannot be cancelled by anybody.** The food has been eaten,
+so "cancel" has stopped describing anything that could happen — cancelling one
+would take a plate the kitchen actually made out of the day's count and money
+that was actually owed out of the day's collection. A delivered order that needs
+putting right is a **payment correction** instead, which says what it is and is
+audited as what it is.
+
+The reason is compulsory because **the employee reads it**. That is the point of
+collecting it: somebody's lunch disappeared and they are owed a sentence about
+why, not a status change. The operator's separate note about the money is *not*
+shown to them.
+
+**An order is never deleted.** It keeps its number, its lines, its payment and
+its cancellation, and it stays on the day's report — in the cancelled figures,
+apart from the active ones.
+
+### Cancelling an order somebody has already paid for
+
+The payment is **never** silently erased and `paymentStatus` is never rolled
+back to UNPAID. Cash changed hands, and a system that forgets that has lost the
+only thing it was keeping. So the operator is made to choose:
+
+| Choice | What is recorded | What it means for the box |
+|---|---|---|
+| **Cancel + Refund** | `refundStatus = REFUNDED`, plus when and who | The money went back. It leaves the day's cash |
+| **Cancel + Payment retained** | `refundStatus = RETAINED` | The money stayed with you. It is still in the box |
+
+Both keep `paymentStatus = PAID`, and both record `cancelledAt`,
+`cancelledByUserId` and the cancellation reason. A cancelled paid order with no
+decision recorded counts as **retained** — the money is in the box until
+somebody says it went back, and assuming a refund that never happened is how a
+report tells an office boy he is short when he is not.
+
+### What an employee cannot do
+
+Not by a check, but by there being no endpoint: they cannot mark an order paid,
+cannot change what it costs, cannot change how it was paid, and cannot alter an
+order once it is paid for. The order total is computed from the menu prices on
+the server; nothing a browser sends contributes a figure.
+
+**Nobody marks their own lunch paid**, whatever they hold. The office boy eats
+too, and without that rule the one person able to record himself as having paid
+would be the person collecting.
+
+### Today's collection
+
+Two groups of figures, and the line between them is the whole design.
+
+**The active day** — lunches that are actually happening:
+
+| Figure | Means |
+|---|---|
+| Orders | Live orders for the day. Cancelled ones are not counted |
+| Paid / Unpaid | How many of those have been settled |
+| Expected | What the live orders come to |
+| Collected | What the paid ones came to |
+| Remaining | Expected minus collected — what is still owed to whoever is collecting |
+
+**Cancelled, reported beside it and never inside it:**
+
+| Figure | Means |
+|---|---|
+| Cancelled unpaid | Called off before anybody paid. No money was ever involved |
+| Cancelled paid | Called off after being paid for |
+| Refunded | Of that, what went back. It has left the box |
+| Retained | And what stayed. It is still in the box, and is **not** in Collected |
+| Cash in hand | Collected plus retained — what should actually be in the box |
+
+**Cancelled orders are excluded from Expected, Collected and Remaining
+entirely**, not just from Expected. An order nobody will eat is not a debt, and
+a Remaining that included one would send somebody looking for money nobody owes
+at the end of every day. They are not thrown away either: they come back in
+their own figures, split by what happened to the money, because a refund and a
+retained payment mean opposite things when a box is counted.
+
+### Food to make
+
+The collection screen also shows plates per item for the day. **Cancelled orders
+contribute nothing to it**, whatever happened to the money: keeping the cash on a
+cancelled order is a decision about the box, not an instruction to cook a lunch
+nobody is coming for.
+
+The figures are for the whole day and are fetched separately from the list
+underneath them, which is one page of it. The day is the **company's** day, in
+the company timezone, so a laptop that has travelled still opens the right
+collection.
+
+### Corrections
+
+A payment recorded against the wrong person is put right from the collection
+screen by somebody holding `lunch.payment.correct`. It needs a reason, it writes
+the before and the after into the audit log, and it moves the day's Collected
+figure — which is exactly why the reason is compulsory.
+
+An order corrected back to unpaid becomes the employee's again: if it is still
+ORDERED they can cancel it themselves, and otherwise the operator can.
+
+Correcting a payment and cancelling an order are different acts and different
+grants. A correction says *this payment was recorded wrongly*; a cancellation
+says *this lunch is not happening*. On a delivered order only the first is
+available.
+
+**A cancelled order cannot be corrected here at all**, in either direction. Its
+money was decided when it was cancelled and is recorded on the order; a
+correction to PAID would record money taken for food nobody brought, and a
+correction to UNPAID would erase the record of cash that really did change
+hands. One state, one mechanism.
+
+*Known gap:* there is currently no way to change a refund decision after the
+fact — if an order was cancelled with the payment retained and it should have
+been refunded, the money moves outside the system and the audit entry stands as
+written. That would want its own endpoint and its own audit rather than a reuse
+of the correction.
+
+### The audit trail
+
+Every operator cancellation writes one entry (`lunch.order.cancel.operator`)
+carrying the order id, the employee, the previous status and the new one, the
+payment status, the refund status where there is one, the amount, the
+cancellation reason, who cancelled it and when. Marking an order paid, moving it
+along the round and correcting a payment each write their own.
+
+That entry is what somebody reads a month later when a cash box did not balance:
+`PAID, RETAINED, 290` is the whole answer on one line.
+
+### Prices and history
+
+Menu items are **retired, never deleted**, and order lines carry the name and
+price they were placed at. Putting the karahi up by fifty rupees changes new
+orders only; it cannot rewrite what was collected last Tuesday.

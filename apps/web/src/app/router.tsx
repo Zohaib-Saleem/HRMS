@@ -122,6 +122,15 @@ const CaseCategoriesPage = lazyPage(
   () => import('@/features/settings/case-categories-page'),
   'CaseCategoriesPage',
 );
+const LunchPage = lazyPage(() => import('@/features/lunch/lunch-page'), 'LunchPage');
+const LunchCollectionPage = lazyPage(
+  () => import('@/features/lunch/lunch-collection-page'),
+  'LunchCollectionPage',
+);
+const LunchMenuPage = lazyPage(
+  () => import('@/features/settings/lunch-menu-page'),
+  'LunchMenuPage',
+);
 const MedicalPolicyPage = lazyPage(
   () => import('@/features/settings/medical-policy-page'),
   'MedicalPolicyPage',
@@ -417,6 +426,27 @@ export function AppRoutes() {
           <Route path="case-queue/:id" element={<CaseWorkPage />} />
         </Route>
 
+        {/* Lunch, from the eater's side. The endpoints behind this are pinned
+            to the caller's own employee record, so a manager opening it finds
+            their own order and no trace of their team's. Ordering is gated
+            again inside the screen on lunch.order.create. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.LUNCH_ORDER_READ_OWN} />}>
+          <Route path="lunch" element={<LunchPage />} />
+        </Route>
+
+        {/* The office boy's own screen. Its own path rather than `lunch/
+            collection`, deliberately: the sidebar highlights an entry by path
+            prefix, and a collection nested under `/lunch` would light up
+            "Lunch" as well every time somebody opened it.
+
+            Reading the day's figures is all this grant buys. Marking an order
+            paid needs lunch.payment.mark and correcting one needs
+            lunch.payment.correct, and the server decides both - the buttons on
+            the screen are drawn from its answer, not from this route. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.LUNCH_COLLECTION_READ} />}>
+          <Route path="lunch-collection" element={<LunchCollectionPage />} />
+        </Route>
+
         {/* employee.read is the whole gate. Each block inside a row - pay,
             leave, loans, attendance - is gated again server-side, so a reader
             without payroll.read gets rows with no salary rather than a 403. */}
@@ -513,6 +543,13 @@ export function AppRoutes() {
                 every employee can already reach. */}
             <Route element={<RequirePermission permission={PERMISSIONS.CASE_CATEGORY_MANAGE} />}>
               <Route path="case-categories" element={<CaseCategoriesPage />} />
+            </Route>
+            {/* The lunch menu and its prices. One grant, for the same reason
+                the case catalogue has one: there is nothing to read here that
+                is not also there to be edited, and the order form's own copy of
+                the menu is an endpoint every employee can already reach. */}
+            <Route element={<RequirePermission permission={PERMISSIONS.LUNCH_MENU_MANAGE} />}>
+              <Route path="lunch-menu" element={<LunchMenuPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
               <Route path="users" element={<UsersPage />} />

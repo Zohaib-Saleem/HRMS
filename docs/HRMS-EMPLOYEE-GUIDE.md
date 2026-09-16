@@ -197,6 +197,43 @@ payroll** view for you, which shows the attendance beside what it cost.
 
 ---
 
+## Lunch
+
+**Lunch** shows what you have ordered today, what it comes to, and whether you
+have paid for it.
+
+**Ordering.** Pick what you want from the menu and place the order. The price
+comes from the menu, not from anything your browser sends, so what you are shown
+is what you will be asked for.
+
+**Paying.** You pay the person who brings the food — cash, at lunchtime.
+**Nothing is deducted from your salary**, there is no online payment, and
+payroll is not involved in any way. Once they have taken the money they mark
+your order paid, and your order then reads:
+
+> ✓ Paid PKR 290 · Cash
+
+**Cancelling.** You can cancel your own order **while it is still unpaid and the
+kitchen has not started it**, and then you owe nothing for it. After that it is
+out of your hands — speak to whoever is bringing the food. They can cancel it
+for you, and they have to write down why.
+
+**If somebody else cancels your order**, you will see who did it and the reason
+they gave:
+
+> Status: CANCELLED
+> Cancelled by Usman Ghani · Employee requested cancellation
+
+If you had already paid, the order still shows that you paid, and shows what
+happened to the money — **Refunded** if it went back to you, or **Payment
+retained** if it was agreed you would leave it. Your payment is never quietly
+erased.
+
+You cannot mark your own order paid, change what it costs, or change how it was
+recorded as paid. Those belong to whoever collects.
+
+---
+
 ## Approvals and notifications
 
 **Approvals** shows requests you raised and their status. The bell in the header
@@ -218,6 +255,7 @@ If you manage people, it also shows requests waiting on you — see the
 - Change your own department, manager, shift or salary
 - Edit a raw device punch
 - Approve anything, unless you manage people
+- Mark your own lunch order paid, or change what it cost
 
 ---
 

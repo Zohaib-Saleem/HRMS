@@ -56,6 +56,9 @@ import { caseRoutes } from './cases/cases.routes.js';
 import { caseDeskRoutes } from './cases/case-desk.routes.js';
 import { caseCatalogueRoutes } from './cases/case-catalogue.routes.js';
 import { caseAttachmentRoutes } from './cases/case-attachments.routes.js';
+import { lunchOrderRoutes } from './lunch/lunch-orders.routes.js';
+import { lunchDeskRoutes } from './lunch/lunch-desk.routes.js';
+import { lunchMenuRoutes } from './lunch/lunch-menu.routes.js';
 import {
   payrollDashboardRoutes,
   payrollReconciliationRoutes,
@@ -169,6 +172,25 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/cases', plugin: caseDeskRoutes },
   { prefix: '/cases', plugin: caseCatalogueRoutes },
   { prefix: '/cases', plugin: caseAttachmentRoutes },
+
+  // --- phase 13: lunch --------------------------------------------------
+  // Three plugins, split by who is holding the screen rather than by where
+  // they sit. The employee's routes narrow every query to the caller's own
+  // employee id; the desk's narrow to a company and a DAY, because a day's
+  // collection is what the office boy is actually holding; the menu is
+  // configuration of what may be ordered at all.
+  //
+  // Deliberately NOT registered anywhere near payroll, and it shares nothing
+  // with it: lunch is settled in cash with the office boy on the day, so there
+  // is no deduction, no finance approval and no reconciliation step in any of
+  // these three.
+  //
+  // `/lunch/desk` and `/lunch/menu-items` are static segments and are
+  // registered ahead of the bare `/lunch` plugin the same way `/loans/policy`
+  // sits ahead of `/loans`, so Fastify matches them unambiguously.
+  { prefix: '/lunch/desk', plugin: lunchDeskRoutes },
+  { prefix: '/lunch/menu-items', plugin: lunchMenuRoutes },
+  { prefix: '/lunch', plugin: lunchOrderRoutes },
 
   // --- phase 5+ ---------------------------------------------------------
   // { prefix: '/documents', plugin: documentRoutes },

@@ -23,6 +23,8 @@ import {
   ClipboardPen,
   PencilLine,
   Receipt,
+  Sandwich,
+  UtensilsCrossed,
   Settings,
   TrendingUp,
   Users,
@@ -290,6 +292,33 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
+        // Alongside Payslips, Loans and Medical, and for the same reason: every
+        // member of staff holds the lunch grants and opens this to find their
+        // OWN order. The endpoint behind it shows nobody else's.
+        //
+        // Deliberately not under Payroll. Lunch is cash handed to the office
+        // boy at one o'clock; filing it beside salary would be the first step
+        // towards somebody expecting it to be deducted from one.
+        label: 'Lunch',
+        to: '/lunch',
+        icon: Sandwich,
+        permission: PERMISSIONS.LUNCH_ORDER_READ_OWN,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // The other side of the same module, and a separate entry rather than a
+        // switch inside "Lunch": one screen is somebody's own order and the
+        // other is a day's cash collection, and only the people who run the
+        // lunch round hold the grant that opens it.
+        label: 'Lunch collection',
+        to: '/lunch-collection',
+        icon: UtensilsCrossed,
+        permission: PERMISSIONS.LUNCH_COLLECTION_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
         // The consolidated HR view: one row per employee, every module's figure
         // for that person. Gated on employee.read; the columns a reader may
         // fill are decided per block by the module that owns them.
@@ -382,6 +411,9 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/cases': 'My cases',
   '/case-queue': 'Case queue',
   '/settings/case-categories': 'Case categories',
+  '/lunch': 'Lunch',
+  '/lunch-collection': 'Lunch collection',
+  '/settings/lunch-menu': 'Lunch menu',
   '/reports/employee-master': 'Employee Master Report',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/loan-policy': 'Loan policy',

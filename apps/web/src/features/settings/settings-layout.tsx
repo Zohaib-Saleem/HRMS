@@ -8,6 +8,7 @@ import {
   HeartPulse,
   KeyRound,
   Layers3,
+  Sandwich,
   ScrollText,
   SlidersHorizontal,
   UsersRound,
@@ -78,6 +79,14 @@ export const TABS: SettingsTab[] = [
     label: 'Case categories',
     icon: FolderTree,
     permission: PERMISSIONS.CASE_CATEGORY_MANAGE,
+  },
+  {
+    // The lunch menu and its prices. Configuration of what may be ordered, not
+    // of the money: collecting it is the office boy's screen, under Operations.
+    to: '/settings/lunch-menu',
+    label: 'Lunch menu',
+    icon: Sandwich,
+    permission: PERMISSIONS.LUNCH_MENU_MANAGE,
   },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },

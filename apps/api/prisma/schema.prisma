@@ -375,6 +375,11 @@ model Company {
   caseMessages    CaseMessage[]
   caseAttachments CaseAttachment[]
 
+  // --- lunch ---
+  lunchMenuItems  LunchMenuItem[]
+  lunchOrders     LunchOrder[]
+  lunchOrderItems LunchOrderItem[]
+
   @@map("companies")
 }
 
@@ -712,6 +717,9 @@ model Employee {
   // --- cases (helpdesk) ---
   casesRaised Case[] @relation("CaseRequester")
 
+  // --- lunch ---
+  lunchOrders LunchOrder[]
+
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
   @@index([companyId, employmentStatus])
@@ -824,6 +832,12 @@ model User {
   casesAssigned    Case[]           @relation("CaseAssignee")
   caseMessagesSent CaseMessage[]    @relation("CaseMessageSender")
   caseAttachments  CaseAttachment[] @relation("CaseAttachmentUploader")
+
+  // --- lunch ---
+  /// Orders this account recorded the payment for. The office boy's own trail.
+  lunchPaymentsTaken   LunchOrder[] @relation("LunchOrderPaidBy")
+  lunchOrdersCancelled LunchOrder[] @relation("LunchOrderCancelledBy")
+  lunchRefundsRecorded LunchOrder[] @relation("LunchOrderRefundedBy")
 
   @@unique([email])
   @@index([companyId, status])
@@ -4006,4 +4020,242 @@ model CaseAttachment {
   @@index([messageId])
   @@index([companyId, createdAt])
   @@map("case_attachments")
+}
+
+// ---------------------------------------------------------------- lunch
+
+/// Where a lunch order is in its life.
+///
+/// Four live states and one end. The four are the lunch round as it runs, and
+/// the last of them is load-bearing rather than decorative: DELIVERED is the
+/// line after which an order can no longer simply be called off, because the
+/// food has been eaten. Everything before it can be.
+///
+/// CANCELLED is the one that carries weight, and it carries it in two places:
+/// every figure on the collection screen ignores cancelled orders, and so does
+/// the count of plates the kitchen is told to make.
+///
+/// What CANCELLED does NOT do is erase a payment. An order paid for and then
+/// cancelled keeps `paymentStatus = PAID` and gains a `refundStatus` beside it.
+/// Losing the fact that money changed hands is the one outcome a cash system
+/// must never produce.
+enum LunchOrderStatus {
+  ORDERED
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+}
+
+/// What happened to the money when a PAID order was cancelled.
+///
+/// The payment stays PAID and this records the decision taken beside it, so
+/// that "the money went back" and "the money stayed in the box" are different
+/// rows rather than the same row read two ways.
+///
+/// RETAINED is a value rather than the absence of one deliberately: "paid,
+/// cancelled, nobody has said" and "paid, cancelled, and we agreed I keep it"
+/// are the same record if the decision is only ever inferred, and the second is
+/// something somebody agreed to and should be able to point at.
+enum LunchRefundStatus {
+  NONE
+  REFUNDED
+  RETAINED
+}
+
+/// Whether the money has arrived. Every order starts UNPAID - an order is a
+/// promise to pay at lunchtime, not a payment.
+enum LunchPaymentStatus {
+  UNPAID
+  PAID
+}
+
+/// How the money arrived, in the office boy's own words.
+///
+/// Recorded because he reconciles a cash box at the end of the day and a
+/// transfer is not in it. Note what these are NOT: they are not channels the
+/// software operates. Nothing in this module initiates, verifies or settles a
+/// payment - two people exchanged money, and this is the word for how.
+enum LunchPaymentMethod {
+  CASH
+  BANK_TRANSFER
+  OTHER
+}
+
+/// One thing that can be ordered, and what it costs today.
+///
+/// Ordinary configuration, like a leave type or a case category: a company
+/// types its own menu and nothing in the frontend has an opinion about what is
+/// on it. Retired rather than deleted, because orders point at these rows and a
+/// company that stops selling chapati has not stopped having sold it on
+/// Tuesday.
+///
+/// The price here is TODAY'S price and it is never read for a historical order.
+/// Every order line copies the name and the price it was placed at, so putting
+/// the karahi up by fifty rupees cannot rewrite what the office boy collected
+/// last week.
+model LunchMenuItem {
+  id        String @id @default(cuid())
+  companyId String
+
+  name        String
+  description String?
+
+  /// Two decimals, the same precision the order lines and their totals use.
+  price Decimal @db.Decimal(12, 2)
+
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items   LunchOrderItem[]
+
+  /// One name per company. Two rows called "Biryani" at different prices is an
+  /// ordering mistake waiting to happen on a dropdown sixty people use daily.
+  @@unique([companyId, name])
+  /// The order form's query: this company's live items, in the order they are shown.
+  @@index([companyId, isActive, sortOrder])
+  @@map("lunch_menu_items")
+}
+
+/// One person's lunch on one day, and the money owed for it.
+///
+/// Deliberately attached to nothing financial. There is no payroll link, no
+/// salary deduction, no loan, no approval chain and no subsidy column, and none
+/// of them is a gap: lunch is settled in cash with the office boy the same day,
+/// and a deduction would put a month between ordering a biryani and accounting
+/// for it. The reporting an administrator gets out of this module is a day's
+/// figures, not a ledger.
+///
+/// Who pays and who is paid are two different kinds of thing, and the columns
+/// say so. The order belongs to an EMPLOYEE, because owing for lunch is a fact
+/// about a person on the roster. The payment was taken by a USER, because it is
+/// an act somebody performed while signed in - and being able to name that
+/// account is the whole point of recording it.
+model LunchOrder {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// `LUNCH-2026-09-16-00042`. Per company and per DAY - see the unique index,
+  /// which is what actually holds under a race; the generator reads the highest
+  /// issued today and retries on it rather than trusting its own read.
+  ///
+  /// Per day rather than per year because an order lives for one lunchtime and
+  /// the number is used to find a row on a list of sixty. The day in it says
+  /// which collection the order belongs to without a lookup.
+  orderNumber String
+
+  /// Who ordered, and therefore who owes. The whole of the employee-side
+  /// security story: every employee query is pinned to this column, resolved
+  /// from the session and never from the request.
+  employeeId String
+
+  /// The lunch day, as a date with no time. Chosen in the COMPANY's timezone
+  /// and stored at UTC midnight, the same contract every other date column in
+  /// this schema keeps.
+  serviceDate DateTime @db.Date
+
+  status LunchOrderStatus @default(ORDERED)
+
+  /// What the order came to, computed server-side from the menu prices at the
+  /// moment it was placed. Nothing a client sends contributes to it.
+  totalAmount Decimal @db.Decimal(12, 2)
+
+  paymentStatus LunchPaymentStatus  @default(UNPAID)
+  /// Null while unpaid. Set together with `paidAt` and `paidByUserId`, and
+  /// cleared together with them when a payment is corrected back to unpaid -
+  /// the three are one fact and a row carrying two of them is a row that says
+  /// nobody was paid by somebody at half past one.
+  paymentMethod LunchPaymentMethod?
+  paidAt        DateTime?
+  paidByUserId  String?
+
+  /// "No chillies." Goes to the kitchen, not to the money.
+  note String?
+
+  // --- if it was called off ------------------------------------------------
+  cancelledAt        DateTime?
+  /// Who called it off. Null for an order nobody has. The employee's own
+  /// cancel writes their account here too, so "cancelled by" is answerable
+  /// without inferring it from who happens to hold a grant.
+  cancelledByUserId  String?
+  /// Why. Optional when an employee cancels their own unpaid order - they owe
+  /// nobody an explanation - and COMPULSORY when an operator cancels somebody
+  /// else's, which is enforced by the endpoint rather than by this column:
+  /// the rule is about who is asking, and a column cannot see that.
+  cancellationReason String?
+
+  // --- and what happened to money already taken ---------------------------
+  /// NONE unless a paid order was cancelled. See `LunchRefundStatus`.
+  refundStatus     LunchRefundStatus @default(NONE)
+  refundedAt       DateTime?
+  refundedByUserId String?
+  /// The operator's note on the refund decision. Never sent to the employee -
+  /// they are told the decision and the cancellation reason, and this is
+  /// working that belongs to the desk and the audit trail.
+  refundReason     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee    Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// SetNull rather than Cascade: deleting the account of an office boy who has
+  /// left must not delete the orders he collected for.
+  paidBy      User?            @relation("LunchOrderPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
+  /// Both SetNull, for the same reason `paidBy` is: deleting the account of
+  /// somebody who has left must not delete the orders they acted on.
+  cancelledBy User?            @relation("LunchOrderCancelledBy", fields: [cancelledByUserId], references: [id], onDelete: SetNull)
+  refundedBy  User?            @relation("LunchOrderRefundedBy", fields: [refundedByUserId], references: [id], onDelete: SetNull)
+  items       LunchOrderItem[]
+
+  /// One order number per company. The generator retries on this constraint.
+  @@unique([companyId, orderNumber])
+  /// The collection screen's whole query: one company, one day, in order.
+  @@index([companyId, serviceDate, status])
+  /// The office boy's commonest filter - who has not paid yet, today.
+  @@index([companyId, serviceDate, paymentStatus])
+  /// The employee's own list, which is their entire side of this module.
+  @@index([employeeId, serviceDate])
+  @@map("lunch_orders")
+}
+
+/// One line of an order: what was ordered, how many, and at what price.
+///
+/// The name and the unit price are SNAPSHOTS, copied from the menu row when the
+/// order was placed, and that is the point of this table existing rather than a
+/// join. A menu price is a live setting somebody edits; what an order cost is a
+/// historical fact that has already been collected against. Keeping the second
+/// one behind a foreign key to the first would mean that re-pricing the karahi
+/// silently changed last Tuesday's collection - and last Tuesday's collection
+/// has already been counted out of a cash box and agreed.
+model LunchOrderItem {
+  id        String @id @default(cuid())
+  companyId String
+  orderId   String
+
+  /// Where it came from. Null once that menu item is gone; the name and price
+  /// below are what the order is actually made of.
+  menuItemId String?
+
+  itemName  String
+  unitPrice Decimal @db.Decimal(12, 2)
+  quantity  Int
+  /// `unitPrice * quantity`, stored rather than derived so a line reads the
+  /// same way a receipt does and so the order total is the sum of what is
+  /// printed rather than of something recomputed beside it.
+  lineTotal Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order    LunchOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem LunchMenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([companyId, menuItemId])
+  @@map("lunch_order_items")
 }

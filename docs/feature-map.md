@@ -71,6 +71,7 @@ and a Cliq-style social bar (Chats, Channels, Threads, Contacts).
 | Employee Exit / offboarding | Yes | **OPTIONAL** |
 | Compensation | Yes (form-based only) | **KEEP** (as real payroll — see §7) |
 | Cases / HR help desk | Yes | **BUILT** (employee side and desk, see the [admin manual](HRMS-ADMIN-MANUAL.md#15-cases-the-helpdesk)) |
+| Lunch (daily order and cash collection) | **No** | **BUILT** (our own requirement — see the [admin manual](HRMS-ADMIN-MANUAL.md#16-lunch-the-daily-order-and-its-cash)) |
 | Tasks | Yes | **OPTIONAL** |
 | Travel | Yes | **EXCLUDE** |
 | Office Readiness (health / vaccination) | Yes | **EXCLUDE** |

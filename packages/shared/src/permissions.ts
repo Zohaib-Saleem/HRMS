@@ -209,6 +209,62 @@ export const PERMISSIONS = {
   /// shapes the desk and not by everybody who staffs it.
   CASE_CATEGORY_MANAGE: 'case.category.manage',
 
+  // --- Lunch (the daily order, and the money the office boy collects) ---
+  /// Order lunch for yourself. The request carries no employee id, so it can
+  /// only ever produce the holder's own order.
+  LUNCH_ORDER_CREATE: 'lunch.order.create',
+  /// See your OWN lunch orders and what you still owe for them. Deliberately
+  /// named `.own`: no data scope widens it, because what a colleague ate is
+  /// not a line-management matter.
+  LUNCH_ORDER_READ_OWN: 'lunch.order.read.own',
+  /// Call off your own order while nobody has paid for it. Separate from
+  /// placing one so a company can keep the ordering open and still stop
+  /// cancellations after the food has been bought.
+  LUNCH_ORDER_CANCEL_OWN: 'lunch.order.cancel.own',
+
+  /// Move somebody's order along the lunch round - ordered, preparing, ready,
+  /// delivered. Its own grant because it is the kitchen's job rather than the
+  /// cash box's: a company may well have one person cooking and another
+  /// collecting, and neither needs the other's buttons.
+  LUNCH_ORDER_FULFIL: 'lunch.order.fulfil',
+  /// Cancel ANYBODY's lunch order, with a compulsory reason. The operator's
+  /// own cancel, and deliberately not the same grant as the employee's:
+  /// `lunch.order.cancel.own` can only ever reach the holder's own unpaid
+  /// order, and this reaches everybody's.
+  ///
+  /// It carries the refund decision with it. Cancelling an order somebody has
+  /// already paid for forces a choice between refunding and retaining the
+  /// money, and both are recorded - so this grant is the ability to decide
+  /// where cash that has already changed hands ends up, and is worth handing
+  /// out as deliberately as that sounds.
+  ///
+  /// It does NOT reach a delivered order. Once the food has been handed over,
+  /// putting something right is a payment correction, which says what it is.
+  LUNCH_ORDER_CANCEL_ANY: 'lunch.order.cancel.any',
+  /// See the day's orders and what they add up to: the office boy's own
+  /// screen, and the only read in this module that reaches other people's
+  /// orders. Held by whoever runs the lunch round, and by an administrator who
+  /// wants the day's figures - reading the collection is oversight.
+  LUNCH_COLLECTION_READ: 'lunch.collection.read',
+  /// Mark an order paid. Separate from reading the collection because taking
+  /// money is not the same act as counting it: a manager may want the day's
+  /// figures without being able to write off what somebody owes.
+  ///
+  /// Nobody marks their own order paid through this. The endpoint refuses an
+  /// order belonging to the caller, whatever grants they hold.
+  LUNCH_PAYMENT_MARK: 'lunch.payment.mark',
+  /// Put right a payment recorded wrongly - unmark a paid order, or correct
+  /// the method it was taken by. Its own grant because it is the one action
+  /// that rewrites money already counted, and it is never handed out with
+  /// `lunch.payment.mark`: the person who can take money and the person who
+  /// can undo having taken it are worth being able to keep apart. Every
+  /// correction carries a written reason and is audited.
+  LUNCH_PAYMENT_CORRECT: 'lunch.payment.correct',
+  /// Maintain the menu and its prices. Company configuration rather than a
+  /// day's work, so it sits with whoever sets prices and not with everybody
+  /// who collects the money for them.
+  LUNCH_MENU_MANAGE: 'lunch.menu.manage',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -441,6 +497,60 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     ],
   },
   {
+    key: 'lunch',
+    label: 'Lunch',
+    description:
+      'The daily lunch order, and the cash the office boy collects for it. Not a finance module: no deduction, no approval, no gateway.',
+    permissions: [
+      {
+        value: PERMISSIONS.LUNCH_ORDER_CREATE,
+        label: 'Order lunch',
+        description: 'Place a lunch order for yourself.',
+      },
+      {
+        value: PERMISSIONS.LUNCH_ORDER_READ_OWN,
+        label: 'View own lunch orders',
+        description: 'See your own orders and whether you have paid for them.',
+      },
+      {
+        value: PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+        label: 'Cancel own lunch order',
+        description: 'Call off your own order while nobody has paid for it.',
+      },
+      {
+        value: PERMISSIONS.LUNCH_ORDER_FULFIL,
+        label: 'Move orders along',
+        description: 'Mark an order preparing, ready or delivered.',
+      },
+      {
+        value: PERMISSIONS.LUNCH_ORDER_CANCEL_ANY,
+        label: "Cancel anybody's order",
+        description:
+          'Cancel an order with a written reason, and decide whether money already paid is refunded or retained. Not available once an order is delivered.',
+      },
+      {
+        value: PERMISSIONS.LUNCH_COLLECTION_READ,
+        label: "View the day's collection",
+        description: "See every order for a day, and what is paid and still owed.",
+      },
+      {
+        value: PERMISSIONS.LUNCH_PAYMENT_MARK,
+        label: 'Mark orders paid',
+        description: 'Record that somebody handed over the money for their lunch.',
+      },
+      {
+        value: PERMISSIONS.LUNCH_PAYMENT_CORRECT,
+        label: 'Correct a lunch payment',
+        description: 'Undo or amend a payment recorded wrongly. Needs a reason, and is audited.',
+      },
+      {
+        value: PERMISSIONS.LUNCH_MENU_MANAGE,
+        label: 'Manage the lunch menu',
+        description: 'Add, re-price and retire the items people can order.',
+      },
+    ],
+  },
+  {
     key: 'governance',
     label: 'Governance',
     description: 'Audit trail and system settings.',
@@ -575,6 +685,21 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.CASE_NOTE_INTERNAL,
     // The catalogue is company configuration, and HR is who configures it.
     PERMISSIONS.CASE_CATEGORY_MANAGE,
+    // Lunch, from the eater's side. Everybody who works here eats, so every
+    // system role holds these three - and only these three. The grants that
+    // reach somebody else's order, or the money for it, belong to whoever runs
+    // the lunch round and are handed out by name.
+    PERMISSIONS.LUNCH_ORDER_CREATE,
+    PERMISSIONS.LUNCH_ORDER_READ_OWN,
+    PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+    // The menu and its prices are company configuration, and HR is who
+    // configures it. The day's collection comes with it as a read, because
+    // somebody has to be able to answer "what did lunch cost us on Tuesday"
+    // without being handed the ability to write off what people owe - marking
+    // an order paid and correcting a payment are the operator's own grants,
+    // and neither arrives with this role.
+    PERMISSIONS.LUNCH_MENU_MANAGE,
+    PERMISSIONS.LUNCH_COLLECTION_READ,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -615,6 +740,13 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.CASE_CREATE,
     PERMISSIONS.CASE_REPLY_OWN,
     PERMISSIONS.CASE_REOPEN_OWN,
+    // Lunch, from the eater's side. Everybody who works here eats, so every
+    // system role holds these three - and only these three. The grants that
+    // reach somebody else's order, or the money for it, belong to whoever runs
+    // the lunch round and are handed out by name.
+    PERMISSIONS.LUNCH_ORDER_CREATE,
+    PERMISSIONS.LUNCH_ORDER_READ_OWN,
+    PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -652,6 +784,13 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.CASE_CREATE,
     PERMISSIONS.CASE_REPLY_OWN,
     PERMISSIONS.CASE_REOPEN_OWN,
+    // Lunch, from the eater's side. Everybody who works here eats, so every
+    // system role holds these three - and only these three. The grants that
+    // reach somebody else's order, or the money for it, belong to whoever runs
+    // the lunch round and are handed out by name.
+    PERMISSIONS.LUNCH_ORDER_CREATE,
+    PERMISSIONS.LUNCH_ORDER_READ_OWN,
+    PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
   ],
 };
 
