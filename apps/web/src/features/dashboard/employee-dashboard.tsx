@@ -7,7 +7,7 @@ import {
   Plane,
   UserRound,
 } from 'lucide-react';
-import { EMPLOYMENT_STATUS_LABELS } from '@hrms/shared';
+import { EMPLOYMENT_STATUS_LABELS, type LeaveBalanceRecord } from '@hrms/shared';
 import { PageHeader } from '@/components/layout/page-header';
 import { StatCard } from '@/components/ui/stat-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +20,7 @@ import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
 import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
 import { MyCasesCard } from '@/features/cases/my-cases-card';
+import { LunchTodayCard } from '@/features/lunch/lunch-today-card';
 import { useAuthenticatedSession } from '@/features/auth/session-context';
 import { MyAttendanceBarsCard } from './my-attendance-bars-card';
 import { CompanyMoments } from './company-moments';
@@ -55,6 +56,83 @@ function rangeLabel(request: LeaveRequestView): string {
   return request.startDate === request.endDate
     ? dayLabel(request.startDate)
     : `${dayLabel(request.startDate)} - ${dayLabel(request.endDate)}`;
+}
+
+/**
+ * Today, spelled out: `Thursday, 17 September 2026`.
+ *
+ * On the dashboard because the first thing somebody checks against a screen
+ * about "today" is whether the screen agrees with them about which day that is.
+ * Read in the browser's own locale and zone, like every other clock in this app.
+ */
+function todayLabel(): string {
+  return new Date().toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+/**
+ * Leave, as one number.
+ *
+ * The detailed balance - every type, used, pending, entitlement - is further
+ * down the page and stays there; this is the glance that answers "have I got
+ * any left" without reading a table. The figure is the sum of what the server
+ * already computed per type, not a second calculation: nothing here decides
+ * what a day of leave is worth.
+ *
+ * Deliberately fed from the dashboard's own balances rather than fetching
+ * again, so the tile and the card below it can never disagree.
+ */
+function TodayLeaveCard({
+  balances,
+  loading,
+}: {
+  balances: readonly LeaveBalanceRecord[];
+  loading: boolean;
+}) {
+  const available = balances.reduce((sum, balance) => sum + balance.availableDays, 0);
+  const pending = balances.reduce((sum, balance) => sum + balance.pendingDays, 0);
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle>Leave</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <Skeleton className="h-12 w-full" />
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-medium">
+                {balances.length === 0 ? (
+                  'No leave types'
+                ) : (
+                  <>
+                    <span className="tabular">{available}</span> day
+                    {available === 1 ? '' : 's'} remaining
+                  </>
+                )}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {balances.length === 0
+                  ? 'An administrator has not set them up yet.'
+                  : pending > 0
+                    ? `${pending} day${pending === 1 ? '' : 's'} awaiting approval`
+                    : 'Across every leave type'}
+              </p>
+            </div>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/leave/me">View leave</Link>
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function greeting(): string {
@@ -127,38 +205,72 @@ export function EmployeeDashboard() {
       <PageHeader
         title={`${greeting()}, ${profile?.firstName ?? ''}`.trim()}
         description={
+          /*
+           * The date leads, then the employment line that was here before it.
+           * Somebody landing on a page of today's actions wants to see today
+           * named; their own job title is context, not news.
+           */
           profile
-            ? /*
-               * The employee's own employment status, shown beside the title
-               * and department they already see here. Read-only: nothing under
-               * /me writes an employee record, and changing it needs
-               * employee.manage on the People screen.
-               */
-              [
-                profile.jobTitle,
-                profile.departmentName,
-                profile.employmentStatus
-                  ? EMPLOYMENT_STATUS_LABELS[profile.employmentStatus]
-                  : null,
+            ? [
+                todayLabel(),
+                /*
+                 * The employee's own employment status, shown beside the title
+                 * and department they already see here. Read-only: nothing under
+                 * /me writes an employee record, and changing it needs
+                 * employee.manage on the People screen.
+                 */
+                [
+                  profile.jobTitle,
+                  profile.departmentName,
+                  profile.employmentStatus
+                    ? EMPLOYMENT_STATUS_LABELS[profile.employmentStatus]
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || `Employee ${profile.employeeNumber}`,
               ]
                 .filter(Boolean)
-                .join(' · ') || `Employee ${profile.employeeNumber}`
-            : undefined
+                .join(' · ')
+            : todayLabel()
         }
       />
 
-      {/* Company moments, immediately under the greeting: birthdays, work
-          anniversaries and new joiners. They used to sit at the foot of the
-          dashboard, below leave and holidays, where an employee found out about
-          a colleague's birthday the day after it happened. Compact, and absent
-          entirely on a day with nothing to celebrate - which is why it carries
-          its own margin rather than sitting in a spacer div that would leave a
-          gap here on a quiet day. See company-moments. */}
-      <CompanyMoments moments={data?.moments ?? null} companyName={companyName} />
-
-      {/* Today: the reusable card, so check-in behaves identically here and on
-          the attendance screen rather than being reimplemented. */}
+      {/*
+        * TODAY, and it is the whole top of the screen now.
+        *
+        * The four things an employee comes here to settle before lunchtime -
+        * am I checked in, have I ordered, is anything of mine open, how much
+        * leave is left - used to be spread from the top of this page to the
+        * bottom of it, with lunch and cases in the last row below the leave
+        * balance and the holiday list. An employee who scrolled that far had
+        * usually already missed lunch.
+        *
+        * Attendance leads as a full-width card rather than as a fourth tile,
+        * because it is the only one of the four that is also a CONTROL: it
+        * carries check-in, check-out and the work-location picker. A compact
+        * tile repeating "Present 09:04" above it would be a second attendance
+        * widget saying the same thing with no button on it.
+        */}
       <AttendanceToday />
+
+      {/*
+        * Lunch, cases and leave, in that order, which is also the order they
+        * stack on a phone. Each card renders itself away when the permission
+        * behind it is absent, so a narrow role gets fewer tiles rather than
+        * empty ones.
+        */}
+      {/*
+        * `items-start` so each card is its own height rather than being
+        * stretched to the tallest. Without it the lunch tile - two lines and a
+        * button, which is the whole point of it - is padded out to match the
+        * case counts beside it, which is the large empty box this row exists to
+        * avoid.
+        */}
+      <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <LunchTodayCard />
+        <MyCasesCard />
+        <TodayLeaveCard balances={data?.leave?.balances ?? []} loading={loading} />
+      </div>
 
       {/* My attendance: the month as bars, drawn by the same component the
           /attendance page uses and from the very request the figures below are
@@ -208,7 +320,24 @@ export function EmployeeDashboard() {
         />
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      {/*
+        * Company moments: birthdays, work anniversaries and new joiners.
+        *
+        * Below the month and above the reference cards - upper-middle, which is
+        * the compromise the two pressures on it want. At the very top it pushed
+        * the employee's own actions down the page on any day somebody had a
+        * birthday; at the foot, where it originally sat, people found out about
+        * a colleague's birthday the day after it happened.
+        *
+        * Absent entirely on a quiet day, heading and all, so it costs the
+        * dashboard no height when there is nothing to celebrate. See
+        * company-moments.
+        */}
+      <div className="mt-4">
+        <CompanyMoments moments={data?.moments ?? null} companyName={companyName} />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="flex-row items-center justify-between gap-2">
             <CardTitle>Leave balance</CardTitle>
@@ -388,7 +517,6 @@ export function EmployeeDashboard() {
         <MyCorrectionsCard />
         <MyLoansCard />
         <MyMedicalCard />
-        <MyCasesCard />
       </div>
     </>
   );

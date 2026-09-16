@@ -441,7 +441,30 @@ describe('the employee dashboard in the order an employee reads it', () => {
             lateMinutes: 0,
           },
         } as never);
-      if (path === '/leave/balances/me') return Promise.resolve([] as never);
+      if (path === '/leave/balances/me')
+        return Promise.resolve([
+          {
+            leaveTypeId: 'lt-1',
+            leaveTypeName: 'Annual',
+            annualEntitlementDays: 20,
+            usedDays: 5,
+            pendingDays: 2,
+            availableDays: 15,
+          },
+        ] as never);
+      if (path === '/lunch/today')
+        return Promise.resolve({
+          day: '2026-09-17',
+          orders: [],
+          outstandingAmount: 0,
+          canOrder: true,
+        } as never);
+      if (path === '/cases/summary')
+        return Promise.resolve({
+          counts: { OPEN: 2, IN_PROGRESS: 1, PENDING: 1, RESOLVED: 0, CLOSED: 0 },
+          openCount: 3,
+          awaitingMeCount: 1,
+        } as never);
       // No check-in widget and no medical card in these cases: neither is what
       // is being measured, and both render themselves away when absent.
       if (path === '/attendance/today') return Promise.resolve(null as never);
@@ -486,14 +509,72 @@ describe('the employee dashboard in the order an employee reads it', () => {
     return container.textContent ?? '';
   };
 
-  it('puts the celebrations above attendance, leave and what is coming up', async () => {
+  /*
+   * The order is the feature here, so it is asserted as an order rather than as
+   * a set of things that happen to be present. Lunch and cases spent a release
+   * in the last row of this page, under the leave balance and the holiday list,
+   * which is the same as not being on it: an employee who has to scroll past
+   * four reference cards to find lunch has already missed lunch.
+   */
+  const LUNCH = 'Today\u2019s lunch';
+
+  it("leads with today's actions - lunch and cases above the month", async () => {
+    const text = await dashboardText(celebrations);
+
+    const lunch = text.indexOf(LUNCH);
+    const cases = text.indexOf('My cases');
+    const month = text.indexOf('My attendance');
+
+    expect(lunch).toBeGreaterThan(-1);
+    expect(cases).toBeGreaterThan(-1);
+    expect(lunch).toBeLessThan(month);
+    expect(cases).toBeLessThan(month);
+  });
+
+  it('puts leave remaining in the top row, above the detailed balance', async () => {
+    const text = await dashboardText(celebrations);
+
+    const tile = text.indexOf('15 days remaining');
+    expect(tile).toBeGreaterThan(-1);
+    expect(tile).toBeLessThan(text.indexOf('Leave balance'));
+  });
+
+  it('keeps the celebrations upper-middle: below the month, above the reference cards', async () => {
     const text = await dashboardText(celebrations);
 
     const moment = text.indexOf('Today at Example Ltd');
     expect(moment).toBeGreaterThan(-1);
-    expect(moment).toBeLessThan(text.indexOf('My attendance'));
+    // Below today's actions and the month...
+    expect(moment).toBeGreaterThan(text.indexOf(LUNCH));
+    expect(moment).toBeGreaterThan(text.indexOf('My attendance'));
+    // ...and still well above the foot of the page, which is where they began.
     expect(moment).toBeLessThan(text.indexOf('Leave balance'));
     expect(moment).toBeLessThan(text.indexOf('Coming up'));
+  });
+
+  it('reads top to bottom in the order an employee needs it', async () => {
+    const text = await dashboardText(celebrations);
+
+    const sequence = [
+      LUNCH,
+      'My cases',
+      'My attendance',
+      'Today at Example Ltd',
+      'Leave balance',
+      'Coming up',
+    ].map((heading) => {
+      const at = text.indexOf(heading);
+      expect(at, `${heading} is missing from the dashboard`).toBeGreaterThan(-1);
+      return at;
+    });
+
+    expect(sequence).toEqual([...sequence].sort((a, b) => a - b));
+  });
+
+  it('renders the cases card exactly once - it moved up, it was not copied', async () => {
+    const text = await dashboardText(celebrations);
+
+    expect(text.split('My cases').length - 1).toBe(1);
   });
 
   it('renders each celebration card exactly once - none left at the bottom', async () => {

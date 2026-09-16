@@ -58,6 +58,7 @@ vi.mock('@/features/auth/session-context', async (importOriginal) => {
 import { ConfirmProvider } from '@/components/feedback/confirm-dialog';
 import { LunchPage } from './lunch-page';
 import { LunchCollectionPage } from './lunch-collection-page';
+import { LunchTodayCard } from './lunch-today-card';
 
 const EATER = [
   PERMISSIONS.LUNCH_ORDER_CREATE,
@@ -860,5 +861,91 @@ describe('an employee whose order was cancelled', () => {
 
     await screen.findAllByText('2 Chapati + Chicken Karahi');
     expect(screen.getByText('Cancelled by you')).toBeInTheDocument();
+  });
+});
+
+// ------------------------------------------------- lunch on the dashboard
+
+/**
+ * The dashboard's lunch card.
+ *
+ * Lunch is the one thing on an employee's dashboard that is useless once it is
+ * late, and it had no presence there at all - an employee had to remember lunch
+ * existed and go and find it in the sidebar. These pin the three states it can
+ * be in and, just as importantly, that it stays SMALL in the state it is in
+ * every morning: a quarter-screen box reading "you have not ordered lunch" is
+ * the same mistake as burying it.
+ */
+describe('the lunch card on the dashboard', () => {
+  it('invites an order when the employee has not placed one', async () => {
+    serve({ todayOrders: [] });
+    renderPage(<LunchTodayCard />);
+
+    await screen.findByText('Not ordered');
+    expect(screen.getByRole('link', { name: 'Order lunch' })).toHaveAttribute('href', '/lunch');
+  });
+
+  it('shows what was ordered, what it costs and what is still owed', async () => {
+    serve({ todayOrders: [order()] });
+    renderPage(<LunchTodayCard />);
+
+    await screen.findByText('2× Chapati · 1× Chicken Karahi');
+    expect(screen.getByText(/PKR 290/)).toBeInTheDocument();
+    expect(screen.getAllByText('Unpaid').length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: 'View order' })).toBeInTheDocument();
+  });
+
+  it('says paid once the money has been handed over', async () => {
+    serve({
+      todayOrders: [order({ paymentStatus: 'PAID', paymentMethod: 'CASH' })],
+      outstanding: 0,
+    });
+    renderPage(<LunchTodayCard />);
+
+    await screen.findByText('2× Chapati · 1× Chicken Karahi');
+    expect(screen.getByText('Paid')).toBeInTheDocument();
+    // Nothing outstanding, so the card does not ask for money.
+    expect(screen.queryByText(/to pay/)).not.toBeInTheDocument();
+  });
+
+  it('treats a cancelled order as no order, and offers to order again', async () => {
+    serve({ todayOrders: [order({ status: 'CANCELLED' })], outstanding: 0 });
+    renderPage(<LunchTodayCard />);
+
+    // A lunch nobody is bringing is not lunch. The desk drops it from the day's
+    // cooking and its collection, and this card agrees with the desk.
+    await screen.findByText('Not ordered');
+    expect(screen.getByRole('link', { name: 'Order lunch' })).toBeInTheDocument();
+  });
+
+  it('sums a second plate rather than showing only the first', async () => {
+    serve({
+      todayOrders: [
+        order({ id: 'o1' }),
+        order({ id: 'o2', orderNumber: 'LUNCH-2026-09-16-00043', totalAmount: 250 }),
+      ],
+      outstanding: 540,
+    });
+    renderPage(<LunchTodayCard />);
+
+    await screen.findByText('2 orders · 6 items');
+    expect(screen.getByText(/PKR 540/)).toBeInTheDocument();
+  });
+
+  it('is absent entirely for somebody who may not read their own orders', () => {
+    permissions = new Set();
+    serve();
+    const { container } = renderPage(<LunchTodayCard />);
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('never offers to record a payment - that is the office boy\u2019s screen', async () => {
+    serve({ todayOrders: [order()] });
+    renderPage(<LunchTodayCard />);
+
+    await screen.findByText('2× Chapati · 1× Chicken Karahi');
+    expect(screen.queryByRole('button', { name: /mark paid/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/deduct/i)).not.toBeInTheDocument();
   });
 });

@@ -60,21 +60,188 @@ export interface NavSection {
 }
 
 export const NAV_SECTIONS: NavSection[] = [
+  /*
+   * The order below is the employee's, not the org chart's.
+   *
+   * This list used to be grouped by MODULE - Workforce, Time, Operations - which
+   * is how the product is built and not how anybody uses it. An ordinary member
+   * of staff holds attendance.read, leave.read, timesheet.read and the rest, so
+   * that arrangement handed them eighteen entries with their own attendance
+   * sitting below Approvals and their own leave below Device punches. The
+   * grouping is now by WHOSE it is: my work, my services, the company's, and -
+   * last, because the people who need them are the few who have a reason to
+   * scroll - the screens that are somebody's job rather than everybody's day.
+   *
+   * Nothing here changes who may see what. Every `permission` is the one the
+   * entry already carried, with one deliberate exception noted on Correction
+   * centre, and the server remains the only gate that matters: hiding a row
+   * removes a signpost, never a right.
+   */
   {
-    key: 'overview',
+    key: 'workspace',
+    items: [{ label: 'Dashboard', to: '/', icon: LayoutDashboard, status: 'ready' }],
+  },
+  {
+    /*
+     * The five things an employee opens most, in the order they open them.
+     * Attendance first because it is the reason most people log in at all.
+     */
+    key: 'my-work',
+    label: 'My work',
     items: [
-      { label: 'Dashboard', to: '/', icon: LayoutDashboard, status: 'ready' },
+      {
+        label: 'Attendance',
+        to: '/attendance',
+        icon: Clock,
+        permission: PERMISSIONS.ATTENDANCE_READ,
+        status: 'ready',
+        // Exact match: /attendance/team and the rest are their own entries.
+        matchPrefix: false,
+      },
+      {
+        label: 'My leave',
+        to: '/leave/me',
+        icon: CalendarDays,
+        permission: PERMISSIONS.LEAVE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Leave requests',
+        to: '/leave/requests',
+        icon: Plane,
+        permission: PERMISSIONS.LEAVE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // Self-service, and separate from the correction CENTRE below on
+        // purpose: this one answers "my Tuesday is wrong", that one answers
+        // "somebody's Tuesday is wrong". Everything behind this entry is bound
+        // to the caller's own employee record by the server.
+        label: 'My corrections',
+        to: '/attendance/my-corrections',
+        icon: PencilLine,
+        permission: PERMISSIONS.ATTENDANCE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Timesheets',
+        to: '/timesheets',
+        icon: FileClock,
+        permission: PERMISSIONS.TIMESHEET_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // Everybody holds approval.read - an employee's own requests travel
+        // through this queue - so it belongs with their work rather than with
+        // the administrative screens, where it would be invisible to most of
+        // the people who can open it.
+        label: 'Approvals',
+        to: '/approvals',
+        icon: ClipboardCheck,
+        permission: PERMISSIONS.APPROVAL_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
     ],
   },
   {
-    key: 'workforce',
-    label: 'Workforce',
+    /*
+     * Things the company provides and an employee consumes. Each of these
+     * endpoints is pinned to the caller's own record on the server, whatever
+     * data scope the reader has - a manager finds their own lunch and their own
+     * loans here, and nothing of their team's.
+     */
+    key: 'my-services',
+    label: 'My services',
     items: [
       {
-        label: 'People',
-        to: '/people',
-        icon: Users,
+        // Deliberately not under Payroll. Lunch is cash handed to the office
+        // boy at one o'clock; filing it beside salary would be the first step
+        // towards somebody expecting it to be deducted from one.
+        label: 'Lunch',
+        to: '/lunch',
+        icon: Sandwich,
+        permission: PERMISSIONS.LUNCH_ORDER_READ_OWN,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // "My cases", not "Cases". The old label read as the helpdesk itself,
+        // which is the queue next door; this screen is the employee's own list
+        // and says so before they click it.
+        label: 'My cases',
+        to: '/cases',
+        icon: Headset,
+        permission: PERMISSIONS.CASE_READ_OWN,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Loans',
+        to: '/loans',
+        icon: HandCoins,
+        permission: PERMISSIONS.LOAN_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Medical',
+        to: '/medical',
+        icon: HeartPulse,
+        permission: PERMISSIONS.MEDICAL_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+    ],
+  },
+  {
+    key: 'documents',
+    label: 'Documents',
+    items: [
+      {
+        // Separate from Payroll because almost everyone can reach it and almost
+        // nobody can reach Payroll: a member of staff holds payslip.read with an
+        // OWN scope and sees exactly their own.
+        label: 'Payslips',
+        to: '/payslips',
+        icon: Receipt,
+        permission: PERMISSIONS.PAYSLIP_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Documents',
+        to: '/documents',
+        icon: FileText,
         permission: PERMISSIONS.EMPLOYEE_READ,
+        status: 'planned',
+        matchPrefix: true,
+      },
+    ],
+  },
+  {
+    key: 'company',
+    label: 'Company',
+    items: [
+      {
+        label: 'Holidays',
+        to: '/holidays',
+        icon: CalendarHeart,
+        permission: PERMISSIONS.HOLIDAY_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // Reference data rather than a team screen: shift.read is held by
+        // everybody, and what is behind it is the company's shift definitions.
+        label: 'Shifts',
+        to: '/shifts',
+        icon: Timer,
+        permission: PERMISSIONS.SHIFT_READ,
         status: 'ready',
         matchPrefix: true,
       },
@@ -94,55 +261,28 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    key: 'time',
-    label: 'Time',
+    /*
+     * Other people's attendance.
+     *
+     * Both rows move from attendance.read to employee.READ, and the reasoning
+     * is the same for each: these screens are about a group of colleagues, and
+     * every member of staff holds attendance.read for their own record - so
+     * that grant could never tell an employee from a manager, and the rows sat
+     * in front of all eighty people. Managers and HR hold employee.read;
+     * employees do not. An employee opening /attendance/team was shown a team
+     * of one - themselves - which is the attendance page they already have.
+     *
+     * The endpoints are untouched and remain the real gate, narrowed by each
+     * reader's own data scope exactly as before.
+     */
+    key: 'team',
+    label: 'Team & reports',
     items: [
-      {
-        label: 'Approvals',
-        to: '/approvals',
-        icon: ClipboardCheck,
-        permission: PERMISSIONS.APPROVAL_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        label: 'Attendance',
-        to: '/attendance',
-        icon: Clock,
-        permission: PERMISSIONS.ATTENDANCE_READ,
-        status: 'ready',
-        // Exact match: /attendance/team is its own entry below.
-        matchPrefix: false,
-      },
       {
         label: 'Team attendance',
         to: '/attendance/team',
         icon: UsersRound,
-        permission: PERMISSIONS.ATTENDANCE_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // Self-service, and separate from the correction CENTRE below on
-        // purpose: this one answers "my Tuesday is wrong", that one answers
-        // "somebody's Tuesday is wrong". Everything behind this entry is bound
-        // to the caller's own employee record by the server.
-        label: 'My corrections',
-        to: '/attendance/my-corrections',
-        icon: PencilLine,
-        permission: PERMISSIONS.ATTENDANCE_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // The HR side of the same module, and named so it is tellable apart
-        // from the self-service entry above. Readable by anyone who may read
-        // attendance; the correction form inside needs attendance.manage, and
-        // the endpoint is the real gate.
-        label: 'Correction centre',
-        to: '/attendance/corrections',
-        icon: ClipboardPen,
-        permission: PERMISSIONS.ATTENDANCE_READ,
+        permission: PERMISSIONS.EMPLOYEE_READ,
         status: 'ready',
         matchPrefix: true,
       },
@@ -150,7 +290,77 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Attendance reports',
         to: '/attendance/reports',
         icon: BarChart3,
-        permission: PERMISSIONS.ATTENDANCE_READ,
+        permission: PERMISSIONS.EMPLOYEE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+    ],
+  },
+  {
+    /*
+     * Somebody's job rather than everybody's day. An ordinary employee holds
+     * none of these grants and the whole section is absent for them.
+     */
+    key: 'management',
+    label: 'Management',
+    items: [
+      {
+        label: 'People',
+        to: '/people',
+        icon: Users,
+        permission: PERMISSIONS.EMPLOYEE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Payroll',
+        to: '/payroll',
+        icon: Banknote,
+        permission: PERMISSIONS.PAYROLL_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // The other side of the helpdesk, and a separate entry rather than a
+        // switch inside "My cases": one screen is somebody's own list and the
+        // other is a work queue, and only the people who staff a desk hold
+        // either grant that opens it.
+        label: 'Case queue',
+        to: '/case-queue',
+        icon: Headset,
+        permission: [PERMISSIONS.CASE_READ_DEPARTMENT, PERMISSIONS.CASE_READ_ALL],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // The office boy's own screen. An employee never sees this: it needs
+        // lunch.collection.read, which the Office Boy role carries and the
+        // Employee role does not.
+        label: 'Lunch collection',
+        to: '/lunch-collection',
+        icon: UtensilsCrossed,
+        permission: PERMISSIONS.LUNCH_COLLECTION_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        // The HR side of attendance corrections. Re-gated from attendance.read
+        // to attendance.MANAGE, which is the grant the correction form inside
+        // has always required - so this row was being shown to every member of
+        // staff, above their own attendance, for a screen none of them could
+        // act on. The endpoint is unchanged and remains the real gate.
+        label: 'Correction centre',
+        to: '/attendance/corrections',
+        icon: ClipboardPen,
+        permission: PERMISSIONS.ATTENDANCE_MANAGE,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Leave types',
+        to: '/leave/types',
+        icon: Layers3,
+        permission: PERMISSIONS.LEAVE_MANAGE,
         status: 'ready',
         matchPrefix: true,
       },
@@ -171,154 +381,6 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
-        label: 'Shifts',
-        to: '/shifts',
-        icon: Timer,
-        permission: PERMISSIONS.SHIFT_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        label: 'Timesheets',
-        to: '/timesheets',
-        icon: FileClock,
-        permission: PERMISSIONS.TIMESHEET_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        label: 'My leave',
-        to: '/leave/me',
-        icon: CalendarDays,
-        permission: PERMISSIONS.LEAVE_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        label: 'Leave requests',
-        to: '/leave/requests',
-        icon: Plane,
-        permission: PERMISSIONS.LEAVE_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        label: 'Leave types',
-        to: '/leave/types',
-        icon: Layers3,
-        permission: PERMISSIONS.LEAVE_MANAGE,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        label: 'Holidays',
-        to: '/holidays',
-        icon: CalendarHeart,
-        permission: PERMISSIONS.HOLIDAY_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-    ],
-  },
-  {
-    key: 'operations',
-    label: 'Operations',
-    items: [
-      {
-        label: 'Payroll',
-        to: '/payroll',
-        icon: Banknote,
-        permission: PERMISSIONS.PAYROLL_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // Separate from Payroll because almost everyone can reach it and almost
-        // nobody can reach Payroll: a member of staff holds payslip.read with an
-        // OWN scope and sees exactly their own.
-        label: 'Payslips',
-        to: '/payslips',
-        icon: Receipt,
-        permission: PERMISSIONS.PAYSLIP_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // Alongside Payslips rather than inside Payroll, and for the same
-        // reason: a member of staff holds loan.read with an OWN scope and
-        // opens this to find their own loans, without going near Payroll.
-        label: 'Loans',
-        to: '/loans',
-        icon: HandCoins,
-        permission: PERMISSIONS.LOAN_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // Alongside Payslips and Loans, and for the same reason: every member
-        // of staff holds medical.read and opens this to find their OWN benefit.
-        // The endpoint refuses to show anybody else's without medical.manage,
-        // so a manager finds their own here too and nothing of their team's.
-        label: 'Medical',
-        to: '/medical',
-        icon: HeartPulse,
-        permission: PERMISSIONS.MEDICAL_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // The helpdesk, alongside Payslips, Loans and Medical, and for the same
-        // reason: every member of staff holds case.read.own and opens this to
-        // find their OWN cases. The endpoint behind it shows nobody else's,
-        // whatever data scope the caller has, so a manager finds their own here
-        // too and nothing of their team's.
-        label: 'Cases',
-        to: '/cases',
-        icon: Headset,
-        permission: PERMISSIONS.CASE_READ_OWN,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // The other side of the same module, and a separate entry rather than a
-        // switch inside "Cases": one screen is somebody's own list and the
-        // other is a work queue, and only the people who staff a desk hold
-        // either grant that opens it.
-        label: 'Case queue',
-        to: '/case-queue',
-        icon: Headset,
-        permission: [PERMISSIONS.CASE_READ_DEPARTMENT, PERMISSIONS.CASE_READ_ALL],
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // Alongside Payslips, Loans and Medical, and for the same reason: every
-        // member of staff holds the lunch grants and opens this to find their
-        // OWN order. The endpoint behind it shows nobody else's.
-        //
-        // Deliberately not under Payroll. Lunch is cash handed to the office
-        // boy at one o'clock; filing it beside salary would be the first step
-        // towards somebody expecting it to be deducted from one.
-        label: 'Lunch',
-        to: '/lunch',
-        icon: Sandwich,
-        permission: PERMISSIONS.LUNCH_ORDER_READ_OWN,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
-        // The other side of the same module, and a separate entry rather than a
-        // switch inside "Lunch": one screen is somebody's own order and the
-        // other is a day's cash collection, and only the people who run the
-        // lunch round hold the grant that opens it.
-        label: 'Lunch collection',
-        to: '/lunch-collection',
-        icon: UtensilsCrossed,
-        permission: PERMISSIONS.LUNCH_COLLECTION_READ,
-        status: 'ready',
-        matchPrefix: true,
-      },
-      {
         // The consolidated HR view: one row per employee, every module's figure
         // for that person. Gated on employee.read; the columns a reader may
         // fill are decided per block by the module that owns them.
@@ -333,14 +395,6 @@ export const NAV_SECTIONS: NavSection[] = [
         label: 'Performance',
         to: '/performance',
         icon: TrendingUp,
-        permission: PERMISSIONS.EMPLOYEE_READ,
-        status: 'planned',
-        matchPrefix: true,
-      },
-      {
-        label: 'Documents',
-        to: '/documents',
-        icon: FileText,
         permission: PERMISSIONS.EMPLOYEE_READ,
         status: 'planned',
         matchPrefix: true,
