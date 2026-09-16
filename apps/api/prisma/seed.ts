@@ -14,6 +14,7 @@ import {
   DEFAULT_ROLE_SCOPES,
   PERMISSION_GROUPS,
   SYSTEM_ROLES,
+  SYSTEM_ROLE_META,
   type SystemRoleKey,
 } from '@hrms/shared';
 import { seedCaseCatalogue } from '../src/modules/cases/case-catalogue.seed.js';
@@ -27,28 +28,6 @@ const DEMO_MANAGER_PASSWORD = 'Manager@12345';
 const DEMO_EMPLOYEE_EMAIL = 'employee@hrms.local';
 const DEMO_EMPLOYEE_PASSWORD = 'Employee@12345';
 
-const ROLE_META: Record<SystemRoleKey, { name: string; description: string; protected: boolean }> = {
-  SUPER_ADMIN: {
-    name: 'Super Admin',
-    description: 'Unrestricted access. Always holds every permission.',
-    protected: true,
-  },
-  HR_ADMIN: {
-    name: 'HR Admin',
-    description: 'Manages people, organisation structure and company settings.',
-    protected: false,
-  },
-  MANAGER: {
-    name: 'Manager',
-    description: 'Views their department and team information.',
-    protected: false,
-  },
-  EMPLOYEE: {
-    name: 'Employee',
-    description: 'Baseline access for every member of staff.',
-    protected: false,
-  },
-};
 
 /** Flat lookup of permission metadata, derived from the shared groups. */
 const PERMISSION_META = new Map(
@@ -107,7 +86,7 @@ async function main(): Promise<void> {
   // --- roles ----------------------------------------------------------------
   const roleIds = new Map<SystemRoleKey, string>();
   for (const key of Object.values(SYSTEM_ROLES)) {
-    const meta = ROLE_META[key];
+    const meta = SYSTEM_ROLE_META[key];
     const role = await prisma.role.upsert({
       where: { companyId_key: { companyId: company.id, key } },
       create: {
@@ -116,13 +95,13 @@ async function main(): Promise<void> {
         name: meta.name,
         description: meta.description,
         isSystem: true,
-        isProtected: meta.protected,
+        isProtected: meta.isProtected,
         dataScope: DEFAULT_ROLE_SCOPES[key],
       },
       update: {
         name: meta.name,
         description: meta.description,
-        isProtected: meta.protected,
+        isProtected: meta.isProtected,
         dataScope: DEFAULT_ROLE_SCOPES[key],
       },
     });

@@ -2,8 +2,10 @@ import type { FastifyBaseLogger } from 'fastify';
 import {
   ALL_PERMISSIONS,
   DEFAULT_ROLE_PERMISSIONS,
+  DEFAULT_ROLE_SCOPES,
   PERMISSION_GROUPS,
   SYSTEM_ROLES,
+  SYSTEM_ROLE_META,
   type Permission,
   type SystemRoleKey,
 } from '@hrms/shared';
@@ -28,10 +30,18 @@ import { prisma } from './db.js';
  * ADDITIVE, always:
  *
  * - Permissions the code defines and the database lacks are inserted.
+ * - System ROLES the code defines and a company lacks are inserted. A release
+ *   that introduces a role has the same problem a release that introduces a
+ *   permission has, and worse: roles are created by the seeder, the seeder runs
+ *   once when a company is provisioned, and nothing in the API creates one - so
+ *   a role added later would exist on new installations and on no existing one,
+ *   with no way for an administrator to make it themselves. An existing role is
+ *   never touched: not renamed, not re-scoped, not re-described. Only its
+ *   absence is corrected.
  * - System roles are granted the defaults for those NEW permissions only.
  * - Nothing is ever revoked.
- * - No table outside `permissions` and `role_permissions` is touched. No
- *   employee, attendance, punch, mapping, payroll, loan or leave row is read
+ * - No table outside `permissions`, `roles` and `role_permissions` is touched.
+ *   No employee, attendance, punch, mapping, payroll, loan or leave row is read
  *   for writing or written.
  *
  * Idempotent: a second run reports nothing to do.
@@ -50,13 +60,16 @@ import { prisma } from './db.js';
  * provisioned company, say. That gets the full defaults.
  */
 
-/** System roles are matched by name, the way the seeder created them. */
-const ROLE_NAMES: Record<SystemRoleKey, string> = {
-  [SYSTEM_ROLES.SUPER_ADMIN]: 'Super Admin',
-  [SYSTEM_ROLES.HR_ADMIN]: 'HR Admin',
-  [SYSTEM_ROLES.MANAGER]: 'Manager',
-  [SYSTEM_ROLES.EMPLOYEE]: 'Employee',
-};
+/**
+ * System roles are matched by name, the way the seeder created them.
+ *
+ * Read off the shared metadata rather than restated here, so this file and the
+ * seeder cannot come to disagree about what a role is called - a disagreement
+ * that would not fail, it would simply stop granting.
+ */
+const ROLE_NAMES: Record<SystemRoleKey, string> = Object.fromEntries(
+  Object.values(SYSTEM_ROLES).map((key) => [key, SYSTEM_ROLE_META[key].name]),
+) as Record<SystemRoleKey, string>;
 
 const META = new Map(
   PERMISSION_GROUPS.flatMap((group) =>
@@ -67,8 +80,54 @@ const META = new Map(
 export interface CatalogueSyncResult {
   /** Permission rows inserted because the code defines them and the DB lacked them. */
   permissionsAdded: Permission[];
+  /** System roles created because a release introduced them, by company and name. */
+  rolesCreated: Array<{ company: string; role: string }>;
   /** Default grants added to system roles that did not hold them, by role name. */
   grantsAdded: Array<{ role: string; permissions: Permission[] }>;
+}
+
+/**
+ * Creates any system role a company is missing, and nothing else.
+ *
+ * Matched on the KEY rather than the name, because the name is the one thing
+ * about a role an administrator can change: renaming "Office Boy" to "Canteen"
+ * must not make the next boot decide the role is absent and create a second
+ * one. The key is what the seeder writes and what the unique index is on.
+ *
+ * A created role arrives with no grants at all, which is exactly what the grant
+ * loop below treats as "never configured" - so it gets its full defaults on
+ * this same run, and only on this one.
+ */
+async function createMissingSystemRoles(): Promise<CatalogueSyncResult['rolesCreated']> {
+  const created: CatalogueSyncResult['rolesCreated'] = [];
+  const companies = await prisma.company.findMany({ select: { id: true, name: true } });
+
+  for (const company of companies) {
+    for (const key of Object.values(SYSTEM_ROLES)) {
+      const existing = await prisma.role.findUnique({
+        where: { companyId_key: { companyId: company.id, key } },
+        select: { id: true },
+      });
+      if (existing) continue;
+
+      const meta = SYSTEM_ROLE_META[key];
+      await prisma.role.create({
+        data: {
+          companyId: company.id,
+          key,
+          name: meta.name,
+          description: meta.description,
+          isSystem: true,
+          isProtected: meta.isProtected,
+          dataScope: DEFAULT_ROLE_SCOPES[key],
+        },
+      });
+
+      created.push({ company: company.name, role: meta.name });
+    }
+  }
+
+  return created;
 }
 
 export async function syncPermissionCatalogue(): Promise<CatalogueSyncResult> {
@@ -95,6 +154,13 @@ export async function syncPermissionCatalogue(): Promise<CatalogueSyncResult> {
       p.id,
     ]),
   );
+
+  /*
+   * Before the grants, because a role that does not exist cannot be granted
+   * anything - and a role created here is empty, which is what the loop below
+   * reads as "not configured" and answers with the full defaults.
+   */
+  const rolesCreated = await createMissingSystemRoles();
 
   const grantsAdded: CatalogueSyncResult['grantsAdded'] = [];
 
@@ -133,7 +199,7 @@ export async function syncPermissionCatalogue(): Promise<CatalogueSyncResult> {
     }
   }
 
-  return { permissionsAdded, grantsAdded };
+  return { permissionsAdded, rolesCreated, grantsAdded };
 }
 
 /**
@@ -143,15 +209,18 @@ export async function syncPermissionCatalogue(): Promise<CatalogueSyncResult> {
  */
 export async function syncPermissionCatalogueAtBoot(log: FastifyBaseLogger): Promise<void> {
   try {
-    const { permissionsAdded, grantsAdded } = await syncPermissionCatalogue();
+    const { permissionsAdded, rolesCreated, grantsAdded } = await syncPermissionCatalogue();
 
     if (permissionsAdded.length > 0) {
       log.info({ permissions: permissionsAdded }, 'permission catalogue: added new permissions');
     }
+    for (const { company, role } of rolesCreated) {
+      log.info({ company, role }, 'permission catalogue: created system role');
+    }
     for (const { role, permissions } of grantsAdded) {
       log.info({ role, permissions }, 'permission catalogue: granted defaults to system role');
     }
-    if (permissionsAdded.length === 0 && grantsAdded.length === 0) {
+    if (permissionsAdded.length === 0 && rolesCreated.length === 0 && grantsAdded.length === 0) {
       log.debug('permission catalogue: already up to date');
     }
   } catch (error) {

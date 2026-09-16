@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from '@hrms/shared';
+import {
+  DEFAULT_ROLE_PERMISSIONS,
+  DEFAULT_ROLE_SCOPES,
+  PERMISSIONS,
+  SYSTEM_ROLES,
+  SYSTEM_ROLE_META,
+} from '@hrms/shared';
 
 /**
  * The permission catalogue sync, and the one property that makes it safe to
@@ -18,7 +24,8 @@ import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS } from '@hrms/shared';
 
 const state = vi.hoisted(() => ({
   permissions: [] as Array<{ id: string; key: string }>,
-  roles: [] as Array<{ id: string; name: string }>,
+  companies: [] as Array<{ id: string; name: string }>,
+  roles: [] as Array<{ id: string; companyId: string; key: string; name: string }>,
   grants: [] as Array<{ roleId: string; permissionKey: string }>,
   /** Every write the run issued, as `model.operation`. */
   writes: [] as string[],
@@ -38,7 +45,27 @@ vi.mock('./db.js', () => {
           return create;
         }),
       },
-      role: { findMany: vi.fn(async ({ where }: { where: { name: string } }) => state.roles.filter((r) => r.name === where.name)) },
+      company: { findMany: vi.fn(async () => state.companies.map((c) => ({ ...c }))) },
+      role: {
+        findMany: vi.fn(async ({ where }: { where: { name: string } }) =>
+          state.roles.filter((r) => r.name === where.name),
+        ),
+        findUnique: vi.fn(
+          async ({ where }: { where: { companyId_key: { companyId: string; key: string } } }) =>
+            state.roles.find(
+              (r) =>
+                r.companyId === where.companyId_key.companyId && r.key === where.companyId_key.key,
+            ) ?? null,
+        ),
+        create: vi.fn(
+          async ({ data }: { data: { companyId: string; key: string; name: string } }) => {
+            state.writes.push('role.create');
+            const row = { id: `role-${data.companyId}-${data.key}`, ...data };
+            state.roles.push(row);
+            return row;
+          },
+        ),
+      },
       rolePermission: {
         findMany: vi.fn(async ({ where }: { where: { roleId: string } }) =>
           state.grants
@@ -59,13 +86,29 @@ vi.mock('./db.js', () => {
 
 const { syncPermissionCatalogue } = await import('./permission-catalogue.js');
 
+/** The seeder's own name-to-key mapping, so a test can name a role in English. */
+const KEY_BY_NAME: Record<string, string> = Object.fromEntries(
+  Object.entries(SYSTEM_ROLE_META).map(([key, meta]) => [meta.name, key]),
+);
+
 function reset(seed: {
   permissions?: string[];
-  roles?: Array<{ id: string; name: string }>;
+  companies?: Array<{ id: string; name: string }>;
+  roles?: Array<{ id: string; name: string; companyId?: string; key?: string }>;
   grants?: Array<{ roleId: string; permissionKey: string }>;
 }) {
   state.permissions = (seed.permissions ?? []).map((key) => ({ id: `perm-${key}`, key }));
-  state.roles = seed.roles ?? [];
+  state.companies = seed.companies ?? [];
+  /*
+   * A seeded role is assumed to be the system role of that name unless the case
+   * says otherwise, so the existing tests keep describing roles the way they
+   * always did - by name - while the creation step sees them as already there.
+   */
+  state.roles = (seed.roles ?? []).map((r) => ({
+    companyId: r.companyId ?? 'c1',
+    key: r.key ?? KEY_BY_NAME[r.name] ?? r.name.toUpperCase().replace(/ /g, '_'),
+    ...r,
+  }));
   state.grants = seed.grants ?? [];
   state.writes = [];
 }
@@ -204,9 +247,23 @@ describe('what the sync must never do', () => {
 
     await syncPermissionCatalogue();
 
-    // Two tables, two kinds of write. Anything else would be a way to lose data.
+    // Two kinds of write, and nothing that could remove or overwrite a grant.
     expect(new Set(state.writes)).toEqual(
       new Set(['permission.upsert', 'rolePermission.createMany']),
+    );
+  });
+
+  it('never updates, upserts or deletes a role - only creates one', async () => {
+    reset({
+      companies: [{ id: 'c1', name: 'GamEmpires' }],
+      roles: [{ id: 'r-super', name: 'Super Admin' }],
+    });
+
+    await syncPermissionCatalogue();
+
+    // The roles table is writable now, and this is the whole of what it allows.
+    expect(state.writes.filter((w) => w.startsWith('role.'))).toEqual(
+      state.writes.filter((w) => w === 'role.create'),
     );
   });
 
@@ -246,5 +303,127 @@ describe('the defaults the loans screens depend on', () => {
       expect(of(role)).not.toContain(PERMISSIONS.LOAN_MANAGE);
       expect(of(role)).not.toContain(PERMISSIONS.LOAN_APPROVE);
     }
+  });
+});
+
+
+/**
+ * A release that introduces a ROLE has the problem a release that introduces a
+ * permission has, one step earlier: nothing in the API creates a role, so a
+ * role added after a company was provisioned would exist on new installations
+ * and on no existing one, with no way for an administrator to make it by hand.
+ */
+describe('a system role a release introduced', () => {
+  it('creates the role a company is missing, and grants it its defaults', async () => {
+    reset({ companies: [{ id: 'c1', name: 'GamEmpires' }] });
+
+    const { rolesCreated } = await syncPermissionCatalogue();
+
+    expect(rolesCreated).toContainEqual({ company: 'GamEmpires', role: 'Office Boy' });
+
+    const officeBoy = state.roles.find((r) => r.key === SYSTEM_ROLES.LUNCH_OPERATOR);
+    expect(officeBoy).toBeDefined();
+    expect(heldBy(officeBoy!.id)).toEqual(
+      expect.arrayContaining([
+        PERMISSIONS.LUNCH_COLLECTION_READ,
+        PERMISSIONS.LUNCH_PAYMENT_MARK,
+        PERMISSIONS.LUNCH_ORDER_FULFIL,
+        PERMISSIONS.LUNCH_ORDER_CANCEL_ANY,
+      ]),
+    );
+  });
+
+  it('creates it in every company on the installation', async () => {
+    reset({
+      companies: [
+        { id: 'c1', name: 'GamEmpires' },
+        { id: 'c2', name: 'Second Co' },
+      ],
+    });
+
+    const { rolesCreated } = await syncPermissionCatalogue();
+
+    expect(rolesCreated.filter((r) => r.role === 'Office Boy')).toHaveLength(2);
+  });
+
+  it('does not create one the company already has', async () => {
+    reset({
+      companies: [{ id: 'c1', name: 'GamEmpires' }],
+      roles: [
+        { id: 'r-ob', companyId: 'c1', key: SYSTEM_ROLES.LUNCH_OPERATOR, name: 'Office Boy' },
+      ],
+      grants: [{ roleId: 'r-ob', permissionKey: PERMISSIONS.LUNCH_PAYMENT_MARK }],
+    });
+
+    const { rolesCreated } = await syncPermissionCatalogue();
+
+    // The other system roles this bare company lacks are created; this one is
+    // already there and is left exactly as it is.
+    expect(rolesCreated.some((r) => r.role === 'Office Boy')).toBe(false);
+    expect(state.roles.filter((r) => r.key === SYSTEM_ROLES.LUNCH_OPERATOR)).toHaveLength(1);
+    expect(state.roles.find((r) => r.key === SYSTEM_ROLES.LUNCH_OPERATOR)!.id).toBe('r-ob');
+  });
+
+  it('matches on the key, so a renamed role is not duplicated', async () => {
+    reset({
+      companies: [{ id: 'c1', name: 'GamEmpires' }],
+      // The administrator has called it something else. It is still the role.
+      roles: [{ id: 'r-ob', companyId: 'c1', key: SYSTEM_ROLES.LUNCH_OPERATOR, name: 'Canteen' }],
+    });
+
+    const { rolesCreated } = await syncPermissionCatalogue();
+
+    expect(rolesCreated.some((r) => r.role === 'Office Boy')).toBe(false);
+    expect(state.roles.filter((r) => r.key === SYSTEM_ROLES.LUNCH_OPERATOR)).toHaveLength(1);
+  });
+
+  it('creates nothing on a second run', async () => {
+    reset({ companies: [{ id: 'c1', name: 'GamEmpires' }] });
+    await syncPermissionCatalogue();
+
+    state.writes = [];
+    const { rolesCreated } = await syncPermissionCatalogue();
+
+    expect(rolesCreated).toEqual([]);
+    expect(state.writes).not.toContain('role.create');
+  });
+});
+
+describe('what the office boy may and may not do', () => {
+  const officeBoy = DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.LUNCH_OPERATOR];
+
+  it('runs the lunch round and eats on it', () => {
+    for (const permission of [
+      PERMISSIONS.LUNCH_COLLECTION_READ,
+      PERMISSIONS.LUNCH_PAYMENT_MARK,
+      PERMISSIONS.LUNCH_ORDER_FULFIL,
+      PERMISSIONS.LUNCH_ORDER_CANCEL_ANY,
+      PERMISSIONS.LUNCH_ORDER_CREATE,
+      PERMISSIONS.LUNCH_ORDER_READ_OWN,
+      PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+    ]) {
+      expect(officeBoy).toContain(permission);
+    }
+  });
+
+  it('cannot undo a payment he recorded, nor set a price', () => {
+    // The one who takes the money is not the one who can unmake having taken it.
+    expect(officeBoy).not.toContain(PERMISSIONS.LUNCH_PAYMENT_CORRECT);
+    // And what lunch costs is not his to decide.
+    expect(officeBoy).not.toContain(PERMISSIONS.LUNCH_MENU_MANAGE);
+  });
+
+  it('holds nothing outside lunch at all', () => {
+    // Not narrowed by a data scope - absent. This is the whole claim the role
+    // makes: hiring somebody to carry plates hands them no HR system.
+    expect(officeBoy.every((p) => p.startsWith('lunch.'))).toBe(true);
+  });
+
+  it('sees only his own record, whatever he is later granted', () => {
+    expect(DEFAULT_ROLE_SCOPES[SYSTEM_ROLES.LUNCH_OPERATOR]).toBe('OWN');
+  });
+
+  it('is not protected, so a company can adjust it', () => {
+    expect(SYSTEM_ROLE_META[SYSTEM_ROLES.LUNCH_OPERATOR].isProtected).toBe(false);
   });
 });

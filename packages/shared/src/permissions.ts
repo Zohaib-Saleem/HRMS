@@ -596,9 +596,62 @@ export const SYSTEM_ROLES = {
   HR_ADMIN: 'HR_ADMIN',
   MANAGER: 'MANAGER',
   EMPLOYEE: 'EMPLOYEE',
+  /*
+   * The office boy. A job rather than a rank, which is why it is the one system
+   * role that grants nothing about employment: it reaches the lunch round and
+   * the money collected for it, and no HR, payroll, attendance or
+   * employee-record screen at all.
+   *
+   * A system role rather than something each company assembles by hand because
+   * there is no way to assemble one - roles are seeded, and nothing in the API
+   * creates them. A company that hires somebody to run lunch should find the
+   * role already there.
+   */
+  LUNCH_OPERATOR: 'LUNCH_OPERATOR',
 } as const;
 
 export type SystemRoleKey = (typeof SYSTEM_ROLES)[keyof typeof SYSTEM_ROLES];
+
+/**
+ * How each system role is written into the `roles` table.
+ *
+ * One definition, two consumers: the seeder that provisions a new company and
+ * the catalogue sync that adds a role a later release introduced. They used to
+ * carry a copy each, which is survivable right up until the day the two copies
+ * disagree about what a role is called - and the sync matches system roles BY
+ * NAME, so a disagreement there would silently stop granting.
+ */
+export const SYSTEM_ROLE_META: Record<
+  SystemRoleKey,
+  { name: string; description: string; isProtected: boolean }
+> = {
+  SUPER_ADMIN: {
+    name: 'Super Admin',
+    description: 'Unrestricted access. Always holds every permission.',
+    isProtected: true,
+  },
+  HR_ADMIN: {
+    name: 'HR Admin',
+    description: 'Manages people, organisation structure and company settings.',
+    isProtected: false,
+  },
+  MANAGER: {
+    name: 'Manager',
+    description: 'Views their department and team information.',
+    isProtected: false,
+  },
+  EMPLOYEE: {
+    name: 'Employee',
+    description: 'Baseline access for every member of staff.',
+    isProtected: false,
+  },
+  LUNCH_OPERATOR: {
+    name: 'Office Boy',
+    description:
+      'Runs the daily lunch round: takes the orders out, records who paid and reads what the day collected. Holds no HR, payroll or employee-record access.',
+    isProtected: false,
+  },
+};
 
 /** Default grants applied by the seeder. Runtime grants live in the database. */
 export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission[]> = {
@@ -792,6 +845,39 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LUNCH_ORDER_READ_OWN,
     PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
   ],
+  /*
+   * The office boy, and the list is short on purpose: this role is handed to
+   * somebody whose job is lunch, so it grants lunch and nothing else. No
+   * employee read, no attendance, no payslip, no leave, no company settings -
+   * not narrowed by a data scope, absent. A role that reached the roster
+   * because its holder needed to know who ordered biryani would be the wrong
+   * shape of answer to that question; the desk already names the employee on
+   * each order it returns.
+   */
+  LUNCH_OPERATOR: [
+    // He eats here too, and orders the same way everybody else does.
+    PERMISSIONS.LUNCH_ORDER_CREATE,
+    PERMISSIONS.LUNCH_ORDER_READ_OWN,
+    PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+    // And he runs the round: the day's orders and its figures, the money as it
+    // arrives, the plates as they go out, and calling off an order somebody is
+    // not going to eat.
+    PERMISSIONS.LUNCH_COLLECTION_READ,
+    PERMISSIONS.LUNCH_PAYMENT_MARK,
+    PERMISSIONS.LUNCH_ORDER_FULFIL,
+    PERMISSIONS.LUNCH_ORDER_CANCEL_ANY,
+    /*
+     * Two lunch grants are deliberately NOT here.
+     *
+     * `lunch.payment.correct` undoes a payment already recorded, and it is
+     * kept away from the person who records them - the one who can take money
+     * and the one who can undo having taken it are worth being able to keep
+     * apart. It goes to whoever supervises the round.
+     *
+     * `lunch.menu.manage` sets prices, which is what an employee will be
+     * charged. That stays with HR Admin.
+     */
+  ],
 };
 
 /** Default data scope per system role, applied when Phase 2 seeds roles. */
@@ -800,4 +886,12 @@ export const DEFAULT_ROLE_SCOPES: Record<SystemRoleKey, DataScope> = {
   HR_ADMIN: DATA_SCOPES.ALL,
   MANAGER: DATA_SCOPES.REPORTS_AND_OWN,
   EMPLOYEE: DATA_SCOPES.OWN,
+  /*
+   * OWN, and it costs the role nothing: the lunch desk scopes its queries to a
+   * company and a day rather than through the data scope, so the office boy
+   * sees every order on today's round either way. What OWN does buy is that if
+   * this role is ever handed a permission that DOES consult the scope, it
+   * reaches his own record and stops.
+   */
+  LUNCH_OPERATOR: DATA_SCOPES.OWN,
 };

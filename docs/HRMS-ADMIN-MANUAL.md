@@ -244,8 +244,14 @@ Names must be unique within a department at each level, case-insensitively.
 
 ### Settings → Roles and permissions
 
-Lists the four seeded roles and lets `role.manage` holders change what each may
-do. Super Admin is protected from editing.
+Lists the five seeded roles — Super Admin, HR Admin, Manager, Employee and
+Office Boy — and lets `role.manage` holders change what each may do. Super Admin
+is protected from editing.
+
+A seeded role a company is missing is created at API start-up, so a role
+introduced by a later release arrives on an existing installation rather than
+only on new ones. An existing role is never touched by that: not renamed, not
+re-scoped, not re-granted.
 
 Changing a role's grants takes effect on the affected users' **next request** —
 sessions are resolved per request.
@@ -1068,13 +1074,22 @@ it costs.
 | `lunch.menu.manage` | Add, re-price and retire menu items |
 
 Every system role holds the first three — everybody eats. HR Admin also holds
-`lunch.menu.manage` and `lunch.collection.read`. **Nobody holds
-`lunch.payment.mark`, `lunch.payment.correct`, `lunch.order.fulfil` or
-`lunch.order.cancel.any` by default**: give them through a custom role to
-whoever actually runs the lunch round. Keeping `mark` and `correct` on different
-people is worth doing where there is somebody to give the second to, and the
-same goes for `cancel.any` — it is the ability to decide where cash that has
-already changed hands ends up.
+`lunch.menu.manage` and `lunch.collection.read`.
+
+The rest belong to the **Office Boy** role, which is seeded in every company
+alongside Super Admin, HR Admin, Manager and Employee. It holds the three
+ordering grants plus `lunch.collection.read`, `lunch.payment.mark`,
+`lunch.order.fulfil` and `lunch.order.cancel.any` — and **nothing outside
+lunch**. No employee record, no attendance, no payslip, no leave, no company
+settings: not narrowed by a data scope, absent. Assign it to whoever runs the
+round; it needs no configuring first.
+
+**`lunch.payment.correct` is deliberately not in it.** Undoing a payment is kept
+away from the person who records them, so the one who can take money is not also
+the one who can unmake having taken it. Give it to whoever supervises the round
+— through a custom role, or by adding it to Office Boy on the Roles screen if
+there is genuinely nobody else. The same thinking applies to `lunch.menu.manage`,
+which stays with HR Admin: a price is what an employee will be charged.
 
 ### The lunch round
 
