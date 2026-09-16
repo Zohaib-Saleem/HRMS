@@ -46,6 +46,7 @@ import {
 import { LunchMarkPaidDialog } from './lunch-mark-paid-dialog';
 import { LunchCorrectPaymentDialog } from './lunch-correct-payment-dialog';
 import { LunchCancelOrderDialog } from './lunch-cancel-order-dialog';
+import { LunchItemsCell } from './lunch-items-cell';
 
 /**
  * Today's collection: the office boy's own screen.
@@ -163,7 +164,7 @@ export function LunchCollectionPage() {
       />
 
       {/* --- the six figures ---------------------------------------------- */}
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard
           label="Orders"
           value={figures?.totalOrders}
@@ -237,7 +238,7 @@ export function LunchCollectionPage() {
             </div>
           </div>
 
-          <dl className="grid gap-3 sm:grid-cols-3">
+          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="rounded-md bg-muted px-3 py-2.5">
               <dt className="text-xs text-muted-foreground">Cancelled paid</dt>
               <dd className="tabular text-base font-semibold">
@@ -388,25 +389,28 @@ export function LunchCollectionPage() {
               ) : (
                 rows.map((order) => (
                   <TR key={order.id}>
-                    <TD>
-                      <p className="font-medium">{order.employeeName}</p>
-                      <p className="tabular text-xs text-muted-foreground">
+                    {/*
+                      * Name and number on ONE line. They were stacked, which
+                      * cost every row a second line for eleven characters that
+                      * fit beside the name - and the number is read WITH the
+                      * name ("Hassan Ali Zahid 272"), not under it.
+                      */}
+                    <TD className="min-w-[12rem] max-w-[16rem]">
+                      <span className="font-medium">{order.employeeName}</span>{' '}
+                      <span className="tabular text-xs text-muted-foreground">
                         {order.employeeNumber}
-                      </p>
+                      </span>
                     </TD>
                     <TD className="tabular whitespace-nowrap text-muted-foreground">
                       {order.orderNumber}
                     </TD>
                     <TD>
-                      {order.itemSummary}
-                      {order.note ? (
-                        <p className="text-xs text-muted-foreground">{order.note}</p>
-                      ) : null}
+                      <LunchItemsCell order={order} currency={currency} />
                     </TD>
-                    <TD className="tabular text-right font-medium">
+                    <TD className="tabular whitespace-nowrap text-right font-medium">
                       {money(order.totalAmount, currency)}
                     </TD>
-                    <TD>
+                    <TD className="whitespace-nowrap">
                       <Badge variant={LUNCH_PAYMENT_TONE[order.paymentStatus]}>
                         {LUNCH_PAYMENT_STATUS_LABELS[order.paymentStatus]}
                       </Badge>
@@ -416,7 +420,7 @@ export function LunchCollectionPage() {
                         ? `${LUNCH_PAYMENT_METHOD_LABELS[order.paymentMethod]} · ${lunchTime(order.paidAt)}`
                         : '—'}
                     </TD>
-                    <TD>
+                    <TD className="whitespace-nowrap">
                       <Badge variant={LUNCH_ORDER_TONE[order.status]}>
                         {LUNCH_ORDER_STATUS_LABELS[order.status]}
                       </Badge>
@@ -432,12 +436,12 @@ export function LunchCollectionPage() {
                         </Badge>
                       ) : null}
                       {order.cancellationReason ? (
-                        <p className="mt-1 max-w-[16rem] truncate text-xs text-muted-foreground">
+                        <p className="mt-1 max-w-[11rem] truncate text-xs text-muted-foreground">
                           {order.cancellationReason}
                         </p>
                       ) : null}
                     </TD>
-                    <TD className="text-right">
+                    <TD className="whitespace-nowrap text-right">
                       {/*
                        * Every control here is drawn from the server's own
                        * answer rather than from a permission check in the

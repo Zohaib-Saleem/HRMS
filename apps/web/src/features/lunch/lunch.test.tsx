@@ -381,8 +381,70 @@ describe("the collection screen", () => {
     await screen.findByText('Ali Raza');
     expect(screen.getByText('1001')).toBeInTheDocument();
     expect(screen.getByText('LUNCH-2026-09-16-00042')).toBeInTheDocument();
-    expect(screen.getAllByText('2 Chapati + Chicken Karahi').length).toBeGreaterThan(0);
+    // Compact, one line: `4× Tandoori Roti · 2× Coke`. The desk reads sixty of
+    // these standing up, so an order is written the way a receipt is, not the
+    // way a sentence is.
+    expect(screen.getAllByText('2× Chapati · 1× Chicken Karahi').length).toBeGreaterThan(0);
     expect(screen.getAllByText('PKR 290').length).toBeGreaterThan(0);
+  });
+
+  it('writes a short order out in full, with nothing to expand', async () => {
+    serve({ deskOrders: [order()] });
+    renderPage(<LunchCollectionPage />);
+
+    await screen.findByText('2× Chapati · 1× Chicken Karahi');
+    expect(screen.queryByRole('button', { name: 'View all' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/more$/)).not.toBeInTheDocument();
+  });
+
+  it('counts off a long order rather than letting the row grow', async () => {
+    serve({
+      deskOrders: [
+        order({
+          items: [
+            { id: 'l1', menuItemId: 'm1', itemName: 'Tandoori Roti', unitPrice: 20, quantity: 4, lineTotal: 80 },
+            { id: 'l2', menuItemId: 'm2', itemName: '1/2 Ltr Coke', unitPrice: 80, quantity: 2, lineTotal: 160 },
+            { id: 'l3', menuItemId: 'm3', itemName: 'Deal mash', unitPrice: 300, quantity: 2, lineTotal: 600 },
+            { id: 'l4', menuItemId: 'm4', itemName: 'Chicken biryani', unitPrice: 350, quantity: 4, lineTotal: 1_400 },
+            { id: 'l5', menuItemId: 'm5', itemName: 'Chicken pulao', unitPrice: 340, quantity: 4, lineTotal: 1_360 },
+          ],
+        }),
+      ],
+    });
+    renderPage(<LunchCollectionPage />);
+
+    // Four inline, the fifth counted - an exact number, not a guess at wrapping.
+    await screen.findByText(
+      '4× Tandoori Roti · 2× 1/2 Ltr Coke · 2× Deal mash · 4× Chicken biryani',
+    );
+    expect(screen.getByText('+ 1 more')).toBeInTheDocument();
+  });
+
+  it('keeps the whole order one click away', async () => {
+    const user = userEvent.setup();
+    serve({
+      deskOrders: [
+        order({
+          items: [
+            { id: 'l1', menuItemId: 'm1', itemName: 'Tandoori Roti', unitPrice: 20, quantity: 4, lineTotal: 80 },
+            { id: 'l2', menuItemId: 'm2', itemName: '1/2 Ltr Coke', unitPrice: 80, quantity: 2, lineTotal: 160 },
+            { id: 'l3', menuItemId: 'm3', itemName: 'Deal mash', unitPrice: 300, quantity: 2, lineTotal: 600 },
+            { id: 'l4', menuItemId: 'm4', itemName: 'Chicken biryani', unitPrice: 350, quantity: 4, lineTotal: 1_400 },
+            { id: 'l5', menuItemId: 'm5', itemName: 'Chicken pulao', unitPrice: 340, quantity: 4, lineTotal: 1_360 },
+          ],
+        }),
+      ],
+    });
+    renderPage(<LunchCollectionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'View all' }));
+
+    // Nothing is truncated permanently: the item counted off the row is here,
+    // with its own money beside it.
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('4× Chicken pulao')).toBeInTheDocument();
+    expect(within(dialog).getByText('4× Tandoori Roti')).toBeInTheDocument();
+    expect(within(dialog).getByText('PKR 1,360')).toBeInTheDocument();
   });
 
   it('offers Mark paid only where the server says it may be marked', async () => {

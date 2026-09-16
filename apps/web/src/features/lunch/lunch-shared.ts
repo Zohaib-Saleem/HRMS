@@ -85,3 +85,61 @@ export function todayForPicker(): string {
   const now = new Date();
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
+
+// --- what an order is, written short ----------------------------------------
+
+/**
+ * One line of an order, the way the desk reads it: `4× Tandoori Roti`.
+ *
+ * Deliberately NOT `lunchItemSummary` from the shared package. That function
+ * produces the `itemSummary` field the API sends, which is a piece of order
+ * data read by the employee's screen and by the confirmation before money
+ * changes hands; rewriting it to suit a table would change what the API
+ * returns. This is a rendering of `order.items`, which the record already
+ * carries, and it stays on this side of the wire.
+ *
+ * The quantity is always shown, including when it is one. On a list of sixty
+ * orders the eye is scanning a column of numbers, and an item that silently
+ * drops its `1×` breaks that column - which is the whole reason the office boy
+ * is looking at it.
+ */
+export function compactLunchItem(item: { itemName: string; quantity: number }): string {
+  return `${item.quantity}× ${item.itemName}`;
+}
+
+/** Between items. A middle dot reads as a list without costing a line break. */
+export const LUNCH_ITEM_SEPARATOR = ' · ';
+
+/**
+ * How many items go on the row before the rest become "+N more".
+ *
+ * Four, because four of them at the widths this column gets is about two lines,
+ * and two lines is the height a row may grow to before a screenful of orders
+ * stops being a screenful. The cap is on the COUNT rather than on the rendered
+ * text so the "+N more" is an exact number rather than a guess about wrapping.
+ */
+export const LUNCH_ITEMS_INLINE_MAX = 4;
+
+export interface CompactLunchItems {
+  /** The items that fit on the row, already written out. */
+  inline: string;
+  /** How many were left off. Zero when the whole order is on the row. */
+  hidden: number;
+  /** Every item, for the tooltip and for the dialog behind "View all". */
+  full: string;
+}
+
+/** Splits an order's items into what the row shows and what it defers. */
+export function compactLunchItems(
+  items: ReadonlyArray<{ itemName: string; quantity: number }>,
+  max = LUNCH_ITEMS_INLINE_MAX,
+): CompactLunchItems {
+  const written = items.map(compactLunchItem);
+  const hidden = Math.max(0, written.length - max);
+
+  return {
+    inline: written.slice(0, max).join(LUNCH_ITEM_SEPARATOR),
+    hidden,
+    full: written.join(LUNCH_ITEM_SEPARATOR),
+  };
+}
