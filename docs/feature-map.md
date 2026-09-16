@@ -70,7 +70,7 @@ and a Cliq-style social bar (Chats, Channels, Threads, Contacts).
 | Onboarding | Yes | **OPTIONAL** |
 | Employee Exit / offboarding | Yes | **OPTIONAL** |
 | Compensation | Yes (form-based only) | **KEEP** (as real payroll — see §7) |
-| Cases / HR help desk | Yes | **OPTIONAL** |
+| Cases / HR help desk | Yes | **BUILT** (employee side and desk, see the [admin manual](HRMS-ADMIN-MANUAL.md#15-cases-the-helpdesk)) |
 | Tasks | Yes | **OPTIONAL** |
 | Travel | Yes | **EXCLUDE** |
 | Office Readiness (health / vaccination) | Yes | **EXCLUDE** |
@@ -532,5 +532,7 @@ specification before they are built:
    serve billing. Do you need it, or is attendance sufficient?
 3. **Onboarding / Exit** — enabled in the reference. Worth building, or handled outside the
    system?
-4. **Cases / HR help desk** — worth building, or is email enough?
+4. ~~**Cases / HR help desk** — worth building, or is email enough?~~ Answered by
+   building it: employees raise cases from the portal and the desks answer them
+   in a queue. See §15 of the [admin manual](HRMS-ADMIN-MANUAL.md#15-cases-the-helpdesk).
 5. **Document retention** — how long must records be kept after termination?

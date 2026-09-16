@@ -26,6 +26,19 @@ import { vi } from 'vitest';
 
 type Row = Record<string, unknown>;
 
+/** Everything the operator switch below understands. See the relation branch. */
+const OPERATORS = new Set([
+  'mode',
+  'equals',
+  'contains',
+  'startsWith',
+  'in',
+  'gte',
+  'lte',
+  'gt',
+  'lt',
+]);
+
 /** Applied for `mode: 'insensitive'`, which is what every text filter uses. */
 const lower = (value: unknown): string => String(value ?? '').toLowerCase();
 
@@ -67,14 +80,43 @@ export function matches(row: Row, where: unknown): boolean {
       continue;
     }
 
+    /*
+     * A filter on a to-one relation - `requester: { lastName: { contains } }` -
+     * is the same shape as a filter on the row, one level down. The included
+     * relation is already on these rows, so it is matched recursively rather
+     * than declared unmodellable: the desk's search is a real query and a test
+     * that could not evaluate it would not be testing the search at all.
+     *
+     * Recognised by elimination: a clause whose keys are none of the operators
+     * below, against a value on the row that is itself an object.
+     */
+    if (
+      typeof actual === 'object' &&
+      actual !== null &&
+      !(actual instanceof Date) &&
+      !Object.keys(value as Record<string, unknown>).some((key) => OPERATORS.has(key))
+    ) {
+      if (!matches(actual as Row, value)) return false;
+      continue;
+    }
+
+    /*
+     * `mode: 'insensitive'` applies to the whole clause, not to one operator,
+     * and it can appear either side of the operator it modifies - so it is read
+     * before the loop rather than found during it. `contains` and `startsWith`
+     * fold case unconditionally (every caller passes the mode); `equals` folds
+     * only when asked, because a case-sensitive equality is a real query and
+     * quietly loosening it would hide a missing `mode` in the code under test.
+     */
+    const insensitive = (value as { mode?: unknown }).mode === 'insensitive';
+
     for (const [operator, operand] of Object.entries(value as Record<string, unknown>)) {
       switch (operator) {
-        // Carried by every text filter and consumed by `lower` below, so it
-        // needs no branch of its own - but it must not fall to `default`.
+        // Read above; it must not fall through to `default`.
         case 'mode':
           break;
         case 'equals':
-          if (actual !== operand) return false;
+          if (insensitive ? lower(actual) !== lower(operand) : actual !== operand) return false;
           break;
         case 'contains':
           if (!lower(actual).includes(lower(operand))) return false;

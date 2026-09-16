@@ -410,7 +410,7 @@ Blocked on your specification (see feature map §14).
 
 ## Backlog (OPTIONAL — not scheduled)
 
-Onboarding · Employee Exit · Cases / HR help desk · Tasks · Time Tracker with project and
+Onboarding · Employee Exit · Tasks · Time Tracker with project and
 client billing · Expenses · Automation and workflow engine · Announcements · Policy library ·
 Compensatory off · Leave encashment · Shift patterns, rotation and auto-assignment ·
 Overtime policies · Scheduled report delivery · Custom report builder · Delegation ·

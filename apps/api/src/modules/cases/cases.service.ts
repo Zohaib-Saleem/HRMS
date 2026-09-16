@@ -26,12 +26,15 @@ import { seedCaseCatalogue, type CaseCatalogueSeedResult } from './case-catalogu
  * The cases module's data layer.
  *
  * Every function here that reaches a case takes a REQUESTER, not a case id on
- * its own. That is the shape of the phase 1 security story: an employee's side
- * of this module is the set of rows whose `requesterEmployeeId` is their own
- * employee record, resolved from the session cookie and from nothing in the
- * request, and a query that could be written without that column is a query
- * that will eventually be written without it. When phase 2 adds the agent side
- * it adds its own lookups with its own permissions rather than relaxing these.
+ * its own. That is the shape of the employee side's security story: it is the
+ * set of rows whose `requesterEmployeeId` is the caller's own employee record,
+ * resolved from the session cookie and from nothing in the request, and a query
+ * that could be written without that column is a query that will eventually be
+ * written without it.
+ *
+ * The desk's lookups live next door in `case-desk.service.ts` with their own
+ * scope rules and their own grants. Nothing here was widened to accommodate
+ * them, which is the arrangement that keeps this file's one sentence true.
  */
 
 // --- who is asking -----------------------------------------------------------
@@ -353,6 +356,18 @@ export const CASE_INCLUDE = {
       lastName: true,
       displayName: true,
       employeeNumber: true,
+      workEmail: true,
+      /*
+       * The requester's account, and the department they sit in.
+       *
+       * Neither reaches an employee's response - `toCaseRecord` does not put
+       * them there. They are read because the DESK needs them: a notification
+       * about a case goes to the requester's user id, and the desk's case view
+       * shows who raised it and where they sit, which is half of what somebody
+       * needs to answer an HR question at all.
+       */
+      userId: true,
+      department: { select: { id: true, name: true } },
     },
   },
   department: { select: { id: true, name: true } },
@@ -372,10 +387,22 @@ export type CaseRow = Prisma.CaseGetPayload<{ include: typeof CASE_INCLUDE }>;
 /** What the caller may do with a case, decided from permissions plus status. */
 export interface CaseCallerContext {
   permissions: ReadonlySet<string>;
+  /**
+   * Whether this record is being read by the person who RAISED the case.
+   *
+   * The three `can...` flags below are the requester's own - reply to my case,
+   * reopen my case, attach to my case - and they are answered from the
+   * `.own` grants. Read the same row through the desk's endpoints and those
+   * grants say nothing useful: a member of the desk holding `case.reply.own`
+   * holds it for THEIR cases, not for the one they happen to be looking at. So
+   * the desk passes false and gets false, and what it may do arrives separately
+   * as `abilities` - two questions, two answers, neither borrowing the other's.
+   */
+  asRequester: boolean;
 }
 
-export function callerContext(auth: AuthContext): CaseCallerContext {
-  return { permissions: auth.permissions };
+export function callerContext(auth: AuthContext, asRequester = true): CaseCallerContext {
+  return { permissions: auth.permissions, asRequester };
 }
 
 const personName = (p: { firstName: string; lastName: string; displayName?: string | null }) =>
@@ -420,9 +447,18 @@ export function toCaseRecord(row: CaseRow, caller: CaseCallerContext): CaseRecor
      * behind them re-checks the same permission and the same status on what
      * actually arrived - so a flag flipped in a debugger buys nothing.
      */
-    canReply: caller.permissions.has(PERMISSIONS.CASE_REPLY_OWN) && canRequesterReply(status),
-    canReopen: caller.permissions.has(PERMISSIONS.CASE_REOPEN_OWN) && canRequesterReopen(status),
-    canAttach: caller.permissions.has(PERMISSIONS.CASE_REPLY_OWN) && canRequesterReply(status),
+    canReply:
+      caller.asRequester &&
+      caller.permissions.has(PERMISSIONS.CASE_REPLY_OWN) &&
+      canRequesterReply(status),
+    canReopen:
+      caller.asRequester &&
+      caller.permissions.has(PERMISSIONS.CASE_REOPEN_OWN) &&
+      canRequesterReopen(status),
+    canAttach:
+      caller.asRequester &&
+      caller.permissions.has(PERMISSIONS.CASE_REPLY_OWN) &&
+      canRequesterReply(status),
   };
 }
 

@@ -99,10 +99,21 @@ async function appAs(
 
 /** The two cases every test below is about the gap between. */
 const CASES = [
-  { id: 'case-mine', companyId: COMPANY, requesterEmployeeId: ME.id, status: 'OPEN', caseNumber: 'CASE-2026-000001' },
-  { id: 'case-mine-2', companyId: COMPANY, requesterEmployeeId: ME.id, status: 'OPEN', caseNumber: 'CASE-2026-000002' },
-  { id: 'case-theirs', companyId: COMPANY, requesterEmployeeId: COLLEAGUE.id, status: 'OPEN', caseNumber: 'CASE-2026-000003' },
-  { id: 'case-closed', companyId: COMPANY, requesterEmployeeId: ME.id, status: 'CLOSED', caseNumber: 'CASE-2026-000004' },
+  { id: 'case-mine', companyId: COMPANY, requesterEmployeeId: ME.id, departmentId: 'dep-it', status: 'OPEN', caseNumber: 'CASE-2026-000001' },
+  { id: 'case-mine-2', companyId: COMPANY, requesterEmployeeId: ME.id, departmentId: 'dep-it', status: 'OPEN', caseNumber: 'CASE-2026-000002' },
+  { id: 'case-theirs', companyId: COMPANY, requesterEmployeeId: COLLEAGUE.id, departmentId: 'dep-it', status: 'OPEN', caseNumber: 'CASE-2026-000003' },
+  { id: 'case-closed', companyId: COMPANY, requesterEmployeeId: ME.id, departmentId: 'dep-it', status: 'CLOSED', caseNumber: 'CASE-2026-000004' },
+  // Filed with Finance, which the IT agent below cannot work.
+  { id: 'case-finance', companyId: COMPANY, requesterEmployeeId: COLLEAGUE.id, departmentId: 'dep-fin', status: 'OPEN', caseNumber: 'CASE-2026-000005' },
+];
+
+/** The member of the desk: IT, and therefore not Finance. */
+const AGENT = { id: 'emp-agent', userId: 'user-agent', departmentId: 'dep-it' };
+
+const DESK: Permission[] = [
+  PERMISSIONS.CASE_READ_DEPARTMENT,
+  PERMISSIONS.CASE_RESPOND,
+  PERMISSIONS.CASE_NOTE_INTERNAL,
 ];
 
 interface AttachmentRow {
@@ -165,21 +176,43 @@ beforeEach(() => {
   for (const row of attachments) store.objects.set(row.objectKey, PDF);
 
   db.employee.findFirst.mockImplementation((args: { where: { userId?: string } }) => {
-    const match = [ME, COLLEAGUE].find((e) => e.userId === args.where.userId);
-    return Promise.resolve(match ? { id: match.id } : null);
+    const match = [ME, COLLEAGUE, AGENT].find((e) => e.userId === args.where.userId);
+    return Promise.resolve(
+      match ? { id: match.id, departmentId: 'departmentId' in match ? match.departmentId : null } : null,
+    );
   });
 
-  // The real `ownCaseOrThrow` query, honoured: id, company AND requester.
-  db.case.findFirst.mockImplementation((args: { where: Record<string, unknown> }) =>
-    Promise.resolve(
+  /*
+   * Both real lookups, honoured rather than stubbed. The requester's is id +
+   * company + requester; the desk's is id + company + the departments that
+   * caller may work. A route that dropped either narrowing would start finding
+   * rows here, which is the whole reason these are evaluated instead of faked.
+   */
+  db.case.findFirst.mockImplementation((args: { where: Record<string, unknown> }) => {
+    const where = args.where;
+
+    if (Array.isArray(where.AND)) {
+      const [byId, scope] = where.AND as [{ id: string }, Record<string, never>];
+      const departments = (scope.departmentId as { in?: string[] } | undefined)?.in;
+      return Promise.resolve(
+        CASES.find(
+          (row) =>
+            row.id === byId.id &&
+            row.companyId === (scope.companyId as unknown as string) &&
+            (departments === undefined || departments.includes(row.departmentId)),
+        ) ?? null,
+      );
+    }
+
+    return Promise.resolve(
       CASES.find(
         (row) =>
-          row.id === args.where.id &&
-          row.companyId === args.where.companyId &&
-          row.requesterEmployeeId === args.where.requesterEmployeeId,
+          row.id === where.id &&
+          row.companyId === where.companyId &&
+          row.requesterEmployeeId === where.requesterEmployeeId,
       ) ?? null,
-    ),
-  );
+    );
+  });
 
   db.caseAttachment.findFirst.mockImplementation((args: { where: Record<string, unknown> }) =>
     Promise.resolve(
@@ -188,7 +221,9 @@ beforeEach(() => {
           row.id === args.where.id &&
           row.caseId === args.where.caseId &&
           row.companyId === args.where.companyId &&
-          row.isInternal === args.where.isInternal,
+          // Absent on the desk's lookup, which is what lets it read a note's
+          // file; present and false on the employee's, which is what stops it.
+          (args.where.isInternal === undefined || row.isInternal === args.where.isInternal),
       ) ?? null,
     ),
   );
@@ -497,5 +532,120 @@ describe('downloading', () => {
     });
 
     expect(response.statusCode).toBe(304);
+  });
+});
+
+// -----------------------------------------------------------------------------
+
+/**
+ * The desk's half of the same two routes.
+ *
+ * Same bytes, same sniffing, same ceiling - the differences are exactly two,
+ * and both are tested here rather than assumed: the case is reached through the
+ * caller's queues instead of through their own employee id, and an internal
+ * file is visible. Everything else is the shared routine, and a test that
+ * re-asserted the sniffing here would only be testing the same function twice.
+ */
+describe('the desk and its files', () => {
+  it('reads a file on a colleague\'s case in its own queue', async () => {
+    const app = await appAs(DESK, AGENT.userId);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/cases/queue/case-theirs/attachments/att-theirs',
+    });
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it('cannot read a file on a case in another department', async () => {
+    const app = await appAs(DESK, AGENT.userId);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/cases/queue/case-finance/attachments/att-theirs',
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('reads the file on an internal note, which the requester cannot', async () => {
+    const desk = await appAs(DESK, AGENT.userId);
+    const employee = await appAs();
+
+    const deskResponse = await desk.inject({
+      method: 'GET',
+      url: '/cases/queue/case-mine/attachments/att-internal',
+    });
+    const employeeResponse = await employee.inject({
+      method: 'GET',
+      url: '/cases/case-mine/attachments/att-internal',
+    });
+
+    expect(deskResponse.statusCode).toBe(200);
+    // On their own case, holding the id, and still 404: the file is absent from
+    // the query rather than withheld after it.
+    expect(employeeResponse.statusCode).toBe(404);
+  });
+
+  it('marks a file internal when the note it belongs to is', async () => {
+    const app = await appAs(DESK, AGENT.userId);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-theirs/attachments?internal=true&filename=trace.txt',
+      headers: { 'content-type': 'text/plain' },
+      payload: TEXT,
+    });
+
+    expect(response.statusCode).toBe(201);
+    const created = db.caseAttachment.create.mock.calls[0]?.[0] as { data: { isInternal: boolean } };
+    expect(created.data.isInternal).toBe(true);
+  });
+
+  it('refuses an internal file from somebody who cannot write a note', async () => {
+    const app = await appAs([PERMISSIONS.CASE_READ_DEPARTMENT, PERMISSIONS.CASE_RESPOND], AGENT.userId);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-theirs/attachments?internal=true',
+      headers: { 'content-type': 'text/plain' },
+      payload: TEXT,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(db.caseAttachment.create).not.toHaveBeenCalled();
+  });
+
+  it('cannot upload to a case in another department', async () => {
+    const app = await appAs(DESK, AGENT.userId);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-finance/attachments',
+      headers: { 'content-type': 'application/pdf' },
+      payload: PDF,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(db.caseAttachment.create).not.toHaveBeenCalled();
+  });
+
+  it('is closed to an employee who is not on the desk at all', async () => {
+    const app = await appAs();
+
+    const upload = await app.inject({
+      method: 'POST',
+      url: '/cases/queue/case-mine/attachments',
+      headers: { 'content-type': 'application/pdf' },
+      payload: PDF,
+    });
+    const download = await app.inject({
+      method: 'GET',
+      url: '/cases/queue/case-mine/attachments/att-mine',
+    });
+
+    expect(upload.statusCode).toBe(403);
+    expect(download.statusCode).toBe(403);
   });
 });

@@ -116,6 +116,12 @@ const CaseDetailPage = lazyPage(
   () => import('@/features/cases/case-detail-page'),
   'CaseDetailPage',
 );
+const CaseQueuePage = lazyPage(() => import('@/features/cases/case-queue-page'), 'CaseQueuePage');
+const CaseWorkPage = lazyPage(() => import('@/features/cases/case-work-page'), 'CaseWorkPage');
+const CaseCategoriesPage = lazyPage(
+  () => import('@/features/settings/case-categories-page'),
+  'CaseCategoriesPage',
+);
 const MedicalPolicyPage = lazyPage(
   () => import('@/features/settings/medical-policy-page'),
   'MedicalPolicyPage',
@@ -377,18 +383,38 @@ export function AppRoutes() {
           <Route path="medical/claims" element={<MedicalClaimsPage />} />
         </Route>
 
-        {/* case.read.own is the whole gate, and in phase 1 it is genuinely a
-            gate onto ONE person's cases: the endpoints behind these screens are
-            pinned to the caller's own employee record and no data scope widens
-            them, so a manager opening this finds their own cases and no trace
-            of their team's. Raising a case is gated again inside the screen on
-            case.create, and the endpoint is the real gate either way. */}
+        {/* case.read.own is a gate onto ONE person's cases: the endpoints behind
+            these screens are pinned to the caller's own employee record and no
+            data scope widens them, so a manager opening this finds their own
+            cases and no trace of their team's. Raising a case is gated again
+            inside the screen on case.create, and the endpoint is the real gate
+            either way. */}
         <Route element={<RequirePermission permission={PERMISSIONS.CASE_READ_OWN} />}>
           <Route path="cases" element={<CasesPage />} />
           {/* A guessed id answers 404 server-side, so this route cannot be used
               to reach somebody else's case - the page renders its not-found
               state, which says nothing about whether that case exists. */}
           <Route path="cases/:id" element={<CaseDetailPage />} />
+        </Route>
+
+        {/* The desk. Either read grant opens it, and the two differ only in how
+            wide the queue behind it is - which the server decides, not this
+            route.
+
+            Its own path rather than `cases/queue`, deliberately: the sidebar
+            highlights an entry by path prefix, and a desk nested under `/cases`
+            would light up "My cases" as well every time somebody opened the
+            queue. Two jobs, two entries, two paths. */}
+        <Route
+          element={
+            <RequirePermission
+              permission={[PERMISSIONS.CASE_READ_DEPARTMENT, PERMISSIONS.CASE_READ_ALL]}
+              mode="any"
+            />
+          }
+        >
+          <Route path="case-queue" element={<CaseQueuePage />} />
+          <Route path="case-queue/:id" element={<CaseWorkPage />} />
         </Route>
 
         {/* employee.read is the whole gate. Each block inside a row - pay,
@@ -451,6 +477,7 @@ export function AppRoutes() {
                 // the tab and be turned away by the section gate above it.
                 PERMISSIONS.LOAN_POLICY_READ,
                 PERMISSIONS.MEDICAL_POLICY_READ,
+                PERMISSIONS.CASE_CATEGORY_MANAGE,
               ]}
             />
           }
@@ -479,6 +506,13 @@ export function AppRoutes() {
                 real gate either way. */}
             <Route element={<RequirePermission permission={PERMISSIONS.MEDICAL_POLICY_READ} />}>
               <Route path="medical-policy" element={<MedicalPolicyPage />} />
+            </Route>
+            {/* The helpdesk's routing catalogue. One grant, because there is
+                nothing to read here that is not also there to be edited: the
+                form's own copy of this tree is the catalogue endpoint, which
+                every employee can already reach. */}
+            <Route element={<RequirePermission permission={PERMISSIONS.CASE_CATEGORY_MANAGE} />}>
+              <Route path="case-categories" element={<CaseCategoriesPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
               <Route path="users" element={<UsersPage />} />

@@ -278,6 +278,18 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
+        // The other side of the same module, and a separate entry rather than a
+        // switch inside "Cases": one screen is somebody's own list and the
+        // other is a work queue, and only the people who staff a desk hold
+        // either grant that opens it.
+        label: 'Case queue',
+        to: '/case-queue',
+        icon: Headset,
+        permission: [PERMISSIONS.CASE_READ_DEPARTMENT, PERMISSIONS.CASE_READ_ALL],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
         // The consolidated HR view: one row per employee, every module's figure
         // for that person. Gated on employee.read; the columns a reader may
         // fill are decided per block by the module that owns them.
@@ -368,6 +380,8 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/medical': 'Medical',
   '/medical/claims': 'Medical claims',
   '/cases': 'My cases',
+  '/case-queue': 'Case queue',
+  '/settings/case-categories': 'Case categories',
   '/reports/employee-master': 'Employee Master Report',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/loan-policy': 'Loan policy',

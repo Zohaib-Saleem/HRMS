@@ -21,11 +21,19 @@ import { paginationQuerySchema } from './common.js';
  * approval chain would have produced a queue of PENDING approvals nobody could
  * act on and a conversation with nowhere to live.
  *
- * Phase 1 is the foundation plus the employee's whole side of it: raise a case,
- * watch it, reply to it, attach a file to it, reopen it. There is no agent side
- * yet - nothing here assigns, triages or resolves - but every field and every
- * status the full workflow needs is defined below, so Phase 2 adds screens
- * rather than columns.
+ * There are two sides to this module and they are two sets of endpoints, two
+ * sets of grants and two screens, not one of each with a flag. The REQUESTER
+ * raises a case, watches it, replies to it and reopens it, and every query on
+ * that side is pinned to their own employee record. The DESK reads a queue,
+ * assigns, moves a case through the workflow, answers the requester and writes
+ * notes the requester never sees. Nothing on the requester's side widens when
+ * somebody holds a desk grant, and nothing on the desk's side is reachable
+ * without one.
+ *
+ * The vocabulary below is shared by both, which is the point of it being here:
+ * the transition map that decides what the desk may do is the same map that
+ * refuses a requester's reopen, so the two sides cannot drift into disagreeing
+ * about what a case is allowed to do next.
  */
 
 // --- priority ----------------------------------------------------------------
@@ -126,10 +134,11 @@ export const CASE_SETTLED_STATUSES: readonly CaseStatus[] = ['RESOLVED', 'CLOSED
 /**
  * The whole workflow, as the only statement of it anywhere.
  *
- * Phase 1 exercises exactly one of these edges - an employee reopening their
- * own settled case - and defines the rest, so the Phase 2 agent screens inherit
- * a workflow rather than inventing one per button. A transition absent from
- * this map is refused by the server whoever asks for it.
+ * One map, both sides of the desk. The requester exercises exactly one edge of
+ * it - reopening their own settled case - and the desk exercises the rest, but
+ * neither has its own copy: a transition absent from here is refused by the
+ * server whoever asks for it, and a button that offers one is drawn from this
+ * map rather than from a list beside it.
  *
  * CLOSED is deliberately not terminal. A case that was closed and turns out not
  * to be fixed is the commonest complaint about every helpdesk ever built, and
@@ -203,9 +212,9 @@ export function canRequesterReopen(status: CaseStatus): boolean {
  * a constant in the frontend. Every company's helpdesk is shaped like its own
  * company: one runs Payroll and Reimbursement as separate queues, another has
  * one Finance queue and does not want the choice on the form at all. The
- * catalogue below is a STARTING POINT that the seeder writes once; from Phase 2
- * an administrator edits, adds and retires rows through the UI, and nothing in
- * the web app has an opinion about what the list contains.
+ * catalogue below is a STARTING POINT that the seeder writes once; an
+ * administrator then edits, adds and retires rows on the catalogue screen, and
+ * nothing in the web app has an opinion about what the list contains.
  */
 
 /**
@@ -545,7 +554,7 @@ const trimmed = (min: number, max: number, message: string) =>
  * There is no employee id in here, and that is the whole of the employee-side
  * security story for creation: a case is raised BY the caller FOR the caller,
  * resolved from the session, and there is no field an employee could set to
- * become somebody else. Phase 2's agent-side "raise on behalf of" is a separate
+ * become somebody else. A desk-side "raise on behalf of" would be a separate
  * endpoint with its own permission rather than an optional field on this one -
  * an optional field is exactly how that permission gets forgotten.
  *
@@ -576,8 +585,9 @@ export type CaseCreateInput = z.infer<typeof caseCreateSchema>;
  * `internal` is absent by design. An internal note is a message the requester
  * must never see, and the endpoint an employee posts to writes `isInternal =
  * false` unconditionally rather than reading a flag off the body - so there is
- * no payload that turns an employee's reply into a note, and no flag to forget
- * to check when Phase 2 adds the agent-side form.
+ * no payload that turns an employee's reply into a note. The desk's own reply
+ * schema, `caseDeskReplySchema` below, is where that flag lives, behind its own
+ * grant and its own endpoint.
  */
 export const caseReplySchema = z.object({
   message: trimmed(1, 5000, 'Write something before sending.'),
@@ -649,7 +659,7 @@ export interface CaseRecord {
   requesterName: string;
   requesterEmployeeNumber: string;
 
-  /** Null until somebody picks it up. Phase 2 does the picking up. */
+  /** Null until somebody on the desk picks it up. */
   assignedUserId: string | null;
   assignedToName: string | null;
 
@@ -687,8 +697,8 @@ export interface CaseMessageRecord {
    *
    * Always false in everything an employee is sent - the employee endpoints
    * filter internal messages out of the query rather than out of the render, so
-   * a note is not merely hidden by CSS. Present on the type because Phase 2's
-   * agent view reads the same shape.
+   * a note is not merely hidden by CSS. True only on the desk's own view, which
+   * reads this same shape through its own endpoints.
    */
   internal: boolean;
   attachments: CaseAttachmentRecord[];
@@ -706,9 +716,9 @@ export interface CaseDetail extends CaseRecord {
  * The dashboard card's figures.
  *
  * Counted by the database in one grouped query rather than by fetching cases
- * and counting them in the browser. `counts` carries every status so the card
- * can choose what to show without a second round trip when Phase 2 changes its
- * mind about which four matter.
+ * and counting them in the browser. `counts` carries every status so a card can
+ * choose what to show without a second round trip when it changes its mind
+ * about which of them matter.
  */
 export interface CaseSummary {
   counts: Record<CaseStatus, number>;
@@ -726,3 +736,335 @@ export const EMPTY_CASE_COUNTS: Record<CaseStatus, number> = {
   CLOSED: 0,
   REOPENED: 0,
 };
+
+// --- the desk ----------------------------------------------------------------
+
+/**
+ * The other side of the helpdesk: the people who answer.
+ *
+ * Everything below is reached through its own endpoints under `/cases/queue`
+ * and its own grants, and none of it relaxes the requester's side by a field.
+ * That separation is the design rather than an accident of ordering: an
+ * employee's routes narrow to their own employee id in the WHERE clause, and a
+ * desk route narrows to the queues the caller is allowed to work. A single set
+ * of routes with a `view=all` parameter would have made those two the same
+ * code path with a flag deciding which - and a flag is a thing that gets
+ * defaulted wrong once.
+ *
+ * How far a member of the desk can see is two grants and nothing else:
+ *
+ *   `case.read.department`  the cases filed to the department on their OWN
+ *                           employee record. An IT case is worked by IT.
+ *   `case.read.all`         every case in the company, for whoever runs the
+ *                           whole desk rather than one queue of it.
+ *
+ * Deliberately NOT a DataScope. A `DEPARTMENT` scope is handed out so somebody
+ * can read their department's employee RECORDS, and reading a person's record
+ * is not a reason to read what they asked HR about. The two questions are
+ * different and must be able to be answered differently.
+ */
+
+/** How wide the caller's view of the queue is, decided from their grants. */
+export type CaseDeskScope = 'NONE' | 'DEPARTMENT' | 'ALL';
+
+/**
+ * The assignee filter, which is three different questions in one control.
+ *
+ * `me` and `unassigned` are the two a person on the desk actually asks - "what
+ * is mine" and "what has nobody picked up" - and they are spelled as words
+ * rather than as a user id so the screen does not have to know its own id to
+ * build the commonest filter it offers. Anything else is read as a user id.
+ */
+export const CASE_ASSIGNEE_FILTERS = ['me', 'unassigned'] as const;
+
+export type CaseAssigneeFilter = (typeof CASE_ASSIGNEE_FILTERS)[number];
+
+/**
+ * The queue's query: the employee list's filters, plus who it is assigned to.
+ *
+ * `mine` and `unassigned` deliberately do not become two endpoints. They are
+ * the same list with one clause different, and a queue that answered them from
+ * different routes would drift in its sorting, its paging and its columns
+ * within a release.
+ */
+export const caseQueueQuerySchema = caseQuerySchema.extend({
+  /** `me`, `unassigned`, or a user id. Absent means every case in scope. */
+  assignee: z.string().trim().max(64).optional(),
+  /**
+   * Narrows to the five live statuses in one clause.
+   *
+   * A queue is read as "what is still mine to do" far more often than as
+   * "everything that ever happened", and expressing that as five repeated
+   * status parameters would make the commonest view of this screen the
+   * fiddliest URL on the installation.
+   */
+  live: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .optional()
+    .transform((value) => value === true || value === 'true'),
+});
+
+export type CaseQueueQuery = z.infer<typeof caseQueueQuerySchema>;
+
+/**
+ * Taking a case, handing it over, or putting it back.
+ *
+ * Null is a real value here and means unassigned - "this is nobody's" is a
+ * statement somebody makes on purpose when they cannot work it after all, and
+ * a queue that could only ever gain owners would fill up with cases assigned to
+ * whoever last opened them.
+ *
+ * The id is checked server-side against the people who could actually work the
+ * case: a user who holds no desk grant cannot be handed one, because a case in
+ * a queue nobody can open is a case that is lost rather than assigned.
+ */
+export const caseAssignSchema = z.object({
+  assignedUserId: z
+    .string()
+    .trim()
+    .max(64)
+    .nullish()
+    .transform((value) => (value === '' || value === undefined ? null : value)),
+});
+
+export type CaseAssignInput = z.infer<typeof caseAssignSchema>;
+
+/**
+ * Moving a case along.
+ *
+ * The note is optional and becomes an ordinary message on the case, which is
+ * how the requester finds out WHY their case went on hold rather than only
+ * that it did. Without one the case still records the change - every status
+ * change writes a system message - but a status that changes with no
+ * explanation is the thing people ring up about.
+ */
+export const caseStatusChangeSchema = z.object({
+  status: z.enum(CASE_STATUSES),
+  note: z
+    .string()
+    .trim()
+    .max(2000)
+    .optional()
+    .transform((value) => (value === '' ? undefined : value)),
+  /**
+   * Whether that note is staff-only.
+   *
+   * Refused unless the caller holds `case.note.internal`, and refused rather
+   * than quietly downgraded: a note somebody marked internal and had published
+   * to the requester is the worst possible failure mode of this field.
+   */
+  internal: z.boolean().default(false),
+});
+
+export type CaseStatusChangeInput = z.infer<typeof caseStatusChangeSchema>;
+
+/** Re-judging how urgent a case is, which is the desk's call once they see it. */
+export const casePriorityChangeSchema = z.object({
+  priority: z.enum(CASE_PRIORITIES),
+});
+
+export type CasePriorityChangeInput = z.infer<typeof casePriorityChangeSchema>;
+
+/**
+ * Re-routing a case that was filed in the wrong queue.
+ *
+ * The single commonest thing that happens to a real helpdesk ticket, and the
+ * alternative to supporting it is a desk that closes cases with "please raise
+ * this with IT instead" - which loses the conversation and makes the requester
+ * do the routing twice. The three ids are validated exactly as they are on
+ * create: same function, same rules, so a re-route cannot put a case somewhere
+ * a new case could not have been filed.
+ */
+export const caseRouteSchema = z.object({
+  departmentId: trimmed(1, 64, 'Choose which department this belongs to.'),
+  categoryId: trimmed(1, 64, 'Choose what this is about.'),
+  subcategoryId: z
+    .string()
+    .trim()
+    .max(64)
+    .nullish()
+    .transform((v) => (v === '' || v === undefined ? null : v)),
+  /** Why it moved. Becomes a message, so the requester is not left guessing. */
+  note: z
+    .string()
+    .trim()
+    .max(2000)
+    .optional()
+    .transform((value) => (value === '' ? undefined : value)),
+});
+
+export type CaseRouteInput = z.infer<typeof caseRouteSchema>;
+
+/**
+ * The desk's reply, which is two different things behind one form.
+ *
+ * `internal: false` is an answer to the requester: they see it, and they are
+ * notified about it. `internal: true` is a note between colleagues on the same
+ * case - never sent, never returned by an employee endpoint, and gated on
+ * `case.note.internal` rather than on the grant that lets somebody reply.
+ *
+ * One schema and one endpoint rather than two, because the two are written in
+ * the same box on the same screen about the same case, and the mistake worth
+ * engineering against is not "wrong endpoint" but "meant to tick the box".
+ * That mistake is addressed where it happens - the UI states which of the two
+ * it is about to do, in words, next to the button.
+ */
+export const caseDeskReplySchema = z.object({
+  message: trimmed(1, 5000, 'Write something before sending.'),
+  internal: z.boolean().default(false),
+});
+
+export type CaseDeskReplyInput = z.infer<typeof caseDeskReplySchema>;
+
+/**
+ * Whether the desk may still write on a case.
+ *
+ * The same rule as the requester's: everything but CLOSED. A closed case is
+ * filed, and the way back in is to reopen it - which is a status change, is
+ * audited as one, and puts the case back on a queue rather than adding a
+ * message to something nobody is watching.
+ */
+export function canDeskReply(status: CaseStatus): boolean {
+  return status !== 'CLOSED';
+}
+
+/** Somebody a case can be handed to, as the assign control receives them. */
+export interface CaseAgentOption {
+  userId: string;
+  name: string;
+  /** The department on their employee record, or null if they have no record. */
+  departmentName: string | null;
+}
+
+/**
+ * What the caller may do to the case in front of them.
+ *
+ * Sent with the case rather than worked out in the browser from a permission
+ * list, because the answer depends on the case's status as well as on the
+ * caller's grants - and `nextStatuses` in particular is the workflow, which the
+ * browser must not hold a second copy of. Advisory, as ever: every endpoint
+ * behind a control re-checks the same thing on what actually arrived.
+ */
+export interface CaseDeskAbilities {
+  canAssign: boolean;
+  canUpdate: boolean;
+  canRespond: boolean;
+  canNote: boolean;
+  canRoute: boolean;
+  /** Where this case may go from where it is, in the order shown. */
+  nextStatuses: CaseStatus[];
+}
+
+/** One case as the desk reads it: the whole thread, internal notes included. */
+export interface CaseDeskDetail extends CaseDetail {
+  abilities: CaseDeskAbilities;
+  /** The requester's email, so the desk can reach them outside the case. */
+  requesterEmail: string | null;
+  requesterDepartmentName: string | null;
+}
+
+/**
+ * The queue's headline figures.
+ *
+ * Counted over the caller's own scope, so two people looking at the same screen
+ * with different grants see different numbers and both are right.
+ */
+export interface CaseQueueSummary {
+  /** Everything unsettled in scope. */
+  live: number;
+  /** Live and nobody's. The number that means "somebody should pick these up". */
+  unassigned: number;
+  /** Live and the caller's own. */
+  mine: number;
+  /** Live and URGENT or HIGH, whoever holds them. */
+  urgent: number;
+  counts: Record<CaseStatus, number>;
+}
+
+export const EMPTY_CASE_QUEUE_SUMMARY: CaseQueueSummary = {
+  live: 0,
+  unassigned: 0,
+  mine: 0,
+  urgent: 0,
+  counts: { ...EMPTY_CASE_COUNTS },
+};
+
+// --- the catalogue, as its administrator sees it -----------------------------
+
+/**
+ * Writing a category or a subcategory.
+ *
+ * One schema for both levels, because they are one table and differ only in
+ * whether a parent is set. What decides the level is `parentCategoryId`, and
+ * the server refuses a parent that is itself a subcategory - the tree is two
+ * deep by intent, and a third level would appear on no screen that draws it.
+ *
+ * `departmentId` is required on a top-level category and IGNORED on a
+ * subcategory, which inherits its parent's department. Allowing a subcategory
+ * to name a different department would let the tree contradict itself.
+ */
+export const caseCategoryWriteSchema = z.object({
+  departmentId: z.string().trim().max(64).optional(),
+  parentCategoryId: z
+    .string()
+    .trim()
+    .max(64)
+    .nullish()
+    .transform((v) => (v === '' || v === undefined ? null : v)),
+  name: trimmed(2, 100, 'Give the queue a name.'),
+  description: z
+    .string()
+    .trim()
+    .max(500)
+    .optional()
+    .transform((value) => (value === '' ? undefined : value)),
+  sortOrder: z.coerce.number().int().min(0).max(9999).default(0),
+  isActive: z.boolean().default(true),
+});
+
+export type CaseCategoryWriteInput = z.infer<typeof caseCategoryWriteSchema>;
+
+/** Editing one. Every field optional, because a rename is not a re-creation. */
+export const caseCategoryUpdateSchema = caseCategoryWriteSchema
+  .partial()
+  .omit({ parentCategoryId: true, departmentId: true });
+
+export type CaseCategoryUpdateInput = z.infer<typeof caseCategoryUpdateSchema>;
+
+/**
+ * One row of the catalogue screen.
+ *
+ * Carries `caseCount` because the screen's most consequential control is the
+ * one that retires a queue, and the only fact that makes that decision
+ * answerable is how many cases are already filed behind it.
+ */
+export interface CaseCategoryAdminRecord {
+  id: string;
+  departmentId: string;
+  departmentName: string;
+  parentCategoryId: string | null;
+  name: string;
+  description: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  /** Cases filed directly against this row, as category or as subcategory. */
+  caseCount: number;
+  children: CaseCategoryAdminRecord[];
+}
+
+/** The catalogue as the administrator reads it: every department, retired rows included. */
+export interface CaseCatalogueAdminGroup {
+  departmentId: string;
+  departmentName: string;
+  departmentIsActive: boolean;
+  categories: CaseCategoryAdminRecord[];
+}
+
+/**
+ * Why a category cannot simply be deleted once cases point at it.
+ *
+ * Retiring is the ordinary act and deleting is the exception, so the message
+ * says so rather than reporting a foreign key.
+ */
+export const CASE_CATEGORY_IN_USE_MESSAGE =
+  'Cases are already filed under this, so it cannot be deleted. Retire it instead - it disappears from the form and the existing cases keep their history.';

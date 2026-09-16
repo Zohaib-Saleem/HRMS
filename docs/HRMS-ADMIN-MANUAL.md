@@ -222,6 +222,26 @@ effective dates. Most specific wins: employee → team → department → compan
 Effective dates are what keep history honest — rescoring a day in March has to
 use the policy that was in force in March.
 
+### Settings → Case categories
+
+The routing catalogue for the helpdesk: which of the company's departments have
+queues, what the categories and subcategories under them are called, and which
+are retired. Gated on **`case.category.manage`**, which HR Admin holds.
+
+The departments here are the company's own — there is no separate helpdesk
+department list, and one cannot be added from this screen. A department with no
+queues shows as an empty group and cannot receive cases until it is given one.
+
+| Action | What happens |
+|---|---|
+| Add a category | A new top-level queue under that department |
+| Subcategory | A second level under that category. It takes the parent's department; the tree is only ever two deep |
+| Retire | Disappears from the raise-a-case form. Existing cases keep it, and retiring a category retires its subcategories with it |
+| Restore | Puts it back on the form |
+| Delete | Offered **only** where no case has ever been filed. Anything else must be retired — deleting would orphan the history of why a case was routed somewhere |
+
+Names must be unique within a department at each level, case-insensitively.
+
 ### Settings → Roles and permissions
 
 Lists the four seeded roles and lets `role.manage` holders change what each may
@@ -940,3 +960,68 @@ problem.
 
 Not a defect; the permission model is deliberate. But it is a workflow gap
 somebody will hit on the first day.
+
+---
+
+## 15. Cases (the helpdesk)
+
+Two screens over one module, and they are deliberately not the same screen with
+a switch.
+
+**Cases** (`case.read.own`) is every employee's own list — the cases they
+raised, and nothing else. No data scope widens it: a manager opening this finds
+their own cases and no trace of their team's, because a reporting line is not a
+reason to read what somebody asked HR about.
+
+**Case queue** (`case.read.department` or `case.read.all`) is the desk. It shows
+the cases filed to the queues the caller may work, whoever raised them.
+
+### Who sees which queue
+
+| Grant | Sees |
+|---|---|
+| `case.read.department` | Every case routed to the department on **their own employee record**. An IT case is worked by IT |
+| `case.read.all` | Every case in the company. For whoever runs the whole desk rather than one queue of it |
+
+An agent whose employee record has no department sees an empty queue — that is
+the first thing to check when somebody reports the queue is blank. Somebody who
+works two queues is given `case.read.all`; there is no per-person desk roster.
+
+### The rest of the desk's grants
+
+| Grant | Lets somebody |
+|---|---|
+| `case.assign` | Take a case, hand it to somebody else, or put it back. A case can only be assigned to an account that holds a read grant — assigning into a hole would look handled and would not be |
+| `case.update` | Change status and priority, and re-route a misfiled case |
+| `case.respond` | Reply to the requester. They see it and are notified |
+| `case.note.internal` | Write a staff-only note. The requester never sees it, is never notified about it, and it is absent from their view of the case rather than hidden in it |
+
+HR Admin holds these four, `case.read.department` and `case.category.manage` by
+default — the HR queue, and the catalogue everybody's queues are drawn from.
+Nobody holds `case.read.all` except Super Admin; give it through a custom role.
+
+### The workflow
+
+`OPEN → IN_PROGRESS → PENDING / ON_HOLD → RESOLVED → CLOSED`, with `REOPENED`
+coming back from either settled state. Two of these are easy to confuse and mean
+opposite things about whose move it is:
+
+- **Pending** — waiting on the **requester**. Nothing happens until they answer.
+- **On hold** — waiting on anything else: a part, a vendor, a change window.
+
+The server refuses any transition the workflow does not allow, whoever asks. A
+requester's one move is reopening their own settled case; everything else is the
+desk's.
+
+Every status change writes an event into the conversation, and the optional note
+that goes with it reaches the requester unless it is marked internal.
+Re-routing a case moves it to the new queue with the whole conversation and
+unassigns it, so the receiving desk sees it as unclaimed.
+
+### Attachments
+
+JPEG, PNG, WebP, PDF, TXT or CSV, 10 MB each and 20 per case. What a file *is*
+is read from its own leading bytes, not from what the browser called it, and
+anything else is refused. Files on internal notes are internal too. Downloads go
+through an endpoint that re-checks the case against the caller, so a file is
+exactly as private as the case it belongs to.

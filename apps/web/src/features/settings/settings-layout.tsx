@@ -4,6 +4,7 @@ import {
   Clock,
   Fingerprint,
   HandCoins,
+  FolderTree,
   HeartPulse,
   KeyRound,
   Layers3,
@@ -68,6 +69,15 @@ export const TABS: SettingsTab[] = [
     label: 'Medical policy',
     icon: HeartPulse,
     permission: PERMISSIONS.MEDICAL_POLICY_READ,
+  },
+  {
+    // The helpdesk's routing catalogue: which departments have queues and what
+    // they are called. One grant, because everything readable here is also
+    // editable here - the read-only view of this tree is the create form.
+    to: '/settings/case-categories',
+    label: 'Case categories',
+    icon: FolderTree,
+    permission: PERMISSIONS.CASE_CATEGORY_MANAGE,
   },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },

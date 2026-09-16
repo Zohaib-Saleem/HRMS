@@ -53,6 +53,8 @@ import { medicalPolicyRoutes } from './medical/medical-policy.routes.js';
 import { medicalClaimRoutes } from './medical/medical-claims.routes.js';
 import { reportRoutes } from './reports/reports.routes.js';
 import { caseRoutes } from './cases/cases.routes.js';
+import { caseDeskRoutes } from './cases/case-desk.routes.js';
+import { caseCatalogueRoutes } from './cases/case-catalogue.routes.js';
 import { caseAttachmentRoutes } from './cases/case-attachments.routes.js';
 import {
   payrollDashboardRoutes,
@@ -152,12 +154,20 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/medical', plugin: medicalRoutes },
   { prefix: '/reports', plugin: reportRoutes },
 
-  // --- phase 12: cases (employee helpdesk) ------------------------------
-  // Two plugins on one prefix, the same arrangement the employee photo uses:
-  // the attachment routes register raw-body content-type parsers, which are
-  // scoped to the plugin that adds them, and keeping them apart leaves the
-  // routes next door as plain JSON routes.
+  // --- phase 12: cases (the helpdesk) -----------------------------------
+  // Four plugins on one prefix, split by what they are rather than by where
+  // they sit. The employee's routes narrow every query to the caller's own
+  // employee id; the desk's narrow to the queues that caller may work; the
+  // catalogue is administration of the routing itself. Keeping them apart is
+  // what stops one set of handlers growing a `view=all` parameter.
+  //
+  // The attachment routes are separate for a mechanical reason as well, the
+  // same one the employee photo has: they register raw-body content-type
+  // parsers, which are scoped to the plugin that adds them, so keeping them
+  // here leaves the routes next door as plain JSON routes.
   { prefix: '/cases', plugin: caseRoutes },
+  { prefix: '/cases', plugin: caseDeskRoutes },
+  { prefix: '/cases', plugin: caseCatalogueRoutes },
   { prefix: '/cases', plugin: caseAttachmentRoutes },
 
   // --- phase 5+ ---------------------------------------------------------

@@ -171,6 +171,44 @@ export const PERMISSIONS = {
   /// the thing is actually fixed.
   CASE_REOPEN_OWN: 'case.reopen.own',
 
+  // --- Cases (the desk that answers them) ---
+  /// Work the queue for your OWN department: every case routed to the
+  /// department on your employee record, whoever raised it.
+  ///
+  /// The department comes from the agent's employee record rather than from a
+  /// list somebody maintains, because a case is already routed to a real
+  /// department row and an IT case is worked by the IT department. It is also
+  /// the reason this is not a DataScope: `DEPARTMENT` scope is granted so a
+  /// department head can read their people's RECORDS, and reading somebody's
+  /// employee record is not a reason to read what they asked HR about. The two
+  /// answer different questions and must be able to disagree.
+  CASE_READ_DEPARTMENT: 'case.read.department',
+  /// Every case in the company, whichever queue it was filed in. For the person
+  /// who runs the helpdesk rather than one desk of it.
+  CASE_READ_ALL: 'case.read.all',
+  /// Assign a case, to yourself or to somebody else, and unassign one. Split
+  /// from `case.update` because taking ownership and doing the work are
+  /// different acts: a triager sorts the queue without touching a case's state.
+  CASE_ASSIGN: 'case.assign',
+  /// Move a case on: its status, its priority, and the queue it sits in when it
+  /// was filed in the wrong one. Every status change is checked against the
+  /// shared transition map, so this grant buys the workflow, not a free hand.
+  CASE_UPDATE: 'case.update',
+  /// Reply to the requester on a case you are working, and attach a file to
+  /// that reply. Separate from `case.update` so somebody can answer a question
+  /// without being able to close the case it was asked on.
+  CASE_RESPOND: 'case.respond',
+  /// Write a staff-only note: visible to the desk, never to the requester and
+  /// never sent to them. Its own grant because it is the one thing written on a
+  /// case that its subject can never see, and that deserves to be handed out
+  /// deliberately rather than to arrive with the ability to reply.
+  CASE_NOTE_INTERNAL: 'case.note.internal',
+  /// Configure the routing catalogue: which departments have queues, what the
+  /// categories under them are called, and which are retired. Administration of
+  /// the helpdesk rather than work on a case, so it is held by the person who
+  /// shapes the desk and not by everybody who staffs it.
+  CASE_CATEGORY_MANAGE: 'case.category.manage',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -365,6 +403,41 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
         label: 'Reopen own cases',
         description: 'Reopen your own case when it was not actually fixed.',
       },
+      {
+        value: PERMISSIONS.CASE_READ_DEPARTMENT,
+        label: 'Work your department queue',
+        description: 'See every case filed to your own department, whoever raised it.',
+      },
+      {
+        value: PERMISSIONS.CASE_READ_ALL,
+        label: 'Work every queue',
+        description: 'See every case in the company, in every department.',
+      },
+      {
+        value: PERMISSIONS.CASE_ASSIGN,
+        label: 'Assign cases',
+        description: 'Take a case, hand it to somebody else, or put it back.',
+      },
+      {
+        value: PERMISSIONS.CASE_UPDATE,
+        label: 'Move cases on',
+        description: 'Change a case\u2019s status and priority, and re-route a misfiled one.',
+      },
+      {
+        value: PERMISSIONS.CASE_RESPOND,
+        label: 'Reply to requesters',
+        description: 'Answer the person who raised a case you are working.',
+      },
+      {
+        value: PERMISSIONS.CASE_NOTE_INTERNAL,
+        label: 'Write internal notes',
+        description: 'Add a note the desk can see and the requester never can.',
+      },
+      {
+        value: PERMISSIONS.CASE_CATEGORY_MANAGE,
+        label: 'Configure the catalogue',
+        description: 'Add, rename and retire the queues cases are filed under.',
+      },
     ],
   },
   {
@@ -482,14 +555,26 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // line manager and a manager must not see somebody's treatment.
     PERMISSIONS.MEDICAL_CLAIM_APPROVE,
     // The helpdesk, from the employee's side. Everyone who works here raises
-    // cases, so every system role holds these four and nothing wider: there is
-    // no department-wide or company-wide case grant in phase 1, deliberately,
-    // so no role can be handed somebody else's cases before the agent side
-    // exists to justify it.
+    // cases, so every system role holds these four - and only these four. The
+    // grants that let somebody read a case they did not raise are the agent
+    // ones below, and they are handed out by name rather than arriving with a
+    // role, because working a queue is a job somebody is given.
     PERMISSIONS.CASE_READ_OWN,
     PERMISSIONS.CASE_CREATE,
     PERMISSIONS.CASE_REPLY_OWN,
     PERMISSIONS.CASE_REOPEN_OWN,
+    // And the desk, for the queue HR itself staffs. Department-wide rather than
+    // company-wide: an HR administrator answers the cases filed to HR, and a
+    // case somebody raised with IT about their laptop is not HR's to read.
+    // `case.read.all` is deliberately left to the Super Admin and to whichever
+    // role a company builds for the person who runs the whole helpdesk.
+    PERMISSIONS.CASE_READ_DEPARTMENT,
+    PERMISSIONS.CASE_ASSIGN,
+    PERMISSIONS.CASE_UPDATE,
+    PERMISSIONS.CASE_RESPOND,
+    PERMISSIONS.CASE_NOTE_INTERNAL,
+    // The catalogue is company configuration, and HR is who configures it.
+    PERMISSIONS.CASE_CATEGORY_MANAGE,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -522,10 +607,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // deciding a report's medical claim would mean reading their treatment.
     PERMISSIONS.MEDICAL_CLAIM_REQUEST,
     // The helpdesk, from the employee's side. Everyone who works here raises
-    // cases, so every system role holds these four and nothing wider: there is
-    // no department-wide or company-wide case grant in phase 1, deliberately,
-    // so no role can be handed somebody else's cases before the agent side
-    // exists to justify it.
+    // cases, so every system role holds these four - and only these four. The
+    // grants that let somebody read a case they did not raise are the agent
+    // ones below, and they are handed out by name rather than arriving with a
+    // role, because working a queue is a job somebody is given.
     PERMISSIONS.CASE_READ_OWN,
     PERMISSIONS.CASE_CREATE,
     PERMISSIONS.CASE_REPLY_OWN,
@@ -559,10 +644,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.MEDICAL_READ,
     PERMISSIONS.MEDICAL_CLAIM_REQUEST,
     // The helpdesk, from the employee's side. Everyone who works here raises
-    // cases, so every system role holds these four and nothing wider: there is
-    // no department-wide or company-wide case grant in phase 1, deliberately,
-    // so no role can be handed somebody else's cases before the agent side
-    // exists to justify it.
+    // cases, so every system role holds these four - and only these four. The
+    // grants that let somebody read a case they did not raise are the agent
+    // ones below, and they are handed out by name rather than arriving with a
+    // role, because working a queue is a job somebody is given.
     PERMISSIONS.CASE_READ_OWN,
     PERMISSIONS.CASE_CREATE,
     PERMISSIONS.CASE_REPLY_OWN,
