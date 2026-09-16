@@ -52,6 +52,8 @@ import { medicalRoutes } from './medical/medical.routes.js';
 import { medicalPolicyRoutes } from './medical/medical-policy.routes.js';
 import { medicalClaimRoutes } from './medical/medical-claims.routes.js';
 import { reportRoutes } from './reports/reports.routes.js';
+import { caseRoutes } from './cases/cases.routes.js';
+import { caseAttachmentRoutes } from './cases/case-attachments.routes.js';
 import {
   payrollDashboardRoutes,
   payrollReconciliationRoutes,
@@ -149,6 +151,14 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/medical/claims', plugin: medicalClaimRoutes },
   { prefix: '/medical', plugin: medicalRoutes },
   { prefix: '/reports', plugin: reportRoutes },
+
+  // --- phase 12: cases (employee helpdesk) ------------------------------
+  // Two plugins on one prefix, the same arrangement the employee photo uses:
+  // the attachment routes register raw-body content-type parsers, which are
+  // scoped to the plugin that adds them, and keeping them apart leaves the
+  // routes next door as plain JSON routes.
+  { prefix: '/cases', plugin: caseRoutes },
+  { prefix: '/cases', plugin: caseAttachmentRoutes },
 
   // --- phase 5+ ---------------------------------------------------------
   // { prefix: '/documents', plugin: documentRoutes },

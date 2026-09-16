@@ -111,6 +111,11 @@ const MedicalClaimsPage = lazyPage(
   () => import('@/features/medical/medical-claims-page'),
   'MedicalClaimsPage',
 );
+const CasesPage = lazyPage(() => import('@/features/cases/cases-page'), 'CasesPage');
+const CaseDetailPage = lazyPage(
+  () => import('@/features/cases/case-detail-page'),
+  'CaseDetailPage',
+);
 const MedicalPolicyPage = lazyPage(
   () => import('@/features/settings/medical-policy-page'),
   'MedicalPolicyPage',
@@ -370,6 +375,20 @@ export function AppRoutes() {
               medical.manage or medical.claim.approve. Submitting is gated again
               inside the screen on medical.claim.request. */}
           <Route path="medical/claims" element={<MedicalClaimsPage />} />
+        </Route>
+
+        {/* case.read.own is the whole gate, and in phase 1 it is genuinely a
+            gate onto ONE person's cases: the endpoints behind these screens are
+            pinned to the caller's own employee record and no data scope widens
+            them, so a manager opening this finds their own cases and no trace
+            of their team's. Raising a case is gated again inside the screen on
+            case.create, and the endpoint is the real gate either way. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.CASE_READ_OWN} />}>
+          <Route path="cases" element={<CasesPage />} />
+          {/* A guessed id answers 404 server-side, so this route cannot be used
+              to reach somebody else's case - the page renders its not-found
+              state, which says nothing about whether that case exists. */}
+          <Route path="cases/:id" element={<CaseDetailPage />} />
         </Route>
 
         {/* employee.read is the whole gate. Each block inside a row - pay,

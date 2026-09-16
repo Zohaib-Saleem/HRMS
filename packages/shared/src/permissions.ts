@@ -152,6 +152,25 @@ export const PERMISSIONS = {
   /// by holders of this grant instead.
   MEDICAL_CLAIM_APPROVE: 'medical.claim.approve',
 
+  // --- Cases (employee helpdesk) ---
+  /// See your OWN cases and nothing else. Deliberately named `.own`: there is
+  /// no data scope that widens it, because a wide scope is granted for
+  /// line-management reasons and a case is not a line-management matter. The
+  /// department-wide and company-wide grants an agent needs are a Phase 2
+  /// addition with their own keys, so nobody can be handed somebody else's
+  /// cases by accident in the meantime.
+  CASE_READ_OWN: 'case.read.own',
+  /// Raise a case for yourself. It carries no employee id at all, so this can
+  /// only ever produce the holder's own case.
+  CASE_CREATE: 'case.create',
+  /// Reply on a case you raised. Separate from `case.create` so a company can
+  /// stop new cases during a freeze without silencing the open ones.
+  CASE_REPLY_OWN: 'case.reply.own',
+  /// Reopen your own resolved or closed case. The one status change that
+  /// belongs to the requester: they are the only person who can tell whether
+  /// the thing is actually fixed.
+  CASE_REOPEN_OWN: 'case.reopen.own',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -326,6 +345,29 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     ],
   },
   {
+    key: 'cases',
+    label: 'Cases',
+    description: 'The employee helpdesk: raising a case, and following it.',
+    permissions: [
+      {
+        value: PERMISSIONS.CASE_READ_OWN,
+        label: 'View own cases',
+        description: 'See the cases you raised, and only those.',
+      },
+      { value: PERMISSIONS.CASE_CREATE, label: 'Raise a case', description: 'Open a case for yourself.' },
+      {
+        value: PERMISSIONS.CASE_REPLY_OWN,
+        label: 'Reply to own cases',
+        description: 'Add a reply and attach a file to a case you raised.',
+      },
+      {
+        value: PERMISSIONS.CASE_REOPEN_OWN,
+        label: 'Reopen own cases',
+        description: 'Reopen your own case when it was not actually fixed.',
+      },
+    ],
+  },
+  {
     key: 'governance',
     label: 'Governance',
     description: 'Audit trail and system settings.',
@@ -439,6 +481,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // HR decides claims, because the ordinary approval chain runs through a
     // line manager and a manager must not see somebody's treatment.
     PERMISSIONS.MEDICAL_CLAIM_APPROVE,
+    // The helpdesk, from the employee's side. Everyone who works here raises
+    // cases, so every system role holds these four and nothing wider: there is
+    // no department-wide or company-wide case grant in phase 1, deliberately,
+    // so no role can be handed somebody else's cases before the agent side
+    // exists to justify it.
+    PERMISSIONS.CASE_READ_OWN,
+    PERMISSIONS.CASE_CREATE,
+    PERMISSIONS.CASE_REPLY_OWN,
+    PERMISSIONS.CASE_REOPEN_OWN,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -470,6 +521,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // Their own claims, and only their own. Managers hold no claim.approve:
     // deciding a report's medical claim would mean reading their treatment.
     PERMISSIONS.MEDICAL_CLAIM_REQUEST,
+    // The helpdesk, from the employee's side. Everyone who works here raises
+    // cases, so every system role holds these four and nothing wider: there is
+    // no department-wide or company-wide case grant in phase 1, deliberately,
+    // so no role can be handed somebody else's cases before the agent side
+    // exists to justify it.
+    PERMISSIONS.CASE_READ_OWN,
+    PERMISSIONS.CASE_CREATE,
+    PERMISSIONS.CASE_REPLY_OWN,
+    PERMISSIONS.CASE_REOPEN_OWN,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -498,6 +558,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // change, the rules that decide their entitlement.
     PERMISSIONS.MEDICAL_READ,
     PERMISSIONS.MEDICAL_CLAIM_REQUEST,
+    // The helpdesk, from the employee's side. Everyone who works here raises
+    // cases, so every system role holds these four and nothing wider: there is
+    // no department-wide or company-wide case grant in phase 1, deliberately,
+    // so no role can be handed somebody else's cases before the agent side
+    // exists to justify it.
+    PERMISSIONS.CASE_READ_OWN,
+    PERMISSIONS.CASE_CREATE,
+    PERMISSIONS.CASE_REPLY_OWN,
+    PERMISSIONS.CASE_REOPEN_OWN,
   ],
 };
 

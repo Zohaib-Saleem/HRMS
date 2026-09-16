@@ -19,6 +19,7 @@ import { AttendanceToday } from '@/features/time/attendance-today';
 import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
 import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
+import { MyCasesCard } from '@/features/cases/my-cases-card';
 import { useAuthenticatedSession } from '@/features/auth/session-context';
 import { MyAttendanceBarsCard } from './my-attendance-bars-card';
 import { CompanyMoments } from './company-moments';
@@ -387,6 +388,7 @@ export function EmployeeDashboard() {
         <MyCorrectionsCard />
         <MyLoansCard />
         <MyMedicalCard />
+        <MyCasesCard />
       </div>
     </>
   );

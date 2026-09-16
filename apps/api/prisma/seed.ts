@@ -16,6 +16,7 @@ import {
   SYSTEM_ROLES,
   type SystemRoleKey,
 } from '@hrms/shared';
+import { seedCaseCatalogue } from '../src/modules/cases/case-catalogue.seed.js';
 
 const prisma = new PrismaClient();
 
@@ -180,6 +181,22 @@ async function main(): Promise<void> {
     teams.set(spec.name, team.id);
   }
   console.log(`  teams            ${teams.size}`);
+
+  // --- case catalogue -------------------------------------------------------
+  // The helpdesk's routing queues, hung off the departments created above.
+  //
+  // Additive and idempotent, like everything else here: it matches the seed's
+  // department NAMES against the aliases in the shared catalogue, so the ones
+  // that line up ("People Operations" is HR, "Finance" is Finance) get their
+  // queues and the ones that do not ("Engineering", "Customer Success") start
+  // empty for an administrator to fill in from the Phase 2 screen. Nothing here
+  // creates a department, and nothing here edits a category somebody changed.
+  const catalogue = await seedCaseCatalogue(prisma, company.id);
+  console.log(
+    `  case catalogue   ${catalogue.categoriesCreated} categories, ` +
+      `${catalogue.subcategoriesCreated} subcategories ` +
+      `(${catalogue.departmentsMatched} departments matched)`,
+  );
 
   // --- designations ---------------------------------------------------------
   const designationSpecs = [

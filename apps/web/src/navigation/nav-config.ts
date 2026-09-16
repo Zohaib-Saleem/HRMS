@@ -17,6 +17,7 @@ import {
   Fingerprint,
   HandCoins,
   HeartPulse,
+  Headset,
   LayoutDashboard,
   LifeBuoy,
   ClipboardPen,
@@ -264,6 +265,19 @@ export const NAV_SECTIONS: NavSection[] = [
         matchPrefix: true,
       },
       {
+        // The helpdesk, alongside Payslips, Loans and Medical, and for the same
+        // reason: every member of staff holds case.read.own and opens this to
+        // find their OWN cases. The endpoint behind it shows nobody else's,
+        // whatever data scope the caller has, so a manager finds their own here
+        // too and nothing of their team's.
+        label: 'Cases',
+        to: '/cases',
+        icon: Headset,
+        permission: PERMISSIONS.CASE_READ_OWN,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
         // The consolidated HR view: one row per employee, every module's figure
         // for that person. Gated on employee.read; the columns a reader may
         // fill are decided per block by the module that owns them.
@@ -353,6 +367,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/loans': 'Loans',
   '/medical': 'Medical',
   '/medical/claims': 'Medical claims',
+  '/cases': 'My cases',
   '/reports/employee-master': 'Employee Master Report',
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/loan-policy': 'Loan policy',

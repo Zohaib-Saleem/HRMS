@@ -21,3 +21,4 @@ export * from './dto/user.js';
 export * from './dto/docs.js';
 export * from './dto/reports.js';
 export * from './dto/company-moments.js';
+export * from './dto/cases.js';

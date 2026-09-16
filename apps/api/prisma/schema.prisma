@@ -369,6 +369,12 @@ model Company {
   // --- celebrations ---
   momentGreetings MomentGreeting[]
 
+  // --- cases (helpdesk) ---
+  caseCategories  CaseCategory[]
+  cases           Case[]
+  caseMessages    CaseMessage[]
+  caseAttachments CaseAttachment[]
+
   @@map("companies")
 }
 
@@ -397,6 +403,11 @@ model Department {
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   teams     Team[]
   employees Employee[] @relation("EmployeeDepartment")
+
+  /// The helpdesk queues filed under this department, and the cases in them.
+  /// A department is never copied into the cases module - it is pointed at.
+  caseCategories CaseCategory[]
+  cases          Case[]
 
   @@unique([companyId, name])
   @@index([companyId, isActive])
@@ -698,6 +709,9 @@ model Employee {
   greetingsReceived MomentGreeting[] @relation("MomentGreetingRecipient")
   greetingsSent     MomentGreeting[] @relation("MomentGreetingSender")
 
+  // --- cases (helpdesk) ---
+  casesRaised Case[] @relation("CaseRequester")
+
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
   @@index([companyId, employmentStatus])
@@ -805,6 +819,11 @@ model User {
   // --- phase 3 ---
   notifications       Notification[]
   passwordResetTokens PasswordResetToken[]
+
+  // --- cases (helpdesk) ---
+  casesAssigned    Case[]           @relation("CaseAssignee")
+  caseMessagesSent CaseMessage[]    @relation("CaseMessageSender")
+  caseAttachments  CaseAttachment[] @relation("CaseAttachmentUploader")
 
   @@unique([email])
   @@index([companyId, status])
@@ -963,6 +982,10 @@ enum NotificationType {
   SYSTEM
   /// A colleague greeted you on your birthday, work anniversary or first week.
   CELEBRATION
+  /// Something happened on a helpdesk case you raised: it was received, it
+  /// moved, or somebody replied. Its own type rather than SYSTEM so the
+  /// inbox can group it and a company can mute it without muting everything.
+  CASE_UPDATE
 }
 
 enum AttendanceStatus {
@@ -3691,4 +3714,296 @@ model MomentGreeting {
   @@index([recipientEmployeeId, occasion, occasionDate])
   @@index([companyId, occasionDate])
   @@map("moment_greetings")
+}
+
+// -------------------------------------------------------- cases (helpdesk)
+
+/// How badly a case needs attention, in the requester's own judgement.
+///
+/// Set by whoever raises the case and re-settable by an agent in phase 2. Four
+/// levels rather than three or five: three cannot separate "I am blocked" from
+/// "the building is on fire", and five produces a middle nobody can tell apart.
+enum CasePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/// Where a case is in its life.
+///
+/// Two of these are easy to confuse and mean opposite things about whose move
+/// it is, so they are stated here rather than left to a UI label:
+///
+///   PENDING  waiting on the REQUESTER. Nothing happens until they answer.
+///   ON_HOLD  waiting on anything else - a part, a vendor, a change window.
+///
+/// The transitions between them live in one place, `CASE_STATUS_TRANSITIONS` in
+/// `packages/shared/src/dto/cases.ts`, and the server refuses anything that map
+/// does not allow. Phase 1 uses exactly one edge of it - a requester reopening
+/// their own settled case - and defines the rest so phase 2 adds screens rather
+/// than columns.
+enum CaseStatus {
+  /// Raised and not yet picked up. Every new case starts here.
+  OPEN
+  IN_PROGRESS
+  /// Waiting on the requester.
+  PENDING
+  /// Waiting on something outside the team.
+  ON_HOLD
+  RESOLVED
+  CLOSED
+  /// Was settled, and came back. Deliberately its own status rather than a
+  /// return to OPEN: a case that has been through this once is not the same
+  /// thing as a case nobody has looked at, and a queue should be able to see
+  /// the difference.
+  REOPENED
+}
+
+/// One routing queue, as ordinary configuration rather than as an enum.
+///
+/// The tree is Department -> Category -> Subcategory, and it is TWO levels of
+/// this table under one existing department: a row with no parent is a
+/// category, a row with a parent is a subcategory of it. One self-referencing
+/// table rather than two, because the two levels carry identical fields and
+/// differ only in depth - and because a company that eventually wants a third
+/// level gets it without a migration.
+///
+/// The department is a real `departments` row, never a name copied in here. A
+/// helpdesk that kept its own department list would drift from the real one
+/// inside a release, and "IT" on a case would stop meaning the IT department.
+///
+/// Nothing here is seeded into the frontend. The web app renders whatever the
+/// catalogue endpoint returns and knows none of the names, so phase 2's admin
+/// screen is a CRUD form over this table and changes no other code.
+model CaseCategory {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// The existing department this queue belongs to.
+  departmentId String
+
+  /// Null for a category; set for a subcategory of that category.
+  parentCategoryId String?
+
+  name        String
+  description String?
+
+  /// Display order within its level. Ties fall back to name, so a catalogue
+  /// nobody has ordered still comes out the same way twice.
+  sortOrder Int @default(0)
+
+  /// Retired rather than deleted. A category with cases behind it cannot be
+  /// removed without orphaning them, and the history of why a case was routed
+  /// somewhere is worth more than a tidy list.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department Department     @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  parent     CaseCategory?  @relation("CaseCategoryTree", fields: [parentCategoryId], references: [id], onDelete: Cascade)
+  children   CaseCategory[] @relation("CaseCategoryTree")
+
+  casesAsCategory    Case[] @relation("CaseCategory")
+  casesAsSubcategory Case[] @relation("CaseSubcategory")
+
+  /// One name per level, per department.
+  ///
+  /// Honest about what this does and does not enforce: PostgreSQL treats NULLs
+  /// as distinct, so this constrains SUBCATEGORIES (which always have a parent)
+  /// and cannot constrain top-level categories, whose parent is null. Duplicate
+  /// top-level names are refused in the service layer instead - the same place
+  /// the department hierarchy refuses a cycle, and for the same reason: the
+  /// database cannot express the rule and pretending otherwise is worse than
+  /// stating where it lives.
+  @@unique([departmentId, parentCategoryId, name])
+  /// The catalogue endpoint's query: this company's live queues, in order.
+  @@index([companyId, isActive, sortOrder])
+  @@index([departmentId, isActive])
+  @@index([parentCategoryId])
+  @@map("case_categories")
+}
+
+/// One case: somebody asked for something to be done, and here is where it got to.
+///
+/// Not an approval. Every other request in this product ends in a decision, and
+/// the shared approval engine models exactly that; a case ends in work, and the
+/// states worth knowing about are the ones in the middle. Routing it through
+/// the approval chain would have produced a queue of PENDING approvals nobody
+/// could act on and a conversation with nowhere to live.
+///
+/// The requester is an EMPLOYEE and the assignee is a USER, and the asymmetry
+/// is deliberate rather than an oversight. A case is raised about somebody's
+/// working life, which is a fact about their employee record - their department,
+/// their manager, their payroll. It is worked by whoever is signed in and holds
+/// the grant, which is a fact about an account. Phase 1 never sets an assignee;
+/// the column is here so phase 2 fills it rather than migrating for it.
+model Case {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// The reference people quote: `CASE-2026-000001`. Generated per company from
+  /// the highest number issued in that YEAR, and unique within the company -
+  /// see the unique index below, which is what actually holds under a race.
+  ///
+  /// Deliberately not the id. The id is a cuid, which is right for a primary
+  /// key and unreadable down a phone line, and a case number is read aloud
+  /// constantly.
+  caseNumber String
+
+  /// Who raised it. The whole of the employee-side security story: every
+  /// employee query is pinned to this column, resolved from the session.
+  requesterEmployeeId String
+
+  /// Where it was filed. Carried on the case as well as on the category so a
+  /// queue can be re-parented later without rewriting the cases it holds, and
+  /// so the commonest list query - this department's open cases - is one index.
+  departmentId String
+
+  categoryId    String
+  /// Absent when the chosen category has no subcategories, which is ordinary.
+  subcategoryId String?
+
+  subject     String
+  description String
+
+  priority CasePriority @default(NORMAL)
+  status   CaseStatus   @default(OPEN)
+
+  /// Null until somebody picks it up. Nothing in phase 1 writes it.
+  assignedUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// When the last message was added, of any kind.
+  ///
+  /// Here because a reply does not otherwise touch this row, so `updatedAt`
+  /// would not move and a list sorted by "last updated" would show a case that
+  /// has been talked about all morning as untouched since it was raised.
+  lastMessageAt DateTime?
+
+  resolvedAt DateTime?
+  closedAt   DateTime?
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requester   Employee      @relation("CaseRequester", fields: [requesterEmployeeId], references: [id], onDelete: Cascade)
+  department  Department    @relation(fields: [departmentId], references: [id])
+  category    CaseCategory  @relation("CaseCategory", fields: [categoryId], references: [id])
+  subcategory CaseCategory? @relation("CaseSubcategory", fields: [subcategoryId], references: [id])
+  /// SetNull rather than Cascade: deleting the account of somebody who left
+  /// must not delete the cases they were working on.
+  assignedTo  User?         @relation("CaseAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+
+  messages    CaseMessage[]
+  attachments CaseAttachment[]
+
+  /// One case number per company. The generator reads the highest so far, so
+  /// this index is what actually guarantees uniqueness under a race - the
+  /// generator retries on it rather than trusting its own read.
+  @@unique([companyId, caseNumber])
+  /// The employee's own list, filtered and sorted. Their whole side of the
+  /// module is this index.
+  @@index([requesterEmployeeId, status, createdAt])
+  @@index([companyId, status, createdAt])
+  /// Phase 2's queue: a department's open cases, worst first.
+  @@index([companyId, departmentId, status, priority])
+  @@index([companyId, categoryId])
+  @@index([assignedUserId, status])
+  @@index([companyId, updatedAt])
+  @@map("cases")
+}
+
+/// One message on a case. The conversation, and the audit trail people read.
+///
+/// `isInternal` is what makes this table usable by both sides of the desk. A
+/// note an agent writes to another agent lives in the same thread as the
+/// replies it is about, because a note that scrolls somewhere else is a note
+/// nobody reads - and it is filtered out of every employee-facing query rather
+/// than hidden at render time, so it is absent from the response, not merely
+/// invisible in it. Phase 2 exposes the UI for writing one; the employee
+/// endpoints write `false` unconditionally and take no flag from the body.
+model CaseMessage {
+  id        String @id @default(cuid())
+  companyId String
+  caseId    String
+
+  /// Who wrote it. Null for a message the system wrote about itself - a status
+  /// change, say - which is why these are one stream rather than two tables.
+  senderUserId String?
+
+  message String
+
+  /// Staff-only. Never true on anything an employee is sent.
+  isInternal Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  case    Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sender  User?   @relation("CaseMessageSender", fields: [senderUserId], references: [id], onDelete: SetNull)
+
+  attachments CaseAttachment[]
+
+  /// How a case detail reads its thread: this case, oldest first, and - for an
+  /// employee - only the messages that are not notes.
+  @@index([caseId, isInternal, createdAt])
+  @@index([companyId, createdAt])
+  @@map("case_messages")
+}
+
+/// A file on a case.
+///
+/// The bytes live in the object store, exactly as an employee photo does, and
+/// this row is the only thing that knows where. Four rules hold it together:
+///
+///   - `objectKey` is generated server-side from a UUID and is never built from
+///     anything a client sent. `fileName` is a LABEL - what to show and what to
+///     put in Content-Disposition - and has no bearing on where the file lives,
+///     so a hostile name has nowhere to land.
+///   - `contentType` is sniffed from the file's own leading bytes, not taken
+///     from the request, and it is the type the file is served back as.
+///   - the key is never sent to a browser. Downloads go through an endpoint
+///     that re-checks the case against the caller, so a file is exactly as
+///     private as the case it belongs to.
+///   - `isInternal` mirrors the message it arrived on, so a file attached to a
+///     note is as invisible to the requester as the note is.
+model CaseAttachment {
+  id        String @id @default(cuid())
+  companyId String
+  caseId    String
+
+  /// The reply it arrived with. Null when it was attached to the case itself,
+  /// which is what the create form does.
+  messageId String?
+
+  uploadedByUserId String?
+
+  /// The display name, sanitised. Never a path and never used to build one.
+  fileName    String
+  /// Sniffed from the bytes. What the file is served back as.
+  contentType String
+  sizeBytes   Int
+
+  /// Object-store key, e.g. `case-attachments/<companyId>/<caseId>/<uuid>.pdf`.
+  /// Never a filesystem path, and never sent to a browser.
+  objectKey String
+
+  /// Attached to a staff-only note. Filtered out of employee responses.
+  isInternal Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  case       Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  message    CaseMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  uploadedBy User?        @relation("CaseAttachmentUploader", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  /// The detail view's read, and the per-case count the upload limit checks.
+  @@index([caseId, isInternal, createdAt])
+  @@index([messageId])
+  @@index([companyId, createdAt])
+  @@map("case_attachments")
 }
