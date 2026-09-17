@@ -46,6 +46,7 @@ import { EmployeeLoans } from '@/features/loans/employee-loans';
 import { EmployeeLeave } from '@/features/leave/employee-leave';
 import { EmployeePayrollHistory } from '@/features/payroll/employee-payroll-history';
 import { EmployeeAttendanceViews } from '@/features/time/employee-attendance-views';
+import { EmployeeTimeline } from './employee-timeline';
 import { cn } from '@/lib/utils';
 
 const STATUS_TONE: Record<EmployeeStatus, 'success' | 'warning' | 'destructive' | 'neutral'> = {
@@ -79,6 +80,7 @@ const TABS = [
   'Salary & Payroll',
   'Contracts & Policies',
   'Education & Experience',
+  'Timeline',
   'Reports',
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -350,6 +352,17 @@ export function EmployeeDetailPage() {
         </div>
       ) : null}
       {tab === 'Education & Experience' ? <ExperienceTab employee={employee} /> : null}
+      {tab === 'Timeline' ? (
+        <EmployeeTimeline
+          employeeId={employee.id}
+          employeeName={employee.fullName}
+          photoUrl={employee.photoUrl}
+          // The drawer's "Open ..." button lands the reader on the tab that owns
+          // the record. Every TimelineLinkTab is one of TABS, so this cannot
+          // send them somewhere the row does not offer.
+          onOpenTab={(target) => setTab(target)}
+        />
+      ) : null}
       {tab === 'Reports' ? <ReportsTab employee={employee} onOpen={(rid) => navigate(`/people/${rid}`)} /> : null}
 
       <EmployeeFormDrawer open={editing} employee={employee} onClose={() => setEditing(false)} />

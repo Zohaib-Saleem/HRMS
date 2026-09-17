@@ -11,6 +11,7 @@ import {
   employeeInputSchema,
   employeeUpdateSchema,
   employeeQuerySchema,
+  employeeTimelineQuerySchema,
   idParamSchema,
   isExitStatus,
   resignEmployeeSchema,
@@ -25,6 +26,7 @@ import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { restoreUser, suspendUser } from '../users/users.service.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import { employeeProfileSummary } from './employee-profile.service.js';
+import { employeeTimeline } from './employee-timeline.service.js';
 import {
   DETAIL_INCLUDE,
   LIST_INCLUDE,
@@ -298,6 +300,33 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     if (!exists) throw new NotFoundError('Employee');
 
     return reply.send({ data: await employeeProfileSummary(auth, id) });
+  });
+
+  /**
+   * The Timeline tab: this person's history, in order.
+   *
+   * A pure read across the modules that already hold it - no timeline table,
+   * no write, and nothing recorded by the act of opening it. `employee.read`
+   * and the data scope get the caller to the profile; every category inside is
+   * then gated on its own module's permission and OMITTED when they lack it,
+   * so this endpoint can never show somebody a salary, a claim or a loan they
+   * could not already open directly. See `employee-timeline.service.ts`.
+   */
+  app.get('/:id/timeline', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const { id } = parseOrThrow(idParamSchema, request.params);
+    const query = parseOrThrow(employeeTimelineQuerySchema, request.query);
+
+    await assertEmployeeInScope(auth, id);
+
+    const exists = await prisma.employee.findFirst({
+      where: { id, companyId: auth.companyId },
+      select: { id: true },
+    });
+    if (!exists) throw new NotFoundError('Employee');
+
+    const page = await employeeTimeline(auth, id, query);
+    return reply.send(page);
   });
 
   app.post(

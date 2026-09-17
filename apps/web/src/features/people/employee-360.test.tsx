@@ -212,6 +212,22 @@ beforeEach(() => {
   vi.mocked(api.getPage).mockImplementation(() =>
     Promise.resolve({ data: [], meta: { page: 1, limit: 50, total: 0, pages: 0 } } as never),
   );
+
+  // The Timeline tab is the one section that answers with its own envelope.
+  vi.mocked(api.getEnvelope).mockImplementation(() =>
+    Promise.resolve({
+      data: [],
+      meta: {
+        limit: 20,
+        order: 'desc',
+        total: 0,
+        hasMore: false,
+        nextCursor: null,
+        years: [],
+        categories: [],
+      },
+    } as never),
+  );
 });
 
 afterEach(() => {
@@ -234,6 +250,7 @@ describe('Employee 360 profile', () => {
       'Salary & Payroll',
       'Contracts & Policies',
       'Education & Experience',
+      'Timeline',
       'Reports',
     ]) {
       expect(within(tabs).getByRole('button', { name: new RegExp(`^${escape(label)}`) })).toBeInTheDocument();
@@ -284,6 +301,33 @@ describe('Employee 360 profile', () => {
     expect(
       screen.getByText(/Leave taken before the system was in use, or tracked elsewhere/),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * The Timeline tab is offered to anybody who can open the profile at all.
+   *
+   * Unlike Salary or Loans it has no grant of its own to hide behind, and it
+   * needs none: what a reader sees inside it is decided category by category
+   * by the API, using each module's own permission. A reader with nothing but
+   * `employee.read` still gets a timeline - it is simply their employment
+   * history and nothing financial.
+   */
+  it('offers the timeline to a reader who holds only employee.read', async () => {
+    permissions = new Set(['employee.read']);
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Awais Zahid' });
+
+    const tabs = screen.getByRole('navigation', { name: 'Employee sections' });
+    expect(within(tabs).getByRole('button', { name: /^Timeline/ })).toBeInTheDocument();
+  });
+
+  it('says a timeline with nothing in it is empty, rather than showing a blank card', async () => {
+    renderProfile();
+    await screen.findByRole('heading', { name: 'Awais Zahid' });
+
+    await userEvent.click(screen.getByRole('button', { name: /^Timeline/ }));
+
+    expect(await screen.findByText('No history is available yet.')).toBeInTheDocument();
   });
 
   it('keeps education on the profile and lets HR correct it', async () => {
