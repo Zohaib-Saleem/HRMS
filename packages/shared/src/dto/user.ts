@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { passwordSchema } from './auth.js';
 import { paginationQuerySchema } from './common.js';
 
 /** Login accounts: creation, linking, roles, suspension and sessions. */
@@ -148,6 +149,67 @@ export interface PasswordResetSendResult {
    * so it is safe to put in front of an administrator.
    */
   errorCode?: string;
+}
+
+/**
+ * Setting somebody else's password, for handing over in person.
+ *
+ * The deliberate exception to "this module never handles a password", and the
+ * shape encodes why it is survivable: whatever is set here is temporary. The
+ * route writes `mustChangePassword` with it, so the value below stops working
+ * the first time the person signs in and chooses their own.
+ */
+export const userSetPasswordSchema = z.object({
+  /**
+   * Omit it and the server generates a passphrase.
+   *
+   * Generating is the better path and the form offers it first: a passphrase
+   * from the CSPRNG is stronger than what an administrator in a hurry types,
+   * and - more to the point - it is not a password that person already uses
+   * somewhere else. A typed value is still allowed, held to the same
+   * `passwordSchema` as every other password in the system, because an
+   * administrator sitting beside a new joiner sometimes needs to agree on
+   * something out loud.
+   */
+  password: passwordSchema.optional(),
+  /**
+   * The administrator has read what this does.
+   *
+   * Required by the API and not only by the form, exactly as on the email
+   * change: this ends every session the person has, kills their unused reset
+   * links, and puts a working password in somebody else's hands. A mis-click
+   * must not be enough.
+   */
+  acknowledged: z.literal(true, {
+    errorMap: () => ({
+      message: 'Confirm that you understand you will be able to see and use this password.',
+    }),
+  }),
+});
+export type UserSetPasswordInput = z.infer<typeof userSetPasswordSchema>;
+
+/**
+ * What `POST /users/:id/set-password` reports back.
+ *
+ * `password` is the ONE place in this system a password crosses the wire
+ * outwards, and it is returned exactly once, in the response to the request
+ * that set it. It is not stored in the audit trail, not readable from any GET,
+ * and not recoverable afterwards: an administrator who loses it sets another.
+ */
+export interface UserSetPasswordResult {
+  password: string;
+  /** False when the administrator supplied the password themselves. */
+  generated: boolean;
+  /** Always true. The person must choose their own at next sign-in. */
+  mustChangePassword: boolean;
+  /** Sessions ended by the change - anyone signed in as them is now out. */
+  revokedSessions: number;
+  /** Unused reset links retired, so an older emailed link cannot outlive this. */
+  retiredResetTokens: number;
+  /** `ACTIVE` after the call. An INVITED account is activated by it. */
+  status: UserStatus;
+  /** True when this call is what activated a still-INVITED account. */
+  activated: boolean;
 }
 
 export const userRolesSchema = z.object({

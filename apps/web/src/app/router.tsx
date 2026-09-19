@@ -7,6 +7,7 @@ import { AppShell } from '@/components/layout/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState, ErrorState, FullPageLoader } from '@/components/feedback/states';
+import { ForcePasswordChangePage } from '@/features/auth/force-password-change-page';
 import { useSession } from '@/features/auth/session-context';
 import { LoginPage } from '@/features/auth/login-page';
 import { DashboardPage } from '@/features/dashboard/dashboard-page';
@@ -272,6 +273,23 @@ function ProtectedRoutes() {
   if (!session) {
     return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />;
   }
+
+  /**
+   * A password somebody else chose does not get to browse the app.
+   *
+   * Placed here, above every route rather than on any of them, because the
+   * alternative is enumerating the screens that should be protected and being
+   * wrong about one. `mustChangePassword` is set by
+   * `scripts/create-employee-logins.mjs` and by `POST /users/:id/set-password`,
+   * and is cleared by `PATCH /me/password` and by completing a reset - so the
+   * flag genuinely means "the person signed in did not choose this password",
+   * and nothing behind this line should be visible to that session.
+   *
+   * The API is NOT relying on this: it is a gate on the screens, not on the
+   * data. Every endpoint keeps its own permission checks, which is what makes
+   * this safe to state as a UI rule.
+   */
+  if (session.user.mustChangePassword) return <ForcePasswordChangePage />;
 
   return <AppShell />;
 }

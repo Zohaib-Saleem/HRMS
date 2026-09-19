@@ -3,7 +3,17 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
-import { AtSign, KeyRound, Plus, ShieldOff, UserCheck, UserPlus, Users } from 'lucide-react';
+import {
+  AtSign,
+  Check,
+  Copy,
+  KeyRound,
+  Plus,
+  ShieldOff,
+  UserCheck,
+  UserPlus,
+  Users,
+} from 'lucide-react';
 import {
   PERMISSIONS,
   USER_STATUSES,
@@ -11,6 +21,7 @@ import {
   USER_SUSPENSION_REASON_LABELS,
   userCreateSchema,
   userEmailChangeSchema,
+  userSetPasswordSchema,
   type LinkableEmployee,
   type PasswordResetSendResult,
   type UserCreateInput,
@@ -18,6 +29,8 @@ import {
   type UserEmailChangeInput,
   type UserEmailChangeResult,
   type UserRecord,
+  type UserSetPasswordInput,
+  type UserSetPasswordResult,
   type UserStatus,
 } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
@@ -490,6 +503,7 @@ function UserDetailDrawer({
   const { session } = useSession();
   const [editingRoles, setEditingRoles] = React.useState(false);
   const [changingEmail, setChangingEmail] = React.useState(false);
+  const [settingPassword, setSettingPassword] = React.useState(false);
 
   const query = useQuery({
     queryKey: ['user', userId],
@@ -788,6 +802,21 @@ function UserDetailDrawer({
                     <KeyRound />
                     Send reset link
                   </Button>
+                  {/*
+                    Its own permission, so this sits in its own <Can> rather
+                    than inside the user.manage block around it: an HR
+                    administrator sees "Send reset link" and not this.
+                  */}
+                  <Can permission={PERMISSIONS.USER_PASSWORD_MANAGE}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSettingPassword(true)}
+                    >
+                      <KeyRound />
+                      Set password
+                    </Button>
+                  </Can>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -831,6 +860,14 @@ function UserDetailDrawer({
         onSaved={refresh}
       />
     ) : null}
+
+    {user && settingPassword ? (
+      <SetPasswordDialog
+        user={user}
+        onClose={() => setSettingPassword(false)}
+        onSaved={refresh}
+      />
+    ) : null}
     </>
   );
 }
@@ -847,6 +884,262 @@ function UserDetailDrawer({
  *
  * Exported for its test. It is rendered only from the detail drawer.
  */
+/**
+ * Setting somebody's password, then showing it exactly once.
+ *
+ * Two phases in one dialog, and the split is the point. Before: a form that
+ * makes an administrator say what they are doing. After: the value, large
+ * enough to read off a screen to somebody standing next to you, with no way
+ * back to it once the dialog closes - because there is no way back to it on
+ * the server either.
+ *
+ * Generating is offered first and typing second. An administrator inventing a
+ * password on the spot reaches for one they already use, and that one ends up
+ * in a WhatsApp message.
+ */
+export function SetPasswordDialog({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: UserDetail;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [mode, setMode] = React.useState<'generate' | 'type'>('generate');
+  const [result, setResult] = React.useState<UserSetPasswordResult | null>(null);
+  const [copied, setCopied] = React.useState(false);
+
+  const { register, handleSubmit, formState, setError, watch, resetField } =
+    useForm<UserSetPasswordInput>({
+      resolver: zodResolver(userSetPasswordSchema),
+      defaultValues: {
+        password: undefined,
+        // Never pre-ticked, exactly as on the email change. The point is the click.
+        acknowledged: undefined as unknown as true,
+      },
+    });
+
+  const mutation = useMutation({
+    mutationFn: (values: UserSetPasswordInput) =>
+      api.post<UserSetPasswordResult>(`/users/${user.id}/set-password`, values),
+    onSuccess: async (data) => {
+      setResult(data);
+      // The list behind the dialog is stale the moment this returns - the
+      // account may have been activated and its sessions are gone.
+      await onSaved();
+    },
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.isValidation && error.details) {
+        for (const [field, messages] of Object.entries(error.details)) {
+          if (field === '_') {
+            toast.error(messages[0]);
+            continue;
+          }
+          setError(field as keyof UserSetPasswordInput, { message: messages[0] });
+        }
+        return;
+      }
+      toast.error(errorMessage(error));
+    },
+  });
+
+  const copy = async () => {
+    if (!result) return;
+    try {
+      await navigator.clipboard.writeText(result.password);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // A denied clipboard is not a failure worth a red toast: the password is
+      // on screen in selectable text, which is the fallback.
+      toast.message('Copy it from the box above.');
+    }
+  };
+
+  const acknowledged = watch('acknowledged') === true;
+
+  if (result) {
+    return (
+      <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+        <DialogContent size="md">
+          <DialogHeader>
+            <DialogTitle>Password set for {user.fullName}</DialogTitle>
+            <DialogDescription>
+              Give this to them now. It is not stored anywhere and this is the only time it will
+              be shown.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody className="space-y-4">
+            <div className="rounded-md border border-border bg-muted/40 p-3">
+              <p className="text-[12px] text-muted-foreground">
+                Temporary password for {user.email}
+              </p>
+              <div className="mt-1.5 flex items-start gap-2">
+                <code
+                  className="min-w-0 flex-1 break-all font-mono text-[15px] font-semibold leading-relaxed"
+                  data-testid="issued-password"
+                >
+                  {result.password}
+                </code>
+                <Button type="button" variant="outline" size="sm" onClick={() => void copy()}>
+                  {copied ? <Check /> : <Copy />}
+                  {copied ? 'Copied' : 'Copy'}
+                </Button>
+              </div>
+            </div>
+
+            <ul className="space-y-1.5 text-[12.5px] text-muted-foreground">
+              <li>
+                They will be asked to choose their own password the first time they sign in, and
+                this one stops working then.
+              </li>
+              {result.revokedSessions > 0 ? (
+                <li>
+                  {result.revokedSessions} active session
+                  {result.revokedSessions === 1 ? ' was' : 's were'} ended, so any device they were
+                  signed in on has been signed out.
+                </li>
+              ) : null}
+              {result.retiredResetTokens > 0 ? (
+                <li>
+                  {result.retiredResetTokens} unused reset link
+                  {result.retiredResetTokens === 1 ? '' : 's'} stopped working.
+                </li>
+              ) : null}
+              {result.activated ? (
+                <li>The invited account is now active, so they can sign in.</li>
+              ) : null}
+            </ul>
+          </DialogBody>
+
+          <DialogFooter>
+            <Button onClick={onClose}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent size="md">
+        <form
+          onSubmit={handleSubmit((values) =>
+            mutation.mutate(
+              mode === 'generate' ? { acknowledged: values.acknowledged } : values,
+            ),
+          )}
+          className="contents"
+        >
+          <DialogHeader>
+            <DialogTitle>Set a password</DialogTitle>
+            <DialogDescription>
+              For handing over in person when email cannot reach them. They will have to choose
+              their own the first time they sign in.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody className="space-y-4">
+            <div className="rounded-md border border-border bg-muted/40 p-3 text-[13px]">
+              <p className="text-[12px] text-muted-foreground">Account</p>
+              <p className="truncate font-medium">{user.fullName}</p>
+              <p className="truncate text-[12px] text-muted-foreground">{user.email}</p>
+            </div>
+
+            <div className="grid gap-2">
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border p-2.5 text-[13px]">
+                <input
+                  type="radio"
+                  name="pwmode"
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--primary)]"
+                  checked={mode === 'generate'}
+                  onChange={() => {
+                    setMode('generate');
+                    resetField('password');
+                  }}
+                />
+                <span className="min-w-0">
+                  <span className="font-medium">Generate one</span>
+                  <span className="block text-[12px] text-muted-foreground">
+                    Four words and a number, easy to read out and hard to guess. Recommended.
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border p-2.5 text-[13px]">
+                <input
+                  type="radio"
+                  name="pwmode"
+                  className="mt-0.5 size-4 shrink-0 accent-[var(--primary)]"
+                  checked={mode === 'type'}
+                  onChange={() => setMode('type')}
+                />
+                <span className="min-w-0">
+                  <span className="font-medium">Type one</span>
+                  <span className="block text-[12px] text-muted-foreground">
+                    Use only something you agree on the spot. Never one of your own passwords.
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            {mode === 'type' ? (
+              <FormField
+                label="Password"
+                htmlFor="set-password"
+                error={formState.errors.password?.message}
+                hint="At least 10 characters, with a letter and a number."
+                required
+              >
+                <Input
+                  id="set-password"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoFocus
+                  {...register('password')}
+                />
+              </FormField>
+            ) : null}
+
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-border p-2.5 text-[13px]">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 shrink-0 rounded border-input accent-[var(--primary)]"
+                {...register('acknowledged')}
+              />
+              <span className="min-w-0">
+                <span className="font-medium">I understand I will see this password</span>
+                <span className="block text-[12px] text-muted-foreground">
+                  It ends every session {user.firstName} has, stops their unused reset links, and
+                  puts a working password in your hands until they change it.
+                </span>
+              </span>
+            </label>
+            {formState.errors.acknowledged?.message ? (
+              <p className="text-[12.5px] text-destructive">
+                {formState.errors.acknowledged.message}
+              </p>
+            ) : null}
+          </DialogBody>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={mutation.isPending} disabled={!acknowledged}>
+              <KeyRound />
+              Set password
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function ChangeEmailDialog({
   user,
   onClose,

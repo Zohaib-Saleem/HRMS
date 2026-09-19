@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { FormField, Input } from '@/components/ui/field';
 
 /** Shared chrome so both reset screens match the login page. */
-function AuthShell({ children }: { children: React.ReactNode }) {
+export function AuthShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background px-5 py-12">
       <div className="w-full max-w-sm">

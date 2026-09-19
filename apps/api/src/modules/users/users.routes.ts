@@ -7,6 +7,7 @@ import {
   userEmailChangeSchema,
   userQuerySchema,
   userRolesSchema,
+  userSetPasswordSchema,
   userSuspendSchema,
   userUpdateSchema,
   type LinkableEmployee,
@@ -15,6 +16,7 @@ import {
   type PasswordResetSendResult,
   type UserRecord,
   type UserSessionRecord,
+  type UserSetPasswordResult,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
@@ -24,6 +26,8 @@ import { ConflictError, NotFoundError, ValidationError } from '../../core/errors
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { revokeAllUserSessions } from '../../auth/session.js';
 import { requestPasswordReset } from '../../auth/password-reset.service.js';
+import { hashPassword } from '../../auth/password.js';
+import { generatePassphrase } from '../../auth/passphrase.js';
 import {
   USER_INCLUDE,
   USER_OMIT,
@@ -37,20 +41,32 @@ import {
 /**
  * Login account administration.
  *
- * Two things this module never does, and the reasons matter more than the
+ * What this module does with passwords, and the reasons matter more than the
  * rules:
  *
- *   - **It never handles a password.** Not on create, not on reset, not as a
- *     temporary value an administrator reads out over the phone. A new account
- *     is INVITED with no usable password and the person sets their own through
- *     the ordinary reset link. An administrator therefore never knows anybody's
- *     password, which is the only way that statement stays true.
+ *   - **`user.manage` never handles a password.** Not on create, not on reset.
+ *     A new account is INVITED with no usable password and the person sets
+ *     their own through the ordinary reset link. An HR administrator holding
+ *     `user.manage` therefore never knows anybody's password.
  *
- *   - **It never returns authentication material.** The serialiser below does
- *     not select `passwordHash`, and there is no field for it, a placeholder
- *     for it, or a boolean about it anywhere in the response shape.
+ *   - **`user.password.manage` is the one exception, and it is a separate
+ *     permission for that reason.** `POST /:id/set-password` sets a temporary
+ *     password and returns it once, so somebody can be given it face to face.
+ *     It exists because a deployment whose mail transport delivers nothing -
+ *     which is this one - cannot onboard anybody through a reset link, and an
+ *     employee who cannot sign in is not a security posture, it is a company
+ *     that does not work. What keeps it survivable is not trust: the route
+ *     writes `mustChangePassword` with the hash, so the value it hands back is
+ *     dead the moment the recipient uses it, and it ends every session and
+ *     every unused reset link on the way. No default role receives the
+ *     permission, so it lands on `SUPER_ADMIN` alone.
  *
- * Everything here is behind `user.read` / `user.manage`, which only the
+ *   - **The password is never READABLE, only settable.** It appears in exactly
+ *     one response, to the request that generated it. The serialiser below does
+ *     not select `passwordHash`, no GET returns it, and the audit trail records
+ *     that a password was set and by whom - never the value.
+ *
+ * Everything else here is behind `user.read` / `user.manage`, which only the
  * administrator roles hold. A manager gains nothing from managing people.
  */
 
@@ -822,4 +838,136 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
 
     return reply.send({ data: result });
   });
+
+  // ----------------------------------------------------- set a password
+
+  /**
+   * Sets a temporary password and returns it once.
+   *
+   * Behind its own permission, which no default role carries - see the note at
+   * the top of this file for why it exists at all. The shape of the thing is:
+   * an administrator is handed a value they can read out, and that value is
+   * already dying when they read it.
+   *
+   * Four writes, and each one is here for a failure it prevents:
+   *
+   *   - `passwordHash` and `mustChangePassword: true` together, never apart.
+   *     Apart, this endpoint would be "an administrator can set a password
+   *     somebody keeps using", which is a different and much worse feature.
+   *   - `failedLoginCount` and `lockedUntil` cleared, because the usual reason
+   *     somebody needs this is that they have been locked out, and leaving the
+   *     lock in place would hand them a password that does not work.
+   *   - `status` INVITED -> ACTIVE, because `authenticate()` refuses every
+   *     status but ACTIVE, so setting a password on an INVITED account without
+   *     this would produce credentials that cannot sign in. It is reported in
+   *     the response and named in the audit summary rather than done quietly.
+   *   - unused reset tokens retired, so a link issued earlier cannot be used
+   *     to set a third password behind the administrator's back.
+   *
+   * Then every session ends. Anyone currently signed in as this person - the
+   * person themselves, or whoever the administrator is locking out - is out.
+   */
+  app.post(
+    '/:id/set-password',
+    { preHandler: requirePermission(PERMISSIONS.USER_PASSWORD_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const input = parseOrThrow(userSetPasswordSchema, request.body);
+
+      /*
+       * Your own password is changed from your own profile, with your current
+       * one, through `PATCH /me/password`. Doing it here would end every
+       * session you hold - including the one making the request - and set
+       * `mustChangePassword` on yourself, so the screen you would use to undo
+       * it is behind the gate you just closed.
+       */
+      assertNotSelf(auth.userId, id, 'set the password of');
+
+      const user = await prisma.user.findFirst({
+        where: { id, companyId: auth.companyId },
+        select: { id: true, email: true, status: true },
+      });
+      if (!user) throw new NotFoundError('User');
+
+      /*
+       * A suspended account is refused rather than quietly given a working
+       * password, matching `send-reset`. Restoring is a decision with its own
+       * button, its own audit line, and its own reason for being taken; it
+       * must not be reachable as a side effect of handing somebody a password.
+       */
+      if (user.status === 'SUSPENDED') {
+        throw new ConflictError(
+          'That account is suspended. Restore it before setting a password.',
+        );
+      }
+
+      const generated = input.password === undefined;
+      const password = input.password ?? generatePassphrase();
+      const activated = user.status === 'INVITED';
+
+      const passwordHash = await hashPassword(password);
+
+      const retiredResetTokens = await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id },
+          data: {
+            passwordHash,
+            mustChangePassword: true,
+            failedLoginCount: 0,
+            lockedUntil: null,
+            ...(activated ? { status: 'ACTIVE' as const } : {}),
+          },
+        });
+        const retired = await tx.passwordResetToken.updateMany({
+          where: { userId: id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+        return retired.count;
+      });
+
+      const revokedSessions = await revokeAllUserSessions(id);
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'user.password.set',
+        entityType: 'User',
+        entityId: id,
+        /*
+         * What happened and to whom. NOT the password, not its length, not
+         * whether it was typed or generated in a form somebody could correlate
+         * with a clock - the audit trail is read by more people than held the
+         * permission, and none of them need anything that narrows a guess.
+         */
+        summary: `Set a temporary password for ${user.email}; ended ${revokedSessions} session${
+          revokedSessions === 1 ? '' : 's'
+        }${activated ? '; activated the invited account' : ''}`,
+        after: {
+          mustChangePassword: true,
+          revokedSessions,
+          retiredResetTokens,
+          status: activated ? 'ACTIVE' : user.status,
+        },
+        request,
+      });
+
+      /*
+       * The only time this value leaves the server. There is no GET that can
+       * return it and no second chance to read it: losing it means setting
+       * another one, which is cheap and leaves its own audit line.
+       */
+      const result: UserSetPasswordResult = {
+        password,
+        generated,
+        mustChangePassword: true,
+        revokedSessions,
+        retiredResetTokens,
+        status: activated ? 'ACTIVE' : (user.status as UserSetPasswordResult['status']),
+        activated,
+      };
+
+      return reply.send({ data: result });
+    },
+  );
 };
