@@ -81,7 +81,8 @@ and a Cliq-style social bar (Chats, Channels, Threads, Contacts).
 | Data Administration (import/export/audit) | Yes | **KEEP** |
 | Social feeds, Chats, Channels, Threads | Yes | **EXCLUDE** |
 | Performance / Appraisals | **No** | **KEEP** (our own requirement) |
-| Recruitment / ATS | **No** | **EXCLUDE** |
+| Recruitment / ATS | **No** | **BUILT** (reversed: it was excluded, then built as our own requirement) |
+| Asset management (equipment issued to staff) | **No** | **BUILT** (our own requirement — see the [asset guide](HRMS-ASSET-GUIDE.md)) |
 | Expenses | **No** | **OPTIONAL** (our own requirement) |
 | Learning / LMS | No | **EXCLUDE** |
 | Marketplace, Developer Space, Zia AI | Yes | **EXCLUDE** |
@@ -522,6 +523,11 @@ specification before they are built:
 | **Expenses** | Expense categories, claim limits, approval chain, reimbursement process |
 | **Leave policy** | Accrual rates, carry-forward caps, probation rules, encashment |
 | **Attendance policy** | Grace period, half-day threshold, minimum hours, overtime eligibility |
+
+~~**Asset management**~~ — answered by building it. It was never in the reference and had no
+specification; the design is recorded in the [asset guide](HRMS-ASSET-GUIDE.md). The two decisions
+everything else follows from: an asset's *status* and its *condition* are separate columns, and who
+holds it is a history of handovers rather than a field on the asset.
 
 ---
 

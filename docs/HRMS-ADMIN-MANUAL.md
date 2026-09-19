@@ -453,7 +453,7 @@ the absence of buttons.
 
 ### Device security
 
-See the [device guide](HRMS-DEVICE-GUIDE.md#5-security). In short: `/iclock` is
+See the [device guide](HRMS-DEVICE-GUIDE.md#6-security). In short: `/iclock` is
 the only unauthenticated surface, gated on a registered serial plus an optional
 encrypted path token plus an optional network allow-list; the token is redacted
 from logs; and no route there can read data back out or command a device.
@@ -1238,3 +1238,154 @@ That entry is what somebody reads a month later when a cash box did not balance:
 Menu items are **retired, never deleted**, and order lines carry the name and
 price they were placed at. Putting the karahi up by fifty rupees changes new
 orders only; it cannot rewrite what was collected last Tuesday.
+
+---
+
+## 17. Assets
+
+The company's equipment, who is holding it, and what happened to it. This is the
+operator's walkthrough; the [asset guide](HRMS-ASSET-GUIDE.md) is the complete
+reference, including every status transition and every endpoint.
+
+### Three screens
+
+**Asset dashboard** — what needs attention today. **Assets** — the register.
+**Asset reports** — the register as a sheet, and everything anybody is holding.
+Plus **Settings → Asset management** for the category catalogue.
+
+### The two things to understand first
+
+**Status and condition are different questions.** Status says where the thing is
+in the company's custody; condition says what state the thing is in. A laptop can
+be *Assigned* and *Damaged* at the same time, and that is how it usually happens.
+They are two columns on the form and neither follows from the other.
+
+**Who has it is a history.** There is no "current holder" field. The holder is
+the one open handover, and every handover before it is still on the record. That
+is why you cannot type *Assigned* into the edit form — an asset becomes assigned
+by being assigned to somebody, which writes the row that says whose desk it is
+on. The form will refuse *Assigned* and *Returned* with a message saying so.
+
+### Adding one
+
+**Assets → Add asset.** Only the **tag** and the **name** are required, though an
+asset with no category is an asset that falls into the *Uncategorised* bucket on
+every breakdown. The tag is unique per company; so is the serial number when you
+give one.
+
+A new asset cannot start *Assigned*. Add it, then assign it.
+
+### The round trip
+
+**Assign** records who, when, the condition it went out in, and what went with
+it — charger, bag, SIM. The condition is **required**: a handover with no
+recorded condition is one nobody can argue about later, which in practice means
+the employee loses the argument. The holder gets an in-app notification asking
+them to confirm.
+
+**Return** records the condition it came **back** in, which is stored on the
+handover rather than only on the asset. Accessories missing on the day are
+worked out for you — issued minus returned — and stored, so the record survives
+somebody later editing the issued list.
+
+**Transfer** moves it straight to the next person without it coming back. The
+outgoing handover ends as *Transferred on*, not *Returned*, because it was not.
+
+> **Returned is not Available.** An asset that has just come back has not been
+> checked yet. Somebody moves it to *Available* on purpose, after looking in the
+> bag. That step is the whole reason the status exists.
+
+### Repairs, damage and loss
+
+**Send for repair** remembers the status the asset had before and restores it
+when the repair completes or is cancelled — so a laptop that was assigned goes
+back to being assigned, not to the bottom of the stock pile.
+
+**Damaged** and **Lost** each record an incident: what happened, when, and who
+reported it. Marking something lost does not end the claim on it; *Lost* can go
+back to *Available*, because things turn up.
+
+### Retiring and disposing
+
+**Retire** takes an asset out of service while you still have it. **Dispose**
+writes it off — sold, scrapped, donated, recycled or other — with the date, the
+reason, the final value and who approved it.
+
+Retired goes only to Disposed, and **nothing comes back from Disposed.** Both are
+irreversible by design; an asset that was scrapped and is then marked available
+again is either a second asset or a mistake, and both deserve attention rather
+than a silent edit.
+
+Nothing in this module deletes anything. A written-off laptop is a status, not a
+missing row.
+
+### What employees can do
+
+Two things, and only to their own handover: **acknowledge** it, and **report a
+problem** with it. Reporting a problem raises an incident for you; it does not
+mark the asset damaged. That decision is yours.
+
+They cannot see the register, what anything cost, who had their laptop before
+them, or any asset sitting in a cupboard. A manager sees their reporting line's
+assets by data scope, and still not the unheld stock.
+
+### Clearance
+
+Somebody who has **resigned** or been **terminated** and is still holding
+something shows up on the dashboard and on their own employee record, as
+*Cleared*, *Partially cleared* or *Pending*.
+
+**It counts; it never acts.** Nothing on a clearance screen marks an asset
+returned — that would be a screen saying the laptop came back when it did not.
+Record the real return through **Return** and the clearance follows.
+
+### The dashboard, in one paragraph
+
+One request behind the whole screen, so every figure describes the same rows at
+the same instant. Six alerts: warranty expiring, under repair, damaged, lost, not
+returned, pending clearance. The middle three link straight to the register with
+that filter applied; the other three carry their own lists, because no status
+filter can reach them. Counts are exact and the lists are capped at fifty, and
+the page tells you when it is showing fifty of four hundred. The warranty window
+is 30, 60, 90 or 180 days and is measured against **the company's today**.
+
+### The two reports
+
+They have different **grains**, which is why there are two. The **asset report**
+is one row per asset — what do we own and what is it worth. The **employee
+register** is one row per handover — what is this person holding, which is the
+question asked at an audit, a transfer and a resignation.
+
+Both total **every row the filters match**, not the page on screen. Both export
+to CSV with the same filters and columns as the screen, and every export is
+recorded in the audit log with who, when, and how many rows left the building.
+An export of more than 20,000 rows is refused with a message rather than quietly
+shortened.
+
+> **One trap worth knowing.** On the register, the *department* filter means the
+> department the **asset** is booked to. On the two reports it means the
+> **holder's** department — that is the column those reports print, and *team*
+> beside it could only ever mean the person. So narrowing a report by department
+> excludes assets nobody is holding.
+
+### The category catalogue
+
+**Settings → Asset management.** Two levels: a group that means something in a
+report, and a type underneath it that somebody picks on the form. An asset may be
+filed against either.
+
+You start with a seeded catalogue — IT Equipment, Office Equipment, Vehicles,
+Other — and from that moment it is yours to rename, reorder and retire. Nothing
+in the system matches on those names.
+
+Categories are **retired, never deleted**: a retired category stops being offered
+on the form while every asset already filed against it keeps its category and
+every past report still adds up.
+
+### What is not here
+
+No approval step on assigning or disposing — they are audited, not routed. No
+depreciation: current value is a number you set. No barcode scanning, no bulk
+import, and no email — the two handover notifications are in-app only. And
+nothing reaches payroll: issuing somebody a laptop creates no deduction of any
+kind.

@@ -132,6 +132,55 @@ Employee (EMP). A role appears only if it holds the permission by default.
 | Bank transfer file | NOT IMPLEMENTED | — | — | |
 | Payslip PDF generation server-side | NOT IMPLEMENTED | — | — | The browser's own print is used instead |
 
+## Assets
+
+| Feature | Status | Roles | Depends on | Notes |
+|---|---|---|---|---|
+| Asset register | IMPLEMENTED | SA, HR | — | `asset.read.all`. Every filter applied in the database; the tiles are their own query |
+| See your own assets | IMPLEMENTED | all | — | `asset.read` alone returns what the caller's data scope reaches, as a WHERE clause. 404, never 403 |
+| Add / edit an asset | IMPLEMENTED | SA, HR | categories | Tag and name required; tag and serial unique per company |
+| Status and condition as two columns | IMPLEMENTED | SA, HR | — | Eight statuses, five conditions, neither derived from the other |
+| Status transition rules | IMPLEMENTED | SA, HR | — | Nothing comes back from Disposed; Retired goes only to Disposed |
+| Assign to an employee | IMPLEMENTED | SA, HR | employees | One active assignment per asset, enforced by a unique index and claimed by compare-and-swap |
+| Transfer to another employee | IMPLEMENTED | SA, HR | — | Outgoing handover ends as *Transferred on*, and records which row it came from |
+| Return | IMPLEMENTED | SA, HR | — | Records the condition it came back in, on the handover; missing accessories derived and stored |
+| Accessories on a handover | IMPLEMENTED | SA, HR | — | Label list, suggestions not a closed set |
+| Acknowledge a handover | IMPLEMENTED | all | — | `asset.acknowledge`. Reaches only the caller's own handover |
+| Report a problem with your asset | IMPLEMENTED | all | — | Raises an incident. Writes nothing about the asset itself |
+| Handover notification | IMPLEMENTED | all | — | In-app only, on assign and transfer. Skipped when the holder has no login |
+| Repairs | IMPLEMENTED | SA, HR | — | Remembers the status held before, and restores it on completion or cancellation |
+| Mark damaged / lost | IMPLEMENTED | SA, HR | — | `asset.update`. Records an incident. Lost can return to Available |
+| Retire | IMPLEMENTED | SA, HR | — | Date and reason. Still owned |
+| Dispose | IMPLEMENTED | SA, HR | — | Sold / Scrapped / Donated / Recycled / Other, with final value and approver |
+| Delete an asset | **NOT IMPLEMENTED** | — | — | Deliberate. No DELETE exists for an asset, handover, repair or incident |
+| Asset documents | IMPLEMENTED | SA, HR | object store | 20 per asset, 10 MB each. Reuses the case-attachment path, not a second store |
+| Asset timeline | IMPLEMENTED | SA, HR | audit log | Read back from `audit_logs`; there is no separate history table |
+| Category catalogue | IMPLEMENTED | SA, HR | — | Two levels, seeded as data. Retired, never deleted |
+| Assets tab on an employee | IMPLEMENTED | SA, HR, MGR, EMP | — | Narrowed by data scope: an employee reaches their own id and is refused every other |
+| Clearance block | IMPLEMENTED | SA, HR | — | Counts only. Three states. Nothing here marks an asset returned |
+| Asset dashboard | IMPLEMENTED | SA, HR | — | `asset.read.all`. One request behind the whole screen |
+| Six alerts | IMPLEMENTED | SA, HR | — | Counts exact, row lists capped at 50 and labelled as such |
+| Warranty window | IMPLEMENTED | SA, HR | company timezone | 30 / 60 / 90 / 180 days, measured against the company's today. Skips Retired and Disposed |
+| Asset report (per asset) | IMPLEMENTED | SA, HR | — | `asset.report`. Totals cover every matching row, not the page |
+| Employee asset register (per handover) | IMPLEMENTED | SA, HR | — | Scope: currently held, or every handover ever |
+| CSV export of either report | IMPLEMENTED | SA, HR | — | Same filters and columns as the screen; audited as `asset.report.export` |
+| Export row ceiling | IMPLEMENTED | SA, HR | — | Over 20,000 rows is refused with a message, never silently truncated |
+| Depreciation schedule | **NOT IMPLEMENTED** | — | — | Current value is a number somebody sets. Nothing calculates it |
+| Barcode / QR scanning | **NOT IMPLEMENTED** | — | — | The tag is typed or searched for |
+| Asset approval workflow | **NOT IMPLEMENTED** | — | — | Assign, retire and dispose are audited, not routed for approval |
+| Asset bulk import | **NOT IMPLEMENTED** | — | — | Added one at a time |
+
+## Recruitment
+
+> **Not yet broken out line by line.** The module shipped on 19 September 2026 and
+> its row in *Not built at all* was removed because it was false, but nobody has
+> written the per-feature rows yet. The same is true of Cases, Lunch, Loans and
+> Medical, which have never had a section here.
+
+| Feature | Status | Roles | Depends on | Notes |
+|---|---|---|---|---|
+| Recruitment / applicant tracking | IMPLEMENTED | SA, HR, MGR, Interviewer | — | Job openings, candidates, interviews, evaluations, offers, and conversion to an employee. Nine grants and the Interviewer role |
+
 ## Governance
 
 | Feature | Status | Roles | Depends on | Notes |
@@ -147,10 +196,8 @@ Employee (EMP). A role appears only if it holds the permission by default.
 |---|---|---|
 | Performance module | NOT IMPLEMENTED | Sidebar shows a disabled "planned" entry. No table, no API, no screen |
 | Documents module | NOT IMPLEMENTED | Same. The route registration is commented out in `modules/index.ts` |
-| Recruitment / applicant tracking | NOT IMPLEMENTED | |
 | Onboarding checklists | NOT IMPLEMENTED | |
-| Offboarding workflow | PARTIALLY IMPLEMENTED | Termination exists and is thorough; there is no checklist, clearance or exit-interview flow |
-| Asset management | NOT IMPLEMENTED | |
+| Offboarding workflow | PARTIALLY IMPLEMENTED | Termination is thorough and **asset clearance now exists** (see [Assets](#assets)); there is still no checklist or exit-interview flow |
 | Expense claims | NOT IMPLEMENTED | |
 | Training records | NOT IMPLEMENTED | |
 | Multi-company tenancy | NOT IMPLEMENTED | Every table carries `companyId` and every query filters on it, but nothing creates a second company |

@@ -234,6 +234,53 @@ recorded as paid. Those belong to whoever collects.
 
 ---
 
+## Your assets
+
+Equipment the company has issued to you — a laptop, a monitor, an access card.
+
+You see it in two places: the **card on your home page**, which shows what you
+are holding and anything waiting on you, and the **Assets tab on your profile**,
+which adds your history of everything you have ever been issued and handed back.
+
+### Confirming you have it
+
+When HR issues you something, you get a notification asking you to confirm. Open
+the card and press **Acknowledge**.
+
+Do it promptly. A handover you have not acknowledged is a handover nobody can
+prove you received — and if something later goes missing, the record of what was
+issued and what state it was in is the only thing either side has to point at.
+
+### Reporting a problem
+
+**Report a problem** on the same card, if it arrived with a cracked lid, a
+missing charger, or anything else wrong with it.
+
+This raises the issue with HR. It does **not** mark the asset damaged — that is
+HR's decision, and they make it after looking at what you reported. Say what is
+actually wrong rather than what you think the status should be.
+
+### Handing it back
+
+You do not record a return yourself. HR does it when they physically take the
+thing back, and they record the condition it came back in and whether everything
+that went out with it came back — the charger, the bag, the SIM.
+
+If you are **leaving**, anything still out with you shows on HR's clearance list
+until they record the return. Hand it in and it clears; nothing you press will
+clear it for you.
+
+### What you see and what you do not
+
+You see your own equipment and your own history. You do **not** see what a
+colleague is holding, what anything cost, who had your laptop before you, or any
+asset sitting in a cupboard.
+
+If you manage people, you also see what your team is holding — see the
+[manager guide](HRMS-MANAGER-GUIDE.md).
+
+---
+
 ## Approvals and notifications
 
 **Approvals** shows requests you raised and their status. The bell in the header
@@ -256,6 +303,10 @@ If you manage people, it also shows requests waiting on you — see the
 - Edit a raw device punch
 - Approve anything, unless you manage people
 - Mark your own lunch order paid, or change what it cost
+- Record the return of an asset issued to you, or change its status, value or
+  condition — you can acknowledge a handover and report a problem, and that is
+  the whole of it
+- See the asset register, or what anyone else is holding
 
 ---
 

@@ -93,6 +93,26 @@ period's overtime payable**.
 
 ---
 
+## Your team's assets
+
+Open somebody's profile and the **Assets** tab shows the equipment they are
+holding, with the date each item was issued.
+
+You see this for the people your data scope reaches, and nothing more. You do
+**not** see the asset register — the company's stock, what anything cost, or the
+laptops sitting in a cupboard. Those are not your team's; they are the company's,
+and HR runs them.
+
+You cannot assign, return, transfer or repair anything. What you *can* do, for
+your own equipment, is acknowledge a handover and report a problem with it, the
+same as anyone else — see the [employee guide](HRMS-EMPLOYEE-GUIDE.md#your-assets).
+
+Useful when somebody leaves: their outstanding items are what HR will be chasing
+on the clearance list, and the conversation is easier before the last day than
+after it. The full picture is in the [asset guide](HRMS-ASSET-GUIDE.md).
+
+---
+
 ## What you cannot do
 
 - **See any payroll information.** No payroll permission is granted to managers
@@ -108,6 +128,7 @@ period's overtime payable**.
   ask HR to write one.
 - **Create a login** for a new team member.
 - **Assign a shift directly.** You approve a shift-change request; HR assigns.
+- **Issue or take back a company asset.** You can see what your team is holding; HR records every handover.
 
 ---
 
