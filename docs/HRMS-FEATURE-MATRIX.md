@@ -26,15 +26,20 @@ Employee (EMP), plus the two narrow ones where they are relevant — Interviewer
 | Change own password | IMPLEMENTED | all | — | `PATCH /me/password` |
 | See and revoke own sessions | PARTIALLY IMPLEMENTED | all | — | Can list sessions and sign out everywhere; cannot revoke one named device |
 | Invitation acceptance | IMPLEMENTED | — | mail provider | Setting a password through the reset link activates an invited account |
-| **Create a login account** | IMPLEMENTED | SA, HR | employees, roles | Invite-based: no password is ever generated or seen by an administrator |
+| **Create a login account** | IMPLEMENTED | SA, HR | employees, roles | Invite-based: `user.manage` never generates or sees a password |
 | Link a login to an employee | IMPLEMENTED | SA, HR | employees | One account per employee, enforced by a unique index |
 | Assign and change roles | IMPLEMENTED | SA, HR | roles | At least one role is always required |
 | Suspend an account | IMPLEMENTED | SA, HR | — | Records why, and ends every session |
 | Restore an account | IMPLEMENTED | SA, HR | — | Returns it to the status it had before |
 | Revoke sessions | IMPLEMENTED | SA, HR | — | Without suspending: they can sign in again |
 | Send a password reset link | IMPLEMENTED | SA, HR | mail provider | The link goes to the account holder; no token is ever shown |
+| **Set somebody's password** | IMPLEMENTED | SA | — | `user.password.manage`, held by no other default role. Shown once, never stored readably, never in the audit trail. Onboards people when no mail relay exists |
+| **Forced change of an issued password** | IMPLEMENTED | all | — | `mustChangePassword` gates the whole application until the holder chooses their own. Set by *Set password* and by the bulk account script |
 | Roles and permissions editor | IMPLEMENTED | SA, HR (read) | — | `role.manage` needed to change grants; only Super Admin holds it by default |
-| Data scopes | IMPLEMENTED | — | — | NONE / OWN / REPORTS / REPORTS_AND_OWN / DEPARTMENT / ALL |
+| **Create a role** | IMPLEMENTED | SA | — | `role.manage`. Key is derived from the name and permanent; the name is not |
+| **Rename or re-scope a role** | IMPLEMENTED | SA | — | System roles included. Super Admin is refused — it always holds everything |
+| **Delete a role** | IMPLEMENTED | SA | — | Company roles only, and only when nobody holds it. System roles are refused: the catalogue recreates them |
+| Data scopes | IMPLEMENTED | — | — | NONE / OWN / REPORTS / REPORTS_AND_OWN / DEPARTMENT / ALL. The role form offers OWN, REPORTS_AND_OWN, DEPARTMENT and ALL |
 
 ## Organisation
 

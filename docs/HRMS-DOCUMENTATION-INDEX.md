@@ -102,10 +102,13 @@ the real protocol over a real socket. That is evidence the implementation is
 internally consistent, not evidence it matches your hardware. See the
 [device guide](HRMS-DEVICE-GUIDE.md).
 
-**Logins are created by invitation, never with a password.** An administrator
-invites somebody from **Settings → Users**; they set their own password through
-an emailed link. No password is ever generated, displayed or transmitted, so an
-administrator never knows anybody's. See
+**Logins are created by invitation, and only one permission can set a password.**
+An administrator invites somebody from **Settings → Users**; they set their own
+password through an emailed link, and nobody holding *Manage users* ever learns
+it. The single exception is *Set passwords* (`user.password.manage`), held by
+Super Admin alone, which issues a temporary password to hand over in person —
+necessary because this server delivers no email. Anything issued that way stops
+working the moment the recipient signs in and chooses their own. See
 [User management](HRMS-ADMIN-MANUAL.md#13-user-management).
 
 **Performance and Documents do not exist.** They appear in the sidebar as

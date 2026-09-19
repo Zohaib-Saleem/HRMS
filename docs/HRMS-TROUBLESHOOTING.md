@@ -9,21 +9,30 @@ a configuration problem, a data problem, or a known limitation.
 
 ### An employee cannot sign in
 
-**First, the known limitation.** There is no user-management module. If this
-person has never signed in, they probably have **no account** — one was never
-created, because nothing in the application creates one. Recording an employee
-does not give them a login.
-
-If they have signed in before:
+**First, do they have an account at all?** Recording an employee does not give
+them a login. Check **Settings → Users**; if they are not listed, create one
+with **Invite user**.
 
 | Cause | Check | Fix |
 |---|---|---|
 | Wrong password | — | Password reset from the sign-in screen |
-| Reset email never arrived | Is `MAIL_PROVIDER=smtp`? On `console` the link is written to the server log instead | Configure SMTP, or read the link out of the log |
+| **Reset email never arrived** | Is `MAIL_PROVIDER=smtp`? On `console` nothing is delivered at all | **Settings → Users → the account → Set password**, and hand it over directly. Needs *Set passwords* — Super Admin by default |
 | Reset link expired | Valid 60 minutes | Request a new one |
+| Account still *Invited* | An invitation was sent but never accepted, so no password was ever set | Setting a password for them activates the account in the same step |
 | Rate limited | 10 sign-in attempts per 5 minutes per IP | Wait five minutes |
-| **Account suspended after termination** | Were they terminated and then reactivated? | **Known limitation** — reactivation does not restore the login. Needs a direct database change |
+| Account locked after failed attempts | — | Setting a password clears the lockout |
+| **Account suspended** | Settings → Users shows the status | **Restore** it first. A suspended account is refused a password and a reset link alike |
 | Session expired mid-work | 8-hour default | Sign in again |
+
+### They sign in and land on "Choose your own password"
+
+Working as intended. The password they used was issued by somebody else — by an
+administrator, or by the bulk account script — and the system requires them to
+replace it before anything else opens. They need the password they were given
+*and* a new one of their own.
+
+If they no longer have the temporary password, issue another with **Set
+password**; there is no way to retrieve the old one and no need to.
 
 ### A user can see something they should not
 

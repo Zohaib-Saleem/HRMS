@@ -442,6 +442,13 @@ gain a scope-derived `where` clause.
 **Scheduled into Phase 2** (scope) and **Phase 8** (field-level), because employee records
 are exactly where both first matter.
 
+**Status note.** The scope dimension shipped (`DataScope` on the role, resolved per query),
+and roles can now be **created, renamed, re-scoped and deleted** in *Settings → Roles* rather
+than only having their permissions edited — so a company can model a role like *IT Manager*
+without a database change. The **field-visibility** layer above is still outstanding, and
+so is the Specific Role idea of a role scoped to one department or location: `DEPARTMENT`
+scope narrows to the holder's OWN department, not to a department somebody names.
+
 ---
 
 ## 12. Cross-cutting features

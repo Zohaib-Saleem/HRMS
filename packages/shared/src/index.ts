@@ -18,6 +18,7 @@ export * from './dto/medical.js';
 export * from './dto/medical-claims.js';
 export * from './dto/payroll.js';
 export * from './dto/user.js';
+export * from './dto/role.js';
 export * from './dto/docs.js';
 export * from './dto/reports.js';
 export * from './dto/company-moments.js';

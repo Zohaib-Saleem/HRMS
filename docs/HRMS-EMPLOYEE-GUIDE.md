@@ -10,12 +10,30 @@ your administrator has not granted that permission.
 Your administrator gives you an email address and a password. Sessions last
 **8 hours**, after which you sign in again.
 
-Forgot your password? **Forgot password** on the sign-in screen emails you a
-link valid for **60 minutes**.
+### The first time: choosing your own password
 
-Change your password under **Profile → Password**. You can also see your active
-sessions and sign out everywhere — useful if you have signed in on a device you
-no longer have.
+If the password you were given came from your administrator — read out to you,
+or written on a slip — it is **temporary**, and the system knows it. The first
+time you sign in you will be stopped at **Choose your own password**, and you
+cannot reach anything until you set one.
+
+You will be asked for two things: the password you were given, and the new one
+you are choosing. Pick something only you know. The moment you set it, the one
+your administrator gave you stops working — including for them.
+
+This screen is not optional and there is no way past it. If you reached it by
+mistake on somebody else's account, use **Sign out** at the bottom.
+
+### Afterwards
+
+Forgot your password? **Forgot password** on the sign-in screen emails you a
+link valid for **60 minutes**. If no email arrives, ask your administrator —
+on some servers mail is not configured, and they can give you a new temporary
+password instead.
+
+Change your password whenever you like under **Profile → Password**. You can
+also see your active sessions and sign out everywhere — useful if you have
+signed in on a device you no longer have.
 
 ---
 

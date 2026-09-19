@@ -689,6 +689,8 @@ is hidden.
     And it only leaves the server once an SMTP relay is configured: with none,
     reset links and invitations are created but never delivered, and the screen
     says so rather than claiming a send. See **Sending a password reset**.
+    Onboarding on a server with no relay goes through **Setting a password**
+    instead, which needs no email at all.
 
 12. **Single company.** Every table carries `companyId` and every query filters
     on it, but nothing creates a second company.
@@ -735,7 +737,7 @@ perfectly usable.
 
 | Status | Meaning |
 |---|---|
-| **Invited** | Created, but has never set a password. **Cannot sign in yet** |
+| **Invited** | Created, but has never set a password. **Cannot sign in yet**. Setting a password for them activates the account |
 | **Active** | Can sign in |
 | **Suspended** | Cannot sign in. Every session stops working immediately |
 
@@ -752,12 +754,17 @@ perfectly usable.
    nothing, so it is refused.
 4. **Send invitation.**
 
-> **No password is created, generated, displayed or transmitted.** The account
-> is created as *Invited* with a stored value no password can ever match, and
-> the person sets their own through the ordinary reset link. That is what makes
-> "an administrator never knows anybody's password" true rather than merely
-> intended. If the invitation does not arrive, send it again from the account's
+> **Inviting creates no password.** The account is created as *Invited* with a
+> stored value no password can ever match, and the person sets their own through
+> the ordinary reset link. Nobody holding *Manage users* ever learns anybody's
+> password. If the invitation does not arrive, send it again from the account's
 > detail panel — a fresh link supersedes the old one.
+>
+> **There is one exception, and it is a separate permission.** *Set passwords*
+> (`user.password.manage`) lets its holder set a temporary password and read it
+> once, so somebody can be given it face to face. It exists because this server
+> delivers no email, and an invitation nobody receives onboards nobody. See
+> **Setting a password** below. No default role carries it except Super Admin.
 
 The account becomes **Active** the moment they set a password.
 
@@ -880,11 +887,100 @@ and restarts the API, after which the boot log reads `SMTP transport ready`.
 Until then, an invited person cannot be onboarded by email — the invitation is
 an ordinary reset link and travels the same path.
 
+### Setting a password
+
+**Settings → Users → the account → Set password.** Needs *Set passwords*
+(`user.password.manage`), which only **Super Admin** holds by default. Holders
+of *Manage users* see **Send reset link** and not this.
+
+This is the only place in the system where a password is shown to anybody but
+its owner, and it exists for one reason: with no mail relay, a reset link
+reaches nobody, so there would otherwise be no way to onboard a new joiner at
+all.
+
+**What you do.** Choose **Generate one** — four words and a number, built to be
+read out loud and hard to guess — or type one you have agreed on the spot. Tick
+the acknowledgement, and the password appears once, with a copy button.
+
+**What happens to the account.**
+
+- The password is stored, hashed, and marked as one the holder must replace.
+- Any lockout is cleared, so the password you just issued actually works.
+- **Every session ends.** Anyone signed in as them, anywhere, is signed out.
+- Every unused reset link and invitation stops working.
+- An *Invited* account becomes **Active**, because only an Active account can
+  sign in — the screen tells you when this happened.
+
+**What happens to them.** The first time they sign in, they are stopped at
+**Choose your own password** and cannot reach any part of the application until
+they set one. They are asked for the password you gave them as well as the new
+one, so an unlocked browser is not enough to take the account.
+
+> **The password you read out stops working the moment they use it.** That is
+> what makes handing one over survivable, and it is not optional or a setting —
+> the flag is written with the password, in the same operation.
+
+**It is shown exactly once.** It is not stored anywhere you can read it back, no
+screen or API returns it, and the audit trail records that a password was set,
+by whom, for which account, and how many sessions ended — never the password
+itself. If you lose it before handing it over, set another one; it costs
+nothing and leaves its own audit line.
+
+**Refused:** your own account, and any **suspended** account — restore that
+first, deliberately, rather than as a side effect of issuing a password.
+
+### Managing roles
+
+**Settings → Roles.** Needs *Manage roles* (`role.manage`), held by **Super
+Admin** by default.
+
+A role answers two separate questions, and both matter:
+
+| | |
+|---|---|
+| **Permissions** | What the holder may *do* — the tick-boxes under **Permissions** |
+| **Data scope** | How much of the company they may *see*, whatever the permissions allow |
+
+They are independent, and the second is the one people forget. A role holding
+*View assets* at **Own record only** scope can open the asset register and find
+almost nothing in it. Set the scope to match the job:
+
+| Scope | Who it suits |
+|---|---|
+| **Own record only** | Employees, and desk roles that act on what is brought to them |
+| **Direct reports and own record** | Team leads and line managers |
+| **Whole department** | A head of department |
+| **Entire organisation** | HR, IT and anyone running a company-wide function |
+
+**Creating one.** **New role**, give it a name, a line of description and a
+scope. The name is yours to change later; the identifier derived from it — `IT
+Manager` becomes `IT_MANAGER` — is permanent, shown under the name field before
+you commit, and is what any future seed or script would refer to. Then open
+**Permissions** and tick what the role may do; a new role starts with none.
+
+**Editing one.** **Details** renames, re-describes and re-scopes.
+**Permissions** changes what it may do. A **system** role — the ones the
+software seeds — can be renamed and re-scoped but never deleted, because the
+catalogue recreates it on the next start. **Super Admin** is protected outright:
+it always holds every permission and sees the whole company, which is what stops
+a company locking itself out of its own settings.
+
+**Deleting one.** Only a role the company created, and only when **nobody holds
+it**. An account with no role at all is refused elsewhere in this system, so the
+role is not taken out from under its last holder — move people first, then
+delete. The refusal names how many accounts are in the way.
+
+> **A scope change takes effect immediately**, including for whoever made it.
+> Narrowing the scope of a role you hold yourself will narrow what you can see
+> on the very next screen.
+
 ### Actions refused on your own account
 
-Suspending yourself, revoking your own sessions and stripping your own roles are
-all refused from this screen. They are ways to lock the last administrator out.
-Sign out from the header; change your password from your profile.
+Suspending yourself, revoking your own sessions, stripping your own roles and
+setting your own password are all refused from this screen. They are ways to
+lock the last administrator out — setting your own password here would end the
+very session making the request and then demand you change it again. Sign out
+from the header; change your password from your profile.
 
 ### Onboarding: the normal sequence
 
@@ -896,6 +992,15 @@ Sign out from the header; change your password from your profile.
 5  They accept the invitation      set a password → account becomes Active
 6  Devices → Device users          map their terminal PIN, if used
 ```
+
+**With no mail relay, step 5 cannot happen** — the invitation is an email and
+nothing delivers it. Replace it with:
+
+```
+5  Settings → Users → the account → Set password
+   Generate one, read it to them, and they choose their own at first sign-in
+```
+
 
 Step 4 can happen at any point after step 1. The invitation is the only step
 that involves the employee themselves.

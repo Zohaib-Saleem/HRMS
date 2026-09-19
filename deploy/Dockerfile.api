@@ -50,6 +50,19 @@ COPY --from=builder /build/apps/api/dist ./apps/api/dist
 COPY --from=builder /build/apps/api/prisma ./apps/api/prisma
 COPY --from=builder /build/apps/api/package.json ./apps/api/package.json
 
+# The documentation the in-app help centre serves.
+#
+# Copied from the build CONTEXT rather than the builder stage, because nothing
+# compiles it: `docs.service.ts` reads the markdown off disk at request time and
+# the files are the source of truth. Without this the image contains no `docs/`
+# at all, `findDocsRoot()` walks to the filesystem root and returns null, and
+# every document in the help centre 404s while the rest of the application looks
+# perfectly healthy - which is exactly how it shipped and went unnoticed.
+#
+# The path matters: the walk starts at `dist/modules/docs` and goes up, so this
+# has to land at `/app/docs` for it to be found.
+COPY docs ./docs
+
 # The mount point for the uploads volume, created HERE rather than left to
 # Docker. A named volume mounted at a path the image does not contain is created
 # root-owned, and the API runs as `node` - so the first photo upload would fail

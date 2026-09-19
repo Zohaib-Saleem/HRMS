@@ -1,13 +1,27 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { KeyRound, Lock, Pencil, ShieldCheck, Users } from 'lucide-react';
-import { PERMISSION_GROUPS, PERMISSIONS, type Permission } from '@hrms/shared';
-import { api, errorMessage } from '@/lib/api';
+import { Eye, KeyRound, Lock, Pencil, Plus, ShieldCheck, Trash2, Users } from 'lucide-react';
+import {
+  ASSIGNABLE_DATA_SCOPES,
+  DATA_SCOPE_LABELS,
+  PERMISSION_GROUPS,
+  PERMISSIONS,
+  roleCreateSchema,
+  roleKeyFromName,
+  type AssignableDataScope,
+  type Permission,
+  type RoleCreateInput,
+  type RoleRecord,
+} from '@hrms/shared';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { ApiError, api, errorMessage } from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import {
   Dialog,
   DialogBody,
@@ -22,21 +36,11 @@ import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { SESSION_QUERY_KEY, usePermissions } from '@/features/auth/session-context';
 import { cn } from '@/lib/utils';
 
-interface RoleRecord {
-  id: string;
-  key: string;
-  name: string;
-  description: string | null;
-  isSystem: boolean;
-  isProtected: boolean;
-  userCount: number;
-  permissions: string[];
-}
-
 export function RolesPage() {
   const { has } = usePermissions();
   const canManage = has(PERMISSIONS.ROLE_MANAGE);
   const [editing, setEditing] = React.useState<RoleRecord | null>(null);
+  const [details, setDetails] = React.useState<RoleRecord | 'new' | null>(null);
 
   const query = useQuery({
     queryKey: ['roles'],
@@ -71,14 +75,38 @@ export function RolesPage() {
 
   if (roles.length === 0) {
     return (
-      <Card>
-        <EmptyState icon={KeyRound} title="No roles yet" description="Seed the database to create the default roles." />
-      </Card>
+      <>
+        <Card>
+          <EmptyState
+            icon={KeyRound}
+            title="No roles yet"
+            description="A role decides what somebody may do and how much of the company they can see."
+            action={
+              canManage ? (
+                <Button onClick={() => setDetails('new')}>
+                  <Plus />
+                  New role
+                </Button>
+              ) : undefined
+            }
+          />
+        </Card>
+        <RoleDetailsDialog role={details} onClose={() => setDetails(null)} />
+      </>
     );
   }
 
   return (
     <>
+      {canManage ? (
+        <div className="mb-4 flex justify-end">
+          <Button onClick={() => setDetails('new')}>
+            <Plus />
+            New role
+          </Button>
+        </div>
+      ) : null}
+
       <div className="grid gap-4 lg:grid-cols-2">
         {roles.map((role) => (
           <Card key={role.id} className="flex flex-col">
@@ -102,20 +130,36 @@ export function RolesPage() {
                 </div>
 
                 {canManage ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={role.isProtected}
-                    title={
-                      role.isProtected
-                        ? 'This role always has full access and cannot be edited.'
-                        : undefined
-                    }
-                    onClick={() => setEditing(role)}
-                  >
-                    {role.isProtected ? <Lock /> : <Pencil />}
-                    Edit
-                  </Button>
+                  <div className="flex flex-none gap-1.5">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={role.isProtected}
+                      title={
+                        role.isProtected
+                          ? 'This role always has full access and cannot be edited.'
+                          : 'Rename it, or change how much it can see'
+                      }
+                      onClick={() => setDetails(role)}
+                    >
+                      <Pencil />
+                      Details
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={role.isProtected}
+                      title={
+                        role.isProtected
+                          ? 'This role always has full access and cannot be edited.'
+                          : undefined
+                      }
+                      onClick={() => setEditing(role)}
+                    >
+                      {role.isProtected ? <Lock /> : <KeyRound />}
+                      Permissions
+                    </Button>
+                  </div>
                 ) : null}
               </div>
 
@@ -128,6 +172,16 @@ export function RolesPage() {
                   <KeyRound className="size-3.5" aria-hidden />
                   {role.permissions.length} permissions
                 </span>
+                {/*
+                  Shown beside the permission count because the two answer
+                  different halves of one question, and a role with
+                  `employee.read` at OWN scope looks powerful in the list and
+                  sees nothing in practice.
+                */}
+                <span className="inline-flex items-center gap-1.5">
+                  <Eye className="size-3.5" aria-hidden />
+                  {DATA_SCOPE_LABELS[role.dataScope]}
+                </span>
               </div>
 
               <PermissionSummary permissions={role.permissions} />
@@ -137,7 +191,209 @@ export function RolesPage() {
       </div>
 
       <RoleEditor role={editing} onClose={() => setEditing(null)} />
+      <RoleDetailsDialog role={details} onClose={() => setDetails(null)} />
     </>
+  );
+}
+
+/**
+ * Creating a role, and editing everything about one that is not a permission.
+ *
+ * One dialog for both, because the fields are identical and a separate "new
+ * role" screen would drift from the edit one the first time a field is added.
+ * What differs is the key line and the delete button, and both are driven by
+ * whether a role was passed in.
+ */
+function RoleDetailsDialog({
+  role,
+  onClose,
+}: {
+  role: RoleRecord | 'new' | null;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const creating = role === 'new';
+  const existing = role === 'new' || role === null ? null : role;
+
+  const { register, handleSubmit, formState, setError, watch, reset } = useForm<RoleCreateInput>({
+    resolver: zodResolver(roleCreateSchema),
+    defaultValues: {
+      name: '',
+      description: '',
+      dataScope: 'OWN' as AssignableDataScope,
+    },
+  });
+
+  React.useEffect(() => {
+    if (!role) return;
+    reset(
+      existing
+        ? {
+            name: existing.name,
+            description: existing.description ?? '',
+            dataScope: existing.dataScope as AssignableDataScope,
+          }
+        : { name: '', description: '', dataScope: 'OWN' as AssignableDataScope },
+    );
+  }, [role, existing, reset]);
+
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['roles'] });
+    // A scope change alters what the signed-in user can see the moment it
+    // lands, so the session's own copy has to go too.
+    await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
+  };
+
+  const save = useMutation({
+    mutationFn: (values: RoleCreateInput) =>
+      existing
+        ? api.patch<RoleRecord>(`/roles/${existing.id}`, values)
+        : api.post<RoleRecord>('/roles', values),
+    onSuccess: async (saved) => {
+      toast.success(existing ? `${saved.name} updated.` : `${saved.name} created.`);
+      await refresh();
+      onClose();
+    },
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.isValidation && error.details) {
+        for (const [field, messages] of Object.entries(error.details)) {
+          if (field === '_') {
+            toast.error(messages[0]);
+            continue;
+          }
+          setError(field as keyof RoleCreateInput, { message: messages[0] });
+        }
+        return;
+      }
+      toast.error(errorMessage(error));
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.delete(`/roles/${existing?.id}`),
+    onSuccess: async () => {
+      toast.success(`${existing?.name} deleted.`);
+      await refresh();
+      onClose();
+    },
+    onError: (error: unknown) => toast.error(errorMessage(error)),
+  });
+
+  const handleDelete = async () => {
+    if (!existing) return;
+    const ok = await confirm({
+      title: `Delete the ${existing.name} role?`,
+      description:
+        'The role and its permissions go for good. Nobody holds it, so nobody loses access.',
+      confirmLabel: 'Delete role',
+      tone: 'destructive',
+    });
+    if (ok) remove.mutate();
+  };
+
+  if (!role) return null;
+
+  const name = watch('name') ?? '';
+  const deletable = existing !== null && !existing.isSystem && !existing.isProtected;
+
+  return (
+    <Dialog open onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent size="md">
+        <form onSubmit={handleSubmit((values) => save.mutate(values))} className="contents">
+          <DialogHeader>
+            <DialogTitle>{creating ? 'New role' : `Edit ${existing?.name}`}</DialogTitle>
+            <DialogDescription>
+              A role decides what somebody may do, and how much of the company they can see.
+              Permissions are chosen separately.
+            </DialogDescription>
+          </DialogHeader>
+
+          <DialogBody className="space-y-4">
+            <FormField
+              label="Name"
+              htmlFor="role-name"
+              error={formState.errors.name?.message}
+              hint={
+                creating
+                  ? `Stored as ${name.trim() ? roleKeyFromName(name) : '…'}, which never changes afterwards.`
+                  : `Stored as ${existing?.key}. The name can change; that identifier cannot.`
+              }
+              required
+            >
+              <Input id="role-name" autoFocus placeholder="IT Manager" {...register('name')} />
+            </FormField>
+
+            <FormField
+              label="Description"
+              htmlFor="role-description"
+              error={formState.errors.description?.message}
+              hint="Optional. What this role is for, in a line."
+            >
+              <Textarea
+                id="role-description"
+                rows={2}
+                placeholder="Runs IT: issues equipment and keeps the attendance terminals working."
+                {...register('description')}
+              />
+            </FormField>
+
+            <FormField
+              label="How much it can see"
+              htmlFor="role-scope"
+              error={formState.errors.dataScope?.message}
+              hint="Narrows every list and record, whatever the permissions allow."
+              required
+            >
+              <NativeSelect id="role-scope" {...register('dataScope')}>
+                {ASSIGNABLE_DATA_SCOPES.map((scope) => (
+                  <option key={scope} value={scope}>
+                    {DATA_SCOPE_LABELS[scope]}
+                  </option>
+                ))}
+              </NativeSelect>
+            </FormField>
+
+            {existing?.isSystem ? (
+              <p className="text-[12.5px] text-muted-foreground">
+                This is a built-in role. You can rename it and change what it sees, but it cannot
+                be deleted — the system recreates it on every start.
+              </p>
+            ) : null}
+
+            {existing && existing.userCount > 0 && !existing.isSystem ? (
+              <p className="text-[12.5px] text-muted-foreground">
+                {existing.userCount} {existing.userCount === 1 ? 'account holds' : 'accounts hold'}{' '}
+                this role. Move {existing.userCount === 1 ? 'it' : 'them'} elsewhere before deleting
+                it.
+              </p>
+            ) : null}
+          </DialogBody>
+
+          <DialogFooter className="flex-wrap gap-2">
+            {deletable && existing.userCount === 0 ? (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="mr-auto"
+                loading={remove.isPending}
+                onClick={() => void handleDelete()}
+              >
+                <Trash2 />
+                Delete
+              </Button>
+            ) : null}
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={save.isPending}>
+              {creating ? 'Create role' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
