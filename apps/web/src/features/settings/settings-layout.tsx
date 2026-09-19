@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import {
+  Boxes,
   Building2,
   Clock,
   Fingerprint,
@@ -87,6 +88,17 @@ export const TABS: SettingsTab[] = [
     label: 'Lunch menu',
     icon: Sandwich,
     permission: PERMISSIONS.LUNCH_MENU_MANAGE,
+  },
+  {
+    // The asset category catalogue: what kinds of thing the company owns. One
+    // grant, because everything readable here is also editable here - the
+    // read-only view of this tree is the asset form's own category dropdown.
+    // Called "Asset management" rather than "Asset categories" because this is
+    // where the module's configuration will accumulate.
+    to: '/settings/asset-categories',
+    label: 'Asset management',
+    icon: Boxes,
+    permission: PERMISSIONS.ASSET_CATEGORY_MANAGE,
   },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },

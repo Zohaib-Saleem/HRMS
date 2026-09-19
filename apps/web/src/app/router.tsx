@@ -204,6 +204,23 @@ const DeviceMappingPage = lazyPage(
   () => import('@/features/settings/device-mapping-page'),
   'DeviceMappingPage',
 );
+const AssetsPage = lazyPage(() => import('@/features/assets/assets-page'), 'AssetsPage');
+const AssetDetailPage = lazyPage(
+  () => import('@/features/assets/asset-detail-page'),
+  'AssetDetailPage',
+);
+const AssetCategoriesPage = lazyPage(
+  () => import('@/features/settings/asset-categories-page'),
+  'AssetCategoriesPage',
+);
+const AssetDashboardPage = lazyPage(
+  () => import('@/features/assets/asset-dashboard-page'),
+  'AssetDashboardPage',
+);
+const AssetReportsPage = lazyPage(
+  () => import('@/features/assets/asset-reports-page'),
+  'AssetReportsPage',
+);
 const RecruitmentDashboardPage = lazyPage(
   () => import('@/features/recruitment/recruitment-dashboard-page'),
   'RecruitmentDashboardPage',
@@ -506,6 +523,51 @@ export function AppRoutes() {
           <Route path="recruitment/interviews/:id" element={<InterviewDetailPage />} />
         </Route>
 
+        {/*
+            The asset register, gated on `asset.read` - the NARROW grant, not
+            the one the sidebar row carries.
+
+            Deliberate, and the same principle the rest of this file follows:
+            the server decides which assets come back, so an employee who
+            reaches this path directly is served the kit issued to them rather
+            than a 403. What the sidebar does with `asset.read.all` is decide
+            whether to signpost the screen, which is a different question.
+
+            Every write inside is gated again - `asset.create` to add one,
+            `asset.update` to edit one - so the buttons on the page are drawn
+            from what the reader holds and the endpoints re-check it. */}
+        {/*
+            The dashboard and the reports sit INSIDE /assets and outside the
+            `asset.read` gate below, because each needs a different grant:
+
+              - the dashboard needs `asset.read.ALL`. There is no honest narrow
+                version of a screen whose job is to count the whole register,
+                and the employee's own view of their kit is the card on their
+                home page;
+              - the reports need `asset.report`. Reading the register and
+                taking it away as a file are separate decisions, and the
+                endpoints still narrow the rows by the caller's data scope - a
+                reporting grant exports what you can see, it does not widen it.
+
+            Static paths, so they are matched ahead of `assets/:id` whatever
+            order they are written in. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.ASSET_READ_ALL} />}>
+          <Route path="assets/dashboard" element={<AssetDashboardPage />} />
+        </Route>
+        <Route element={<RequirePermission permission={PERMISSIONS.ASSET_REPORT} />}>
+          <Route path="assets/reports" element={<AssetReportsPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.ASSET_READ} />}>
+          <Route path="assets" element={<AssetsPage />} />
+          {/* The detail page is gated the same way, and the SERVER decides what
+              it offers: `detail.can` is computed from the caller's grants and
+              the asset's state together, so a narrow reader who opens their own
+              laptop gets a page with no action buttons on it rather than a page
+              of controls that all answer 403. */}
+          <Route path="assets/:id" element={<AssetDetailPage />} />
+        </Route>
+
         {/* employee.read is the whole gate. Each block inside a row - pay,
             leave, loans, attendance - is gated again server-side, so a reader
             without payroll.read gets rows with no salary rather than a 403. */}
@@ -567,6 +629,7 @@ export function AppRoutes() {
                 PERMISSIONS.LOAN_POLICY_READ,
                 PERMISSIONS.MEDICAL_POLICY_READ,
                 PERMISSIONS.CASE_CATEGORY_MANAGE,
+                PERMISSIONS.ASSET_CATEGORY_MANAGE,
               ]}
             />
           }
@@ -609,6 +672,16 @@ export function AppRoutes() {
                 the menu is an endpoint every employee can already reach. */}
             <Route element={<RequirePermission permission={PERMISSIONS.LUNCH_MENU_MANAGE} />}>
               <Route path="lunch-menu" element={<LunchMenuPage />} />
+            </Route>
+            {/* The asset category catalogue. One grant, for the reason the
+                case catalogue and the lunch menu have one: there is nothing to
+                read here that is not also there to be edited, and the asset
+                form's own copy of the catalogue is an endpoint every asset
+                reader can already reach. */}
+            <Route
+              element={<RequirePermission permission={PERMISSIONS.ASSET_CATEGORY_MANAGE} />}
+            >
+              <Route path="asset-categories" element={<AssetCategoriesPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
               <Route path="users" element={<UsersPage />} />

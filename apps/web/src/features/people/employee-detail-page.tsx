@@ -46,6 +46,7 @@ import { EmployeeLoans } from '@/features/loans/employee-loans';
 import { EmployeeLeave } from '@/features/leave/employee-leave';
 import { EmployeePayrollHistory } from '@/features/payroll/employee-payroll-history';
 import { EmployeeAttendanceViews } from '@/features/time/employee-attendance-views';
+import { EmployeeAssetsTab } from '@/features/assets/employee-assets-tab';
 import { EmployeeTimeline } from './employee-timeline';
 import { cn } from '@/lib/utils';
 
@@ -80,6 +81,7 @@ const TABS = [
   'Salary & Payroll',
   'Contracts & Policies',
   'Education & Experience',
+  'Assets',
   'Timeline',
   'Reports',
 ] as const;
@@ -306,6 +308,10 @@ export function EmployeeDetailPage() {
             if (item === 'Contracts & Policies') {
               return has(PERMISSIONS.CONTRACT_READ) || has(PERMISSIONS.POLICY_READ);
             }
+            // The endpoint behind it narrows by the reader's data scope as
+            // well, so an employee on an OWN scope finds their own kit here and
+            // is refused anybody else's.
+            if (item === 'Assets') return has(PERMISSIONS.ASSET_READ);
             return true;
           }).map((item) => (
             <button
@@ -352,6 +358,7 @@ export function EmployeeDetailPage() {
         </div>
       ) : null}
       {tab === 'Education & Experience' ? <ExperienceTab employee={employee} /> : null}
+      {tab === 'Assets' ? <EmployeeAssetsTab employeeId={employee.id} /> : null}
       {tab === 'Timeline' ? (
         <EmployeeTimeline
           employeeId={employee.id}

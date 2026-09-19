@@ -67,6 +67,14 @@ import { evaluationRoutes } from './recruitment/evaluations.routes.js';
 import { offerRoutes } from './recruitment/offers.routes.js';
 import { conversionRoutes } from './recruitment/conversion.routes.js';
 import { recruitmentDashboardRoutes } from './recruitment/recruitment-dashboard.routes.js';
+import { assetRoutes } from './assets/assets.routes.js';
+import { assetCategoryRoutes } from './assets/asset-categories.routes.js';
+import { assetLifecycleRoutes } from './assets/asset-lifecycle.routes.js';
+import { assetSelfRoutes } from './assets/asset-self.routes.js';
+import { assetDocumentRoutes } from './assets/asset-documents.routes.js';
+import { assetEmployeeRoutes } from './assets/asset-employees.routes.js';
+import { assetDashboardRoutes } from './assets/asset-dashboard.routes.js';
+import { assetReportRoutes } from './assets/asset-reports.routes.js';
 import {
   payrollDashboardRoutes,
   payrollReconciliationRoutes,
@@ -229,6 +237,69 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/recruitment/interviews', plugin: interviewRoutes },
   { prefix: '/recruitment/interviews', plugin: evaluationRoutes },
   { prefix: '/recruitment/offers', plugin: offerRoutes },
+
+  // --- phase 15: assets -------------------------------------------------
+  // Two plugins, split by what they ARE rather than by where they sit: the
+  // register is the company's equipment, and the catalogue is configuration of
+  // what kinds of equipment exist at all. Both open on `asset.read`, because
+  // the create form on the register is built from the catalogue - and the
+  // writes inside each carry their own grant, so somebody who may record a
+  // laptop cannot invent the category to file it under.
+  //
+  // `/assets/categories` is a static segment and is matched ahead of
+  // `/assets/:id` regardless of registration order, the same way
+  // `/loans/policy` sits ahead of `/loans`. `/assets/summary` is static for the
+  // same reason.
+  //
+  // Deliberately NOT registered anywhere near payroll, and sharing nothing with
+  // it: an asset's purchase price is a number on an asset. Issuing somebody a
+  // laptop creates no salary row, no deduction and no payroll input of any kind.
+  //
+  // Step 2 adds four more plugins on the same two prefixes, split by the GRANT
+  // each one needs rather than by where it sits:
+  //
+  //   - the LIFECYCLE plugin carries assign, return, transfer, repair, lost,
+  //     damaged, retire and dispose, each on its own permission. They are
+  //     together because the invariant between them - one active assignment per
+  //     asset - has to be readable in one place;
+  //   - the SELF plugin is the employee's own: what they have been issued, and
+  //     the two things they may say about it. Every query in it is bound to the
+  //     caller's own employee record, resolved from the session, so there is no
+  //     employee id in any of its paths to get wrong;
+  //   - the DOCUMENT plugin is separate for the mechanical reason the case
+  //     attachments and candidate documents are: it registers raw-body
+  //     content-type parsers, which are scoped to the plugin that adds them;
+  //   - the EMPLOYEE plugin sits on `/employees` and answers "what has this
+  //     person got". The URL belongs to the person and the code belongs to the
+  //     module that owns the tables, which is the right way round: an assets
+  //     query inside the employees module would be a second place that knows
+  //     how an assignment is shaped.
+  //
+  // Step 3 adds two more on the same prefix, and they are separate from the
+  // register for the same reason the rest are: each needs a different grant.
+  //
+  //   - the DASHBOARD plugin opens on `asset.read.ALL` rather than on
+  //     `asset.read`, and it is the only read in the module that does. There is
+  //     no honest narrow version of it - "total assets: 1, no warranties
+  //     expiring" is not a smaller dashboard, it is a misleading one - and the
+  //     employee's own view of their kit is `/assets/my`, which answers the
+  //     question they actually have;
+  //   - the REPORT plugin needs `asset.read` AND `asset.report`, and it still
+  //     applies the same data-scope narrowing the list screen does. A reporting
+  //     grant is permission to EXPORT what you can already see, never
+  //     permission to see more.
+  //
+  // `/assets/my`, `/assets/assignments/...`, `/assets/dashboard` and
+  // `/assets/reports/...` are static segments and are matched ahead of
+  // `/assets/:id` regardless of registration order.
+  { prefix: '/assets/categories', plugin: assetCategoryRoutes },
+  { prefix: '/assets', plugin: assetDashboardRoutes },
+  { prefix: '/assets', plugin: assetReportRoutes },
+  { prefix: '/assets', plugin: assetSelfRoutes },
+  { prefix: '/assets', plugin: assetLifecycleRoutes },
+  { prefix: '/assets', plugin: assetDocumentRoutes },
+  { prefix: '/assets', plugin: assetRoutes },
+  { prefix: '/employees', plugin: assetEmployeeRoutes },
 
   // --- phase 5+ ---------------------------------------------------------
   // { prefix: '/documents', plugin: documentRoutes },

@@ -23,6 +23,7 @@ import {
   ClipboardPen,
   PencilLine,
   Receipt,
+  Boxes,
   Briefcase,
   CalendarSearch,
   ContactRound,
@@ -406,6 +407,81 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     /*
+     * Operations: the company's own things rather than its people.
+     *
+     * One row today and the section exists for the ones behind it - the
+     * assignments, repairs and reports that arrive in the steps after this one
+     * and that all belong beside the register rather than under Management,
+     * where they would sit between Leave types and Devices.
+     *
+     * Gated on `asset.read.ALL`, which is deliberately not the grant the screen
+     * behind it requires. The register is the operations view - the whole
+     * company's equipment, and four tiles that count it - and that is what this
+     * signpost points at. An ordinary employee holds `asset.read` and would be
+     * shown a page with their own laptop on it and a "Total assets: 1" tile,
+     * which is a worse answer to "what have I been issued" than the screen that
+     * arrives with the assignments. Their own view is that screen, not this one.
+     *
+     * Hiding a row removes a signpost, never a right: the route and every
+     * endpoint behind it re-check `asset.read` and narrow the rows server-side,
+     * so an employee who reaches /assets directly is still served their own.
+     */
+    key: 'operations',
+    label: 'Operations',
+    items: [
+      {
+        /*
+         * The dashboard first, because it is where somebody lands when the
+         * question is "is anything wrong" rather than "where is that laptop".
+         *
+         * `asset.read.ALL`, and the endpoint behind it needs the same. It is
+         * the one asset screen with no narrow version: "total assets: 1, no
+         * warranties expiring" is not a smaller dashboard, it is a misleading
+         * one, and an employee's own view of their kit is the card on their
+         * home page.
+         */
+        label: 'Asset dashboard',
+        to: '/assets/dashboard',
+        icon: LayoutDashboard,
+        permission: PERMISSIONS.ASSET_READ_ALL,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Assets',
+        to: '/assets',
+        icon: Boxes,
+        permission: PERMISSIONS.ASSET_READ_ALL,
+        status: 'ready',
+        /*
+         * EXACT, for the reason Recruitment's own row is: the two rows around
+         * this one are nested under `/assets` and a prefix match would light
+         * this one up as well. The cost is that the asset DETAIL page lights no
+         * row, which is the better of the two wrongs - a sidebar with two rows
+         * highlighted at once tells the reader nothing about where they are.
+         */
+        matchPrefix: false,
+      },
+      {
+        /*
+         * Its own grant, and deliberately not `asset.read.all`. Reading the
+         * register on screen and taking it away as a file are different
+         * decisions - a company may well want the second to be rarer - so the
+         * row appears for whoever holds `asset.report`, and the endpoints
+         * behind it check that AND narrow the rows by the caller's data scope.
+         * A reporting grant is permission to export what you can see.
+         */
+        label: 'Asset reports',
+        to: '/assets/reports',
+        icon: FileSpreadsheet,
+        permission: PERMISSIONS.ASSET_REPORT,
+        status: 'ready',
+        matchPrefix: true,
+      },
+    ],
+  },
+  {
+    /*
      * Recruitment, as its own section rather than four more rows under
      * Management.
      *
@@ -544,6 +620,11 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/loan-policy': 'Loan policy',
   '/settings/medical-policy': 'Medical policy',
+  '/assets': 'Assets',
+  '/assets/dashboard': 'Asset dashboard',
+  '/assets/reports': 'Asset reports',
+  '/assets/:id': 'Asset',
+  '/settings/asset-categories': 'Asset management',
   '/recruitment': 'Recruitment',
   '/recruitment/job-openings': 'Job openings',
   '/recruitment/candidates': 'Candidates',

@@ -18,6 +18,7 @@ import {
   type SystemRoleKey,
 } from '@hrms/shared';
 import { seedCaseCatalogue } from '../src/modules/cases/case-catalogue.seed.js';
+import { seedAssetCatalogue } from '../src/modules/assets/assets.seed.js';
 
 const prisma = new PrismaClient();
 
@@ -175,6 +176,16 @@ async function main(): Promise<void> {
     `  case catalogue   ${catalogue.categoriesCreated} categories, ` +
       `${catalogue.subcategoriesCreated} subcategories ` +
       `(${catalogue.departmentsMatched} departments matched)`,
+  );
+
+  // The asset categories a company starts with: the four groups and the types
+  // under them. Additive and idempotent in exactly the same way - a category
+  // somebody has renamed or retired is left alone, because a default list is a
+  // starting point and not the truth.
+  const assetCatalogue = await seedAssetCatalogue(prisma, company.id);
+  console.log(
+    `  asset catalogue  ${assetCatalogue.groupsCreated} groups, ` +
+      `${assetCatalogue.typesCreated} types`,
   );
 
   // --- designations ---------------------------------------------------------

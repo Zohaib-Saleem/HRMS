@@ -391,6 +391,14 @@ model Company {
   interviewScheduleChanges InterviewScheduleChange[]
   offers                   Offer[]
 
+  // --- assets ---
+  assetCategories  AssetCategory[]
+  assets           Asset[]
+  assetAssignments AssetAssignment[]
+  assetRepairs     AssetRepair[]
+  assetIncidents   AssetIncident[]
+  assetDocuments   AssetDocument[]
+
   @@map("companies")
 }
 
@@ -429,6 +437,11 @@ model Department {
   /// same reason a case is: so "Development is hiring two people" is a query
   /// rather than a string comparison.
   jobOpenings JobOpening[]
+
+  /// The assets that BELONG to this department - not the ones its people
+  /// happen to be holding. A projector belongs to Facilities whether or not
+  /// anybody has signed it out.
+  assets Asset[]
 
   @@unique([companyId, name])
   @@index([companyId, isActive])
@@ -496,6 +509,9 @@ model Location {
 
   /// Where a vacancy is based.
   jobOpenings JobOpening[]
+
+  /// The assets kept at this site.
+  assets Asset[]
 
   @@unique([companyId, name])
   @@index([companyId, isActive])
@@ -759,6 +775,16 @@ model Employee {
   /// Convert to Employee, and never by anything else.
   hiredFromCandidate   Candidate?             @relation("CandidateHiredEmployee")
 
+  // --- assets ---
+  /// Every spell this person has had of holding company equipment, including
+  /// the ones that ended. Restrict on the assignment side: an employee who has
+  /// ever been issued an asset cannot be deleted out from under that history.
+  assetAssignments AssetAssignment[]
+  /// Problems this person reported with an asset they were holding.
+  assetIncidents   AssetIncident[]   @relation("AssetIncidentEmployee")
+  /// Disposals this person signed off.
+  assetDisposals   Asset[]           @relation("AssetDisposalApprover")
+
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
   @@index([companyId, employmentStatus])
@@ -880,6 +906,17 @@ model User {
   lunchPaymentsTaken   LunchOrder[] @relation("LunchOrderPaidBy")
   lunchOrdersCancelled LunchOrder[] @relation("LunchOrderCancelledBy")
   lunchRefundsRecorded LunchOrder[] @relation("LunchOrderRefundedBy")
+
+  // --- assets ---
+  /// The handovers this account performed. The storekeeper's own trail.
+  assetsIssued           AssetAssignment[] @relation("AssetAssignedBy")
+  assetsReceived         AssetAssignment[] @relation("AssetReturnedBy")
+  assetsAcknowledged     AssetAssignment[] @relation("AssetAcknowledgedBy")
+  assetRepairsSent       AssetRepair[]     @relation("AssetRepairSentBy")
+  assetRepairsCompleted  AssetRepair[]     @relation("AssetRepairCompletedBy")
+  assetIncidentsFiled    AssetIncident[]   @relation("AssetIncidentReportedBy")
+  assetIncidentsResolved AssetIncident[]   @relation("AssetIncidentResolvedBy")
+  assetDocumentsUploaded AssetDocument[]   @relation("AssetDocumentUploader")
 
   @@unique([email])
   @@index([companyId, status])
@@ -4923,4 +4960,552 @@ model Offer {
   @@index([jobOpeningId])
   @@index([applicationId])
   @@map("offers")
+}
+
+// ===========================================================================
+// ASSETS - the company's equipment, who is holding it, and what state it is in
+// ===========================================================================
+
+/// Where an asset is in the company's custody. See `ASSET_STATUSES` in
+/// `packages/shared/src/dto/assets.ts` for what each value commits to.
+///
+/// RETURNED is deliberately not a synonym for AVAILABLE: something handed back
+/// has not yet been checked over, and the gap between those two facts is where
+/// the missing charger is discovered.
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  UNDER_REPAIR
+  LOST
+  DAMAGED
+  RETURNED
+  RETIRED
+  DISPOSED
+}
+
+/// What state the thing is actually in - never the same question as its status.
+///
+/// DAMAGED appears in both enums and that is not a duplication. The status says
+/// "we are not issuing this to anybody"; the condition says "the screen is
+/// cracked". An asset is routinely ASSIGNED and DAMAGED at the same time, which
+/// is exactly why they are two columns.
+enum AssetCondition {
+  NEW
+  GOOD
+  FAIR
+  DAMAGED
+  CRITICAL
+}
+
+/// How one spell of somebody holding an asset ended, or that it has not.
+///
+/// The three endings are kept apart because the question later is not "did it
+/// come back" but "what happened to it": handed in, passed straight to somebody
+/// else, or never seen again.
+enum AssetAssignmentStatus {
+  ACTIVE
+  RETURNED
+  TRANSFERRED
+  WRITTEN_OFF
+}
+
+/// Whether the person holding an asset has said they have it.
+///
+/// Three states, and the third is the point: a handover where the employee says
+/// "this arrived with a cracked lid" is neither acknowledged nor merely
+/// un-acknowledged. A two-state flag would have to round that to one of them.
+enum AssetAcknowledgementStatus {
+  PENDING
+  ACKNOWLEDGED
+  ISSUE_REPORTED
+}
+
+enum AssetRepairStatus {
+  IN_PROGRESS
+  COMPLETED
+  /// The repair never happened. Still ends the repair, so the asset cannot be
+  /// stranded in UNDER_REPAIR forever by a job somebody called off.
+  CANCELLED
+}
+
+/// Something went wrong with an asset. One shape, three writers - see
+/// `AssetIncident`.
+enum AssetIncidentKind {
+  ISSUE_REPORTED
+  DAMAGED
+  LOST
+}
+
+enum AssetDisposalMethod {
+  SOLD
+  SCRAPPED
+  DONATED
+  RECYCLED
+  OTHER
+}
+
+/// What a file attached to an asset is. The bytes live in the SAME object store
+/// the case attachments and candidate documents use; no second file system was
+/// created for this module.
+enum AssetDocumentType {
+  INVOICE
+  PURCHASE_RECEIPT
+  WARRANTY
+  REPAIR_RECEIPT
+  HANDOVER
+  OTHER
+}
+
+/// What kind of thing an asset is. Configuration, never a hard-coded dropdown.
+///
+/// Two levels through a self-relation, the same shape `CaseCategory` uses: a
+/// GROUP somebody reports on ("IT Equipment") and a TYPE somebody picks on a
+/// form ("Laptop"). An asset may point at either level, so a company that only
+/// wants "Vehicles" is not made to invent a child row it will never use.
+///
+/// Seeded from `DEFAULT_ASSET_CATEGORY_CATALOGUE` and the company's from that
+/// moment on. Nothing in the API or the UI matches on any of those names.
+model AssetCategory {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Null for a group; set for a type under that group.
+  parentCategoryId String?
+
+  name        String
+  description String?
+
+  /// Display order within its level. Ties fall back to name, so a catalogue
+  /// nobody has ordered still comes out the same way twice.
+  sortOrder Int @default(0)
+
+  /// Retired rather than deleted, and there is no delete endpoint at all.
+  /// Assets point at categories; removing one would orphan them and lose the
+  /// answer to "what did we buy under Office Equipment in 2024". Retiring takes
+  /// it off the create form and leaves every asset that carries it untouched.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parent   AssetCategory?  @relation("AssetCategoryTree", fields: [parentCategoryId], references: [id], onDelete: Restrict)
+  children AssetCategory[] @relation("AssetCategoryTree")
+
+  assets Asset[]
+
+  /// One name per level, per company.
+  ///
+  /// Honest about what this does and does not enforce, exactly as
+  /// `CaseCategory` is: PostgreSQL treats NULLs as distinct, so this constrains
+  /// TYPES (which always have a parent) and cannot constrain groups, whose
+  /// parent is null. Duplicate group names are refused in the route instead -
+  /// the database cannot express the rule and pretending otherwise is worse
+  /// than stating where it lives.
+  @@unique([companyId, parentCategoryId, name])
+  /// The catalogue endpoint's query: this company's live categories, in order.
+  @@index([companyId, isActive, sortOrder])
+  @@index([parentCategoryId])
+  @@map("asset_categories")
+}
+
+/// One thing the company owns.
+///
+/// Note what is NOT on this model: any column naming the employee who has it.
+/// A laptop goes to Ahmed, comes back, and goes to Sana, and a
+/// `currentEmployeeId` would record the last of those three facts while
+/// silently destroying the first two - which are precisely the facts somebody
+/// needs when the machine turns up with a cracked screen. The holder is the
+/// ACTIVE row in `asset_assignments`; everything before it is still there.
+///
+/// `departmentId` is a different claim and is genuinely a property of the
+/// asset: which part of the company the thing BELONGS to, which survives the
+/// person holding it leaving. A meeting room projector belongs to Facilities
+/// whether or not anybody has signed it out.
+model Asset {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// The label physically stuck on the thing, e.g. `IT-LAP-0042`. Unique per
+  /// company, supplied rather than generated, because it has to match what is
+  /// already printed on the sticker.
+  assetTag String
+
+  name String
+
+  /// Pointed at, never copied. What kind of thing this is is a real category
+  /// row, so "how many laptops" is a query.
+  categoryId String
+
+  brand String?
+  model String?
+
+  /// The manufacturer's serial. Optional - a chair has none - and unique within
+  /// the company WHEN PRESENT, which the index below gives for free because
+  /// PostgreSQL treats NULLs as distinct.
+  serialNumber String?
+
+  purchaseDate  DateTime? @db.Date
+  /// Decimal(12,2) everywhere money appears, matching payroll, loans and lunch.
+  purchasePrice Decimal?  @db.Decimal(12, 2)
+  /// What it is reckoned to be worth now. A separate figure from what was paid
+  /// and never derived from it: depreciation is a policy this module does not
+  /// have, and a computed value nobody set would be a number reported upwards
+  /// that no human agreed to.
+  currentValue  Decimal?  @db.Decimal(12, 2)
+
+  vendor String?
+
+  warrantyStart DateTime? @db.Date
+  warrantyEnd   DateTime? @db.Date
+
+  /// Which office the thing is at - a real organisation Location, pointed at.
+  locationId String?
+  /// Where it is within that office: a desk, a room, a shelf. Free text on
+  /// purpose, because "third floor, by the window" is not a row anybody wants
+  /// to maintain in the organisation module.
+  location   String?
+
+  /// Which part of the company the asset belongs to. Not who is holding it.
+  departmentId String?
+
+  condition AssetCondition @default(GOOD)
+  status    AssetStatus    @default(AVAILABLE)
+
+  notes String?
+
+  // --- the two endings ------------------------------------------------------
+  // Columns rather than tables because an asset is retired once and disposed of
+  // once. They are written by their own endpoints, never by the edit form, and
+  // nothing clears them: an asset that came back from retirement keeps the
+  // record of having been retired.
+
+  /// When it was taken out of service, and why.
+  retiredOn     DateTime? @db.Date
+  retiredReason String?
+
+  /// The disposal block. Set together, by `POST /assets/:id/dispose`, once.
+  disposedOn           DateTime?            @db.Date
+  disposalMethod       AssetDisposalMethod?
+  disposalReason       String?
+  disposalFinalValue   Decimal?             @db.Decimal(12, 2)
+  /// Whoever in the company signed it off. An employee, pointed at rather than
+  /// typed, so "who approved writing off eleven laptops" is a query.
+  disposalApprovedById String?
+  disposalNotes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: deleting a category must never delete the assets
+  /// filed under it. It is also why the categories endpoint offers retirement
+  /// and no delete at all.
+  category   AssetCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  site       Location?     @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  department Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  disposalApprovedBy Employee? @relation("AssetDisposalApprover", fields: [disposalApprovedById], references: [id], onDelete: SetNull)
+
+  assignments AssetAssignment[]
+  repairs     AssetRepair[]
+  incidents   AssetIncident[]
+  documents   AssetDocument[]
+
+  /// The tag on the sticker is unique within the company. This is the
+  /// constraint the duplicate check reports as a field error before it is ever
+  /// reached, and the one that actually holds under a race.
+  @@unique([companyId, assetTag])
+  /// Unique WHEN PRESENT. A hundred chairs with no serial do not collide; two
+  /// laptops claiming the same one do.
+  @@unique([companyId, serialNumber])
+  /// The register's own query: this company's assets by status, newest first.
+  @@index([companyId, status])
+  @@index([companyId, condition])
+  @@index([companyId, categoryId])
+  @@index([companyId, departmentId])
+  @@index([companyId, locationId])
+  @@index([companyId, createdAt])
+  @@index([companyId, name])
+  @@map("assets")
+}
+
+/// One spell of one employee holding one asset.
+///
+/// The history, and the reason there is no holder column on `assets`. A laptop
+/// that has been through three people is three rows here, of which at most one
+/// is ACTIVE, and none of the other two is destroyed by the next handover.
+///
+/// The subject is an EMPLOYEE and the two actors are USERS, and the asymmetry
+/// is the same one the cases module draws: an asset is issued to somebody's
+/// working life, which is a fact about their employee record, and it is handed
+/// over by whoever was signed in at the counter, which is a fact about an
+/// account.
+///
+/// AT MOST ONE ACTIVE ROW PER ASSET. That rule is enforced in the service layer
+/// rather than by the database, and the reason is stated rather than hidden:
+/// the constraint that would express it is a partial unique index
+/// (`... WHERE status = 'ACTIVE'`), which Prisma cannot describe and would
+/// therefore try to drop on the next migration. The same trade-off, and the
+/// same disclosure, as the top-level name rule on `CaseCategory`.
+model AssetAssignment {
+  id        String @id @default(cuid())
+  companyId String
+
+  assetId    String
+  employeeId String
+
+  assignedAt DateTime  @default(now())
+  returnedAt DateTime?
+
+  /// Who handed it over, and who took it back. Users, and nullable: an account
+  /// can be deleted years after the handover, and losing the fact that the
+  /// handover happened would be far worse than losing the name attached to it.
+  assignedById String?
+  returnedById String?
+
+  /// The state the asset went out in, and the state it came back in.
+  ///
+  /// Recorded on the ASSIGNMENT rather than only on the asset, which is the
+  /// whole point of writing them down: the asset carries one current condition,
+  /// and the question that gets asked is "what state was it in when we gave it
+  /// to him". Two columns here answer it; one column on the asset never can.
+  conditionAtAssignment AssetCondition?
+  conditionAtReturn     AssetCondition?
+
+  /// What went out WITH the asset, what came back, and what did not.
+  ///
+  /// String arrays rather than a join table, because an accessory is a label on
+  /// a handover and nothing in this product ever needs to ask a question about
+  /// "all the chargers". `ASSET_ACCESSORY_SUGGESTIONS` in the shared package is
+  /// what the form offers; it is a suggestion list and not a closed set, so a
+  /// company that issues docking stations does not need a release to say so.
+  ///
+  /// `accessoriesMissing` is DERIVED at return time - issued minus returned,
+  /// plus whatever else the person recording the return adds by hand - and
+  /// stored rather than recomputed, so the record of what was missing on the
+  /// day survives somebody later editing the issued list.
+  accessoriesIssued   String[]
+  accessoriesReturned String[]
+  accessoriesMissing  String[]
+
+  /// What was wrong with it when it came back, in words. Separate from the
+  /// condition enum: "CRITICAL" does not tell the next person what happened.
+  damageDescription String?
+
+  /// The handover note, and the note written when it came back. Two columns,
+  /// because one would mean a return overwriting what was said at issue.
+  notes       String?
+  returnNotes String?
+
+  /// Why it moved on. Set on a TRANSFER, where somebody asked for this to
+  /// happen and the reason is the only record of who and why.
+  reason String?
+
+  /// The handover this one succeeded, on a transfer.
+  ///
+  /// Unique, so one closed assignment can have at most one successor: a chain
+  /// rather than a fork. It is what turns "Muhammad -> Ahmed -> Sana" into a
+  /// readable sequence instead of three rows that happen to share an asset.
+  previousAssignmentId String? @unique
+
+  /// Whether the person has said they have it. PENDING until they do.
+  ///
+  /// On the ASSIGNMENT rather than on the asset, because it is a fact about one
+  /// handover: the next person to be issued the same laptop has not
+  /// acknowledged anything, and a column on the asset would say they had.
+  acknowledgementStatus AssetAcknowledgementStatus @default(PENDING)
+  acknowledgedAt        DateTime?
+  acknowledgedById      String?
+
+  status AssetAssignmentStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  asset          Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  employee       Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  assignedBy     User?    @relation("AssetAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  returnedBy     User?    @relation("AssetReturnedBy", fields: [returnedById], references: [id], onDelete: SetNull)
+  acknowledgedBy User?    @relation("AssetAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+
+  /// The handover this one succeeded, and the one that succeeded it.
+  previous AssetAssignment? @relation("AssetAssignmentChain", fields: [previousAssignmentId], references: [id], onDelete: SetNull)
+  next     AssetAssignment? @relation("AssetAssignmentChain")
+
+  incidents AssetIncident[]
+
+  /// "Who has this now" and "what has this person got", both as index lookups
+  /// rather than scans. The first is read on every row of the register.
+  @@index([assetId, status])
+  @@index([companyId, employeeId, status])
+  @@index([companyId, status])
+  @@index([assetId, assignedAt])
+  @@map("asset_assignments")
+}
+
+/// One trip to the repairer.
+///
+/// Its own table rather than columns on the asset, because an asset is repaired
+/// many times and the interesting question is the history: "this machine has
+/// been back three times this year" is a decision about replacing it, and a
+/// single set of columns could only ever remember the last trip.
+///
+/// `statusBeforeRepair` is the load-bearing column. Section 8 asks that
+/// AVAILABLE -> UNDER_REPAIR -> AVAILABLE and ASSIGNED -> UNDER_REPAIR ->
+/// ASSIGNED both hold, and this is how: the status the asset had when it left
+/// is written down, and completing the repair puts it back. Without it the
+/// return from repair would have to GUESS, and the guess that loses is the one
+/// that quietly un-assigns a laptop somebody still has at home.
+///
+/// Note what a repair does NOT do: it does not close the assignment. The
+/// employee still has the asset on paper while it is away being fixed, which is
+/// both true and what section 8 means by "do not lose the employee assignment
+/// history".
+model AssetRepair {
+  id        String @id @default(cuid())
+  companyId String
+  assetId   String
+
+  problem String
+
+  reportedOn       DateTime  @db.Date
+  sentOn           DateTime  @db.Date
+  expectedReturnOn DateTime? @db.Date
+  returnedOn       DateTime? @db.Date
+
+  vendor        String?
+  estimatedCost Decimal? @db.Decimal(12, 2)
+  actualCost    Decimal? @db.Decimal(12, 2)
+
+  /// Written when it was sent, and written when it came back. Two columns, so
+  /// the outcome cannot overwrite the complaint.
+  notes           String?
+  completionNotes String?
+
+  status AssetRepairStatus @default(IN_PROGRESS)
+
+  /// What the asset goes back to when this ends. See the note above.
+  statusBeforeRepair AssetStatus
+
+  sentById      String?
+  completedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  asset       Asset   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  sentBy      User?   @relation("AssetRepairSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  completedBy User?   @relation("AssetRepairCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+
+  documents AssetDocument[]
+
+  /// "Is this asset away right now" and "what has it been through", both as
+  /// index lookups. The first is read on every detail page.
+  @@index([assetId, status])
+  @@index([assetId, sentOn])
+  @@index([companyId, status])
+  @@map("asset_repairs")
+}
+
+/// Something went wrong with an asset, and here is the record of it.
+///
+/// One table for three events of the same shape - a date, a reason, a
+/// description and whoever said so. What separates them is WHO writes one and
+/// what it does to the asset:
+///
+///   ISSUE_REPORTED - the employee holding it, from their own screen. Changes
+///                    NOTHING about the asset. An employee cannot alter its
+///                    condition, its value or its status, and "the charger is
+///                    buzzing" must not silently do so; it raises a flag a
+///                    person reads.
+///   DAMAGED / LOST - somebody holding `asset.update`. Moves the asset's status
+///                    and leaves this row as the reason.
+///
+/// Nothing here deletes an asset, which is section 9's whole instruction. A
+/// lost laptop stays on the register as a LOST laptop, because "we lost eleven
+/// laptops last year" is a fact about the company and not noise to be tidied.
+model AssetIncident {
+  id        String @id @default(cuid())
+  companyId String
+  assetId   String
+
+  /// The handover this happened during, when there was one. Nullable: an asset
+  /// can be found damaged in the store cupboard with nobody holding it.
+  assignmentId String?
+
+  kind AssetIncidentKind
+
+  occurredOn  DateTime @db.Date
+  reason      String
+  description String?
+  notes       String?
+
+  /// Who said so. The account is always recorded; the EMPLOYEE is recorded as
+  /// well when the report came from the person holding the asset, because
+  /// "Ahmed reported this" is the fact somebody needs and an account id is not.
+  reportedById         String?
+  reportedByEmployeeId String?
+
+  /// Closed off by somebody, with a note. An unresolved incident is the flag.
+  resolvedAt      DateTime?
+  resolvedById    String?
+  resolutionNotes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company            Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  asset              Asset            @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assignment         AssetAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  reportedBy         User?            @relation("AssetIncidentReportedBy", fields: [reportedById], references: [id], onDelete: SetNull)
+  reportedByEmployee Employee?        @relation("AssetIncidentEmployee", fields: [reportedByEmployeeId], references: [id], onDelete: SetNull)
+  resolvedBy         User?            @relation("AssetIncidentResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([assetId, occurredOn])
+  @@index([companyId, kind])
+  @@index([assignmentId])
+  @@map("asset_incidents")
+}
+
+/// A file about an asset: the invoice, the warranty, a repair receipt, the
+/// signed handover.
+///
+/// Shaped exactly like `case_attachments` and `candidate_documents` - an opaque
+/// object key, a SNIFFED content type, a size and a display name with no
+/// bearing on where the bytes live - because it uses the same object store.
+/// Section 13 asks that no second storage system be created, and this is that
+/// instruction taken literally: the only thing this table adds is the column
+/// naming which asset the file is about.
+model AssetDocument {
+  id        String @id @default(cuid())
+  companyId String
+  assetId   String
+
+  /// Hangs a repair receipt off the repair it belongs to, so the repair history
+  /// carries its own paperwork instead of dumping it in one undifferentiated
+  /// pile on the asset.
+  repairId String?
+
+  type AssetDocumentType @default(OTHER)
+
+  fileName    String
+  contentType String
+  sizeBytes   Int
+  objectKey   String
+
+  uploadedByUserId String?
+
+  createdAt DateTime @default(now())
+
+  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  asset      Asset        @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  repair     AssetRepair? @relation(fields: [repairId], references: [id], onDelete: SetNull)
+  uploadedBy User?        @relation("AssetDocumentUploader", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([assetId, createdAt])
+  @@index([repairId])
+  @@map("asset_documents")
 }

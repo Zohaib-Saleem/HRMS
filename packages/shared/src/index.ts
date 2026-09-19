@@ -25,3 +25,4 @@ export * from './dto/cases.js';
 export * from './dto/lunch.js';
 export * from './dto/timeline.js';
 export * from './dto/recruitment.js';
+export * from './dto/assets.js';

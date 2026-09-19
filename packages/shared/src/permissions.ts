@@ -322,6 +322,51 @@ export const PERMISSIONS = {
   /// stay two decisions.
   RECRUITMENT_CONVERT_EMPLOYEE: 'recruitment.convert.employee',
 
+  // --- Assets ---
+  /// See assets. NARROW on its own, and that is the point: a holder without
+  /// `asset.read.all` is served the assets currently out with the people their
+  /// data scope reaches - which for an ordinary member of staff is the one
+  /// laptop on their own desk, and for a manager is their reports'. An asset
+  /// nobody is holding is not "theirs" and is absent from that list.
+  ASSET_READ: 'asset.read',
+  /// Every asset in the company, held or not. The register itself, and the
+  /// grant the Operations screen is built for.
+  ASSET_READ_ALL: 'asset.read.all',
+  ASSET_CREATE: 'asset.create',
+  ASSET_UPDATE: 'asset.update',
+  /// Hand an asset to somebody. Writes the assignment row that makes them the
+  /// holder; separate from `asset.update` because issuing company property is
+  /// a different act from correcting a serial number.
+  ASSET_ASSIGN: 'asset.assign',
+  /// Move an asset from one person straight to another without it coming back.
+  ASSET_TRANSFER: 'asset.transfer',
+  /// Take an asset back in, recording the condition it came back in.
+  ASSET_RETURN: 'asset.return',
+  /// Send an asset for repair and record what happened to it.
+  ASSET_REPAIR: 'asset.repair',
+  /// Take an asset out of service. Kept apart from disposal: a retired asset
+  /// is still the company's.
+  ASSET_RETIRE: 'asset.retire',
+  /// Write an asset off for good - sold, scrapped, gone. The end of a record
+  /// and the narrowest grant in the module, because nothing comes back from it.
+  ASSET_DISPOSE: 'asset.dispose',
+  /// Say you have received an asset, or that something is wrong with it.
+  ///
+  /// The employee's own grant, and the narrowest in the module: it reaches ONLY
+  /// the holder's own assignment - the endpoint matches the caller's employee id
+  /// against the row before it writes anything - so it can never be used to
+  /// acknowledge a handover in somebody else's name.
+  ///
+  /// Its own grant rather than part of `asset.read` because acknowledging is a
+  /// WRITE, and the one write an employee is trusted with here. Everything it
+  /// can touch is the acknowledgement itself: nothing in this grant alters an
+  /// asset's condition, its value, its status or its assignment.
+  ASSET_ACKNOWLEDGE: 'asset.acknowledge',
+  /// Maintain the category catalogue: create, rename, reorder and retire.
+  ASSET_CATEGORY_MANAGE: 'asset.category.manage',
+  /// Run the asset reports.
+  ASSET_REPORT: 'asset.report',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -667,6 +712,81 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     ],
   },
   {
+    key: 'assets',
+    label: 'Assets',
+    description: 'The company\u2019s equipment, who is holding it, and what state it is in.',
+    permissions: [
+      {
+        value: PERMISSIONS.ASSET_READ,
+        label: 'View assets',
+        description:
+          'See the assets held by the people your data scope reaches \u2014 for most people, their own. The whole register needs the next grant.',
+      },
+      {
+        value: PERMISSIONS.ASSET_READ_ALL,
+        label: 'View every asset',
+        description: 'See the company\u2019s entire asset register, including assets nobody is holding.',
+      },
+      {
+        value: PERMISSIONS.ASSET_CREATE,
+        label: 'Add assets',
+        description: 'Put a new asset on the register.',
+      },
+      {
+        value: PERMISSIONS.ASSET_UPDATE,
+        label: 'Edit assets',
+        description:
+          'Correct an asset\u2019s details and condition. Cannot assign or return one \u2014 those are their own grants.',
+      },
+      {
+        value: PERMISSIONS.ASSET_ASSIGN,
+        label: 'Assign assets',
+        description: 'Hand an asset to an employee and record the condition it went out in.',
+      },
+      {
+        value: PERMISSIONS.ASSET_TRANSFER,
+        label: 'Transfer assets',
+        description: 'Move an asset straight from one employee to another.',
+      },
+      {
+        value: PERMISSIONS.ASSET_RETURN,
+        label: 'Take assets back',
+        description: 'Close an assignment and record the condition the asset came back in.',
+      },
+      {
+        value: PERMISSIONS.ASSET_REPAIR,
+        label: 'Manage repairs',
+        description: 'Send an asset for repair and record what was done to it.',
+      },
+      {
+        value: PERMISSIONS.ASSET_RETIRE,
+        label: 'Retire assets',
+        description: 'Take an asset out of service while the company still holds it.',
+      },
+      {
+        value: PERMISSIONS.ASSET_DISPOSE,
+        label: 'Dispose of assets',
+        description: 'Write an asset off for good. Nothing comes back from this.',
+      },
+      {
+        value: PERMISSIONS.ASSET_ACKNOWLEDGE,
+        label: 'Acknowledge a received asset',
+        description:
+          'Confirm you have received an asset issued to you, or report a problem with it. Reaches only your own handover.',
+      },
+      {
+        value: PERMISSIONS.ASSET_CATEGORY_MANAGE,
+        label: 'Manage asset categories',
+        description: 'Create, rename, reorder and retire the categories assets are filed under.',
+      },
+      {
+        value: PERMISSIONS.ASSET_REPORT,
+        label: 'Run asset reports',
+        description: 'Read the asset reports and export them.',
+      },
+    ],
+  },
+  {
     key: 'governance',
     label: 'Governance',
     description: 'Audit trail and system settings.',
@@ -909,6 +1029,30 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // create the same employee by hand and lose the link back to the
     // candidate, which is worse than granting it.
     PERMISSIONS.RECRUITMENT_CONVERT_EMPLOYEE,
+
+    /*
+     * Assets, operationally entire. HR runs the register: puts equipment on it,
+     * hands it out, takes it back, sends it for repair and retires it.
+     *
+     * Every one of these is here except none - including `asset.dispose`,
+     * which is the one worth pausing on. Disposal is irreversible and it is
+     * still HR's: the alternative is a register where somebody can retire a
+     * dead laptop but not write it off, so the dead laptops accumulate as
+     * RETIRED rows forever and the asset count stops meaning anything.
+     */
+    PERMISSIONS.ASSET_READ,
+    PERMISSIONS.ASSET_READ_ALL,
+    PERMISSIONS.ASSET_CREATE,
+    PERMISSIONS.ASSET_UPDATE,
+    PERMISSIONS.ASSET_ASSIGN,
+    PERMISSIONS.ASSET_TRANSFER,
+    PERMISSIONS.ASSET_RETURN,
+    PERMISSIONS.ASSET_REPAIR,
+    PERMISSIONS.ASSET_RETIRE,
+    PERMISSIONS.ASSET_DISPOSE,
+    PERMISSIONS.ASSET_CATEGORY_MANAGE,
+    PERMISSIONS.ASSET_REPORT,
+    PERMISSIONS.ASSET_ACKNOWLEDGE,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -976,6 +1120,25 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.RECRUITMENT_READ,
     PERMISSIONS.INTERVIEW_READ,
     PERMISSIONS.INTERVIEW_EVALUATE,
+
+    /*
+     * Assets: the read grant and nothing else.
+     *
+     * This is the one place in the module where the existing DATA SCOPE does
+     * the narrowing, and it is the right instrument here for a reason that does
+     * not hold elsewhere: "who is holding this laptop" is a fact about an
+     * EMPLOYEE RECORD, and a reporting line is exactly the reason somebody may
+     * read their reports' records. So a manager on REPORTS_AND_OWN is served
+     * the assets out with their team and with themselves.
+     *
+     * What they do NOT get is `asset.read.all`: the assets nobody is holding
+     * are the company's stock, not their team's. And no write grant of any
+     * kind - issuing company property is HR's act, not a line manager's.
+     */
+    PERMISSIONS.ASSET_READ,
+    // They are issued a laptop like everybody else, and acknowledging it
+    // reaches their own handover and nothing of their team's.
+    PERMISSIONS.ASSET_ACKNOWLEDGE,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -1030,6 +1193,30 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
      * this one, which is the intended way in - by name, because interviewing
      * is a job somebody is handed.
      */
+
+    /*
+     * Assets: `asset.read` and nothing whatsoever beyond it.
+     *
+     * With an OWN data scope this returns the assets currently out with THIS
+     * person - the laptop on their desk and the phone in their pocket - and
+     * nothing else. Not the company's stock, not a colleague's machine, and
+     * not the assignment history of an asset before it reached them.
+     *
+     * Section 7 lists six grants an employee must never hold - create, update,
+     * assign, transfer, return, dispose - and they are absent here. Worth
+     * stating plainly because two of them read like self-service and are not:
+     * "return" is the act of RECEIVING an asset back and recording the state
+     * it came back in, which is the storekeeper's judgement rather than the
+     * holder's, and an employee who could record their own return could close
+     * the loop on a laptop that never arrived.
+     *
+     * What they DO hold is `asset.acknowledge`, which is the one write in this
+     * module an employee is trusted with: saying they have received the thing,
+     * or that something is wrong with it. It reaches their own handover row and
+     * writes nothing about the asset - see the grant's own note.
+     */
+    PERMISSIONS.ASSET_READ,
+    PERMISSIONS.ASSET_ACKNOWLEDGE,
   ],
   /*
    * The office boy, and the list is short on purpose: this role is handed to

@@ -223,6 +223,75 @@ describe('an administrator', () => {
   });
 });
 
+describe('the operations section', () => {
+  /*
+   * Assets. Gated on `asset.read.ALL` rather than on `asset.read`, and the gap
+   * is deliberate: the register is the operations view - the whole company's
+   * equipment and four tiles counting it - so the signpost points at the people
+   * whose job that is. An employee holds `asset.read` and would be shown a page
+   * with their own laptop on it; their own view arrives with the assignment
+   * screens rather than here.
+   *
+   * Hiding the row removes a signpost, never a right. The route behind it and
+   * every endpoint under it re-check `asset.read` and narrow the rows
+   * server-side, so an employee who opens /assets directly is served their own.
+   */
+  it('gives HR the register', () => {
+    expect(sidebarFor(HR_ADMIN)).toContain('Assets');
+  });
+
+  it('does not signpost it to an employee, who holds the narrow grant', () => {
+    expect(EMPLOYEE).toContain(PERMISSIONS.ASSET_READ);
+    expect(EMPLOYEE).not.toContain(PERMISSIONS.ASSET_READ_ALL);
+
+    expect(sidebarFor(EMPLOYEE)).not.toContain('Assets');
+  });
+
+  it('does not give the office boy anything of the asset register', () => {
+    expect(sidebarFor(OFFICE_BOY)).not.toContain('Assets');
+  });
+
+  /*
+   * Step 3 added two rows beside the register, and each carries the grant its
+   * own endpoint needs rather than a module-wide one:
+   *
+   *   - the DASHBOARD needs `asset.read.all`, the same grant the register row
+   *     carries, because there is no honest narrow version of a screen whose
+   *     job is to count everything;
+   *   - the REPORTS need `asset.report`. Reading the register on screen and
+   *     taking it away as a file are different decisions, and a company may
+   *     well want the second to be rarer.
+   */
+  it('gives HR the dashboard and the reports beside the register', () => {
+    const links = sidebarFor(HR_ADMIN);
+
+    expect(links).toContain('Asset dashboard');
+    expect(links).toContain('Asset reports');
+    // The dashboard leads: somebody opens this section asking "is anything
+    // wrong" far more often than "where is that particular laptop".
+    expect(links.indexOf('Asset dashboard')).toBeLessThan(links.indexOf('Assets'));
+  });
+
+  it('signposts neither to an employee', () => {
+    const links = sidebarFor(EMPLOYEE);
+
+    expect(EMPLOYEE).not.toContain(PERMISSIONS.ASSET_REPORT);
+    expect(links).not.toContain('Asset dashboard');
+    expect(links).not.toContain('Asset reports');
+  });
+
+  it('keeps the register row exact, so the rows nested under it cannot light it too', () => {
+    const register = NAV_SECTIONS.flatMap((section) => section.items).find(
+      (item) => item.to === '/assets',
+    );
+
+    // `/assets/dashboard` and `/assets/reports` both start with `/assets`. A
+    // prefix match here would highlight two rows at once, which tells the
+    // reader nothing about where they are.
+    expect(register?.matchPrefix).toBe(false);
+  });
+});
+
 describe('the recruitment section', () => {
   /*
    * Four rows on three different grants, which is the whole point of the

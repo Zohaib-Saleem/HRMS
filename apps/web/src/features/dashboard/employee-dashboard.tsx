@@ -20,6 +20,7 @@ import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
 import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
 import { MyCasesCard } from '@/features/cases/my-cases-card';
+import { MyAssetsCard } from '@/features/assets/my-assets-card';
 import { LunchTodayCard } from '@/features/lunch/lunch-today-card';
 import { useAuthenticatedSession } from '@/features/auth/session-context';
 import { MyAttendanceBarsCard } from './my-attendance-bars-card';
@@ -269,6 +270,10 @@ export function EmployeeDashboard() {
       <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
         <LunchTodayCard />
         <MyCasesCard />
+        {/* Renders itself away without `asset.read`. It carries the
+            acknowledgement prompt from section 7, which is the one thing in
+            this module an employee is asked to answer. */}
+        <MyAssetsCard />
         <TodayLeaveCard balances={data?.leave?.balances ?? []} loading={loading} />
       </div>
 
