@@ -8,7 +8,14 @@ Status values are exactly four:
 - **NOT IMPLEMENTED** — no table, no API, no screen.
 
 Roles are the four seeded ones: Super Admin (SA), HR Admin (HR), Manager (MGR),
-Employee (EMP). A role appears only if it holds the permission by default.
+Employee (EMP), plus the two narrow ones where they are relevant — Interviewer
+(INT) and Office Boy. A role appears only if it holds the permission by default.
+
+> **Known coverage gap.** **Cases**, **Lunch**, **Loans** and **Medical** are
+> built and running, and have never had a section here. Their behaviour is
+> documented in the [admin manual](HRMS-ADMIN-MANUAL.md); it is the line-by-line
+> status rows that are missing. Nothing in this document describes them as
+> unimplemented — they are simply absent, which is a gap and not a claim.
 
 ## Access and identity
 
@@ -172,14 +179,63 @@ Employee (EMP). A role appears only if it holds the permission by default.
 
 ## Recruitment
 
-> **Not yet broken out line by line.** The module shipped on 19 September 2026 and
-> its row in *Not built at all* was removed because it was false, but nobody has
-> written the per-feature rows yet. The same is true of Cases, Lunch, Loans and
-> Medical, which have never had a section here.
+Roles here include the seeded **Interviewer** (INT), which holds `interview.read`
+and `interview.evaluate` and nothing else.
 
 | Feature | Status | Roles | Depends on | Notes |
 |---|---|---|---|---|
-| Recruitment / applicant tracking | IMPLEMENTED | SA, HR, MGR, Interviewer | — | Job openings, candidates, interviews, evaluations, offers, and conversion to an employee. Nine grants and the Interviewer role |
+| Job openings | IMPLEMENTED | SA, HR, MGR | — | Five statuses. Only *Open* accepts applications and interviews |
+| Draft openings excluded from counts | IMPLEMENTED | SA, HR | — | A draft is not a quiet Open: no pipeline, no applications, counts towards nothing |
+| Closing / cancelling needs a reason | IMPLEMENTED | SA, HR | — | Its own endpoint, so the reason cannot be forgotten on a form save |
+| Vacancy count (seats) | IMPLEMENTED | SA, HR, MGR | — | Six openings for two people each is twelve seats |
+| Salary band and date validation | IMPLEMENTED | SA, HR | — | Top cannot be below bottom; closing cannot precede opening |
+| Generated references | IMPLEMENTED | SA, HR | — | `JOB-0007`, `CAN-0042`, per company, from the highest issued rather than a row count |
+| Candidates | IMPLEMENTED | SA, HR | — | `candidate.read`, deliberately **not** part of `employee.read` |
+| Candidate exists without a vacancy | IMPLEMENTED | SA, HR | — | A CV filed before any opening stays *New* |
+| Applications (candidate × opening) | IMPLEMENTED | SA, HR | job openings | **The stage lives here**, not on the person |
+| Derived candidate stage | IMPLEMENTED | SA, HR | — | Furthest stage across applications; terminal stages count for nothing unless there is nothing else |
+| Nine-stage pipeline | IMPLEMENTED | SA, HR | — | Seven progression stages on the board; Rejected and Withdrawn have no column |
+| Stage transition rules | IMPLEMENTED | SA, HR | — | Permissive between live stages; *Hired* only from *Offer*; nothing leaves *Hired* |
+| Rejected / Withdrawn kept apart | IMPLEMENTED | SA, HR | — | Who ended it is the question asked when the same CV arrives next year |
+| Re-opening a closed candidate | IMPLEMENTED | SA, HR | — | Rejected and Withdrawn are reversible to *Screening* |
+| Leaving the pipeline needs a reason | IMPLEMENTED | SA, HR | — | Required on a move to Rejected or Withdrawn |
+| Candidate board | IMPLEMENTED | SA, HR | — | Columns are the seven progression stages |
+| Restricted candidate block | IMPLEMENTED | SA, HR | — | Current salary, expected salary, HR notes — stripped without `candidate.manage` |
+| Candidate timeline | IMPLEMENTED | SA, HR | — | Assembled from the rows themselves; no timeline table, no write path. Carries no restricted value |
+| Candidate documents | IMPLEMENTED | SA, HR | object store | 20 per candidate, 10 MB each. Reuses the case-attachment path |
+| Interviews | IMPLEMENTED | SA, HR, MGR, INT | candidates | `interview.read` alone returns the interviews you are **on** |
+| Day + time + zone booking | IMPLEMENTED | SA, HR | — | Never an instant the browser computed. An unrecognised zone is refused, not treated as UTC |
+| Interview calendar | IMPLEMENTED | SA, HR, MGR, INT | — | Scoped the same way as the list |
+| Clash detection | IMPLEMENTED | SA, HR | — | Refuses and names who clashes; **overrulable**. Same check behind the form's warning |
+| Blocking statuses | IMPLEMENTED | SA, HR | — | Scheduled, Confirmed, Rescheduled, Completed. A cancelled interview frees its slot |
+| Six interview statuses | IMPLEMENTED | SA, HR | — | *Rescheduled* is produced by the reschedule endpoint, never picked |
+| Reschedule history | IMPLEMENTED | SA, HR | — | The history row and the move are one transaction |
+| Panel confirmation | IMPLEMENTED | MGR, INT, all panellists | — | Reaches exactly one row: your own seat. The only write a plain `interview.read` holder has |
+| Panel notifications | IMPLEMENTED | — | notification service | In-app on schedule, move and cancel, plus reminders and an evaluation nudge |
+| Honest email reporting | IMPLEMENTED | — | mail provider | Reports skipped / delivered / unconfirmed / failed separately. The console provider is always *unconfirmed* |
+| Evaluations | IMPLEMENTED | SA, HR, MGR, INT | interviews | `interview.evaluate`, your own seat only. Never merged, never averaged |
+| Five optional scores | IMPLEMENTED | — | — | Blank means "not assessed", which a zero cannot say |
+| Evaluation gate | IMPLEMENTED | — | — | Only on a Completed or No-show interview |
+| Offers | IMPLEMENTED | SA, HR | candidates | `recruitment.offer.manage`, separate from `recruitment.manage` |
+| An answered offer is final | IMPLEMENTED | SA, HR | — | Nothing leaves Accepted, Declined or Expired. New terms are a new offer |
+| Sending nudges the stage forward only | IMPLEMENTED | SA, HR | — | Never drags somebody back from *Hired* |
+| Automatic offer expiry | **NOT IMPLEMENTED** | — | — | *Expired* is a status somebody sets. No scheduled job |
+| Offer letter document | **NOT IMPLEMENTED** | — | — | An offer is a record of terms, not a generated PDF |
+| Convert to employee | IMPLEMENTED | SA, HR | employees | `recruitment.convert.employee`. The only write to the employees table in the module |
+| Conversion preview | IMPLEMENTED | SA, HR | — | Read-only proposal from the offer, then the opening, then the candidate |
+| Duplicate detection | IMPLEMENTED | SA, HR | — | By email and by name. Refuses unless acknowledged, and is re-run at write time |
+| One candidate, one employee | IMPLEMENTED | SA, HR | — | Unique index on `hiredEmployeeId`; safe under a race |
+| Login created on conversion | **NOT IMPLEMENTED** | — | — | Deliberate. A separate step behind `user.manage` |
+| Salary written on conversion | **NOT IMPLEMENTED** | — | — | Deliberate. The offer's figure stays on the offer |
+| Recruitment dashboard | IMPLEMENTED | SA, HR, MGR | — | Eight figures, computed in the company's timezone and **scoped to the reader** |
+| Narrowing by named involvement | IMPLEMENTED | — | — | The data scope is deliberately **not** consulted: a reporting line is not a reason to read a stranger's CV |
+| 404 rather than 403 | IMPLEMENTED | — | — | Throughout. A guessed id must not confirm that a candidate is being interviewed |
+| Interviewer role | IMPLEMENTED | INT | — | Seeded system role: `interview.read` + `interview.evaluate`. One sidebar row, their own calendar |
+| Careers portal / public job board | **NOT IMPLEMENTED** | — | — | An opening is an internal record. Candidates are entered by HR |
+| CV parsing | **NOT IMPLEMENTED** | — | — | A CV is a file. Nothing reads it |
+| Email to candidates | **NOT IMPLEMENTED** | — | — | Nothing in the module writes to a candidate |
+| Scoring / ranking / auto-shortlist | **NOT IMPLEMENTED** | — | — | Evaluations are read, not computed with |
+| Recruitment approval workflow | **NOT IMPLEMENTED** | — | — | Opening, offering and converting are audited, not routed |
 
 ## Governance
 

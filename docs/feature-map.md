@@ -81,7 +81,7 @@ and a Cliq-style social bar (Chats, Channels, Threads, Contacts).
 | Data Administration (import/export/audit) | Yes | **KEEP** |
 | Social feeds, Chats, Channels, Threads | Yes | **EXCLUDE** |
 | Performance / Appraisals | **No** | **KEEP** (our own requirement) |
-| Recruitment / ATS | **No** | **BUILT** (reversed: it was excluded, then built as our own requirement) |
+| Recruitment / ATS | **No** | **BUILT** (reversed: excluded, then built — see the [recruitment guide](HRMS-RECRUITMENT-GUIDE.md)) |
 | Asset management (equipment issued to staff) | **No** | **BUILT** (our own requirement — see the [asset guide](HRMS-ASSET-GUIDE.md)) |
 | Expenses | **No** | **OPTIONAL** (our own requirement) |
 | Learning / LMS | No | **EXCLUDE** |

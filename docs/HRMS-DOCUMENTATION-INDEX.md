@@ -32,6 +32,7 @@ something is missing, it says so.
 | [Attendance guide](HRMS-ATTENDANCE-GUIDE.md) | the full attendance lifecycle and every calculation rule |
 | [Device guide](HRMS-DEVICE-GUIDE.md) | ZKTeco K50 integration: pull, ADMS push and the LAN connector |
 | [Asset guide](HRMS-ASSET-GUIDE.md) | Company equipment: the register, handovers, repairs, disposal, clearance and the two reports |
+| [Recruitment guide](HRMS-RECRUITMENT-GUIDE.md) | Hiring: job openings, candidates, interviews, evaluations, offers and conversion to an employee |
 | [Troubleshooting](HRMS-TROUBLESHOOTING.md) | when something is wrong |
 
 ## Technical references

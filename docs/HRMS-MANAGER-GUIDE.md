@@ -113,6 +113,60 @@ after it. The full picture is in the [asset guide](HRMS-ASSET-GUIDE.md).
 
 ---
 
+## Hiring and interviews
+
+What you see here is narrowed by **who you are named on**, not by your reporting
+line — a deliberate difference from the rest of the system. Your data scope says
+whose employee records you may read; it is not a reason to read the CVs of
+people who do not work here.
+
+### Your vacancies
+
+**Recruitment** and **Job openings** show the openings you are named on, as
+hiring manager or as recruiter. Not the company's — yours. The dashboard is
+scoped the same way, so "open positions: 2" means your own two.
+
+You can read them and their pipelines. Creating, editing, closing and cancelling
+an opening is HR's.
+
+### Your interviews
+
+**Interviews** shows the ones you are **on**, as a list and a calendar. An
+interview you were not invited to is not hidden from you — it is not returned at
+all, and a guessed link answers "not found".
+
+**Confirm your seat** when you are booked. It reaches exactly your own seat;
+there is no way to confirm on a colleague's behalf.
+
+You cannot schedule, move or cancel an interview. Ask whoever is coordinating —
+they get a clash warning naming you if they try to double-book you.
+
+### Your evaluation
+
+After an interview is marked **Completed** (or **No show**), file your
+evaluation: a recommendation — strong yes, yes, maybe, no — and up to five
+scores out of ten.
+
+Two things worth knowing:
+
+- **Leave a score blank if you did not assess it.** A blank says "not assessed";
+  a zero says "assessed, and terrible". They are not the same thing about a
+  person.
+- **Yours is yours.** Nothing averages the panel's scores, ranks candidates by
+  them, or moves anybody's stage because of one. Three interviewers produce
+  three opinions and a person reads them. You cannot see or overwrite anybody
+  else's before filing your own.
+
+### What you will not see
+
+You do not hold `candidate.read`. You reach a candidate's **name** through the
+interview, which carries it, and you do not reach the candidate list, their CV
+shelf, their salary expectation or HR's notes at all.
+
+The full picture is in the [recruitment guide](HRMS-RECRUITMENT-GUIDE.md).
+
+---
+
 ## What you cannot do
 
 - **See any payroll information.** No payroll permission is granted to managers
@@ -129,6 +183,8 @@ after it. The full picture is in the [asset guide](HRMS-ASSET-GUIDE.md).
 - **Create a login** for a new team member.
 - **Assign a shift directly.** You approve a shift-change request; HR assigns.
 - **Issue or take back a company asset.** You can see what your team is holding; HR records every handover.
+- **Open, close or edit a job opening**, or schedule an interview. You read the vacancies you are named on and sit on the panels you are booked for.
+- **Open a candidate's record.** You see the name of the person you are interviewing, and nothing else about them.
 
 ---
 

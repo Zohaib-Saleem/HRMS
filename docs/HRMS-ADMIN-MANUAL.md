@@ -1389,3 +1389,203 @@ depreciation: current value is a number you set. No barcode scanning, no bulk
 import, and no email — the two handover notifications are in-app only. And
 nothing reaches payroll: issuing somebody a laptop creates no deduction of any
 kind.
+
+---
+
+## 18. Recruitment
+
+Vacancies, candidates, interviews, offers, and the one bridge onto the payroll
+roster. This is the operator's walkthrough; the
+[recruitment guide](HRMS-RECRUITMENT-GUIDE.md) is the complete reference,
+including every status transition and every endpoint.
+
+### The one thing to understand first
+
+**A candidate is not an employee.** They have no employee number, no department,
+no contract, no attendance and no login, and they are a separate record for a
+reason: modelling applicants as employees would mean every headcount, payroll
+run and org chart in this product quietly counting people who have never worked
+here.
+
+There is exactly one bridge — **Convert to Employee** — and you perform it
+deliberately, review the mapping, and confirm it.
+
+### Four screens
+
+**Recruitment** (the dashboard), **Job openings**, **Candidates**,
+**Interviews**. Each carries the grant its own endpoints need, so an interviewer
+sees one row and a hiring manager sees two.
+
+### Openings
+
+**Draft** is not a quiet **Open**. A draft takes no applications, appears on no
+pipeline, and counts towards nothing — because the difference between "we are
+hiring" and "somebody started typing" is a number you report upwards. Only
+**Open** accepts new candidates and new interviews; **On hold** keeps the
+vacancy alive but stops activity against it.
+
+**Closing or cancelling asks you for a reason, and insists.** That is why status
+lives behind its own action rather than on the edit form: a reason that can be
+skipped is a reason nobody writes, and "Closed" with nothing beside it is
+useless six months later when the same headcount comes back round.
+
+*Vacancies* is a count of **seats**. Six openings for two people each is twelve.
+
+### Candidates and the board
+
+**The stage lives on the application, not on the person.** Somebody can be
+shortlisted for Design and rejected by Development on the same afternoon, and
+that is a normal Tuesday. The stage shown next to their name in the list is a
+**summary** — the furthest stage across their applications — and it is never
+what a decision is made against. Open the candidate and act on the application.
+
+The board's columns are the seven progression stages. **Rejected** and
+**Withdrawn** have no column on purpose: they are states people leave the
+pipeline into, and giving them columns turns a board that shows a process into a
+board that mostly shows people who are no longer in it.
+
+Moving backwards is allowed and expected — shortlisted on Monday, back to
+screening on Tuesday when somebody actually reads the CV. Two moves are refused:
+**Hired only from Offer**, and **nothing comes back from Hired**.
+
+Rejecting or withdrawing somebody **asks why**. Both are reversible back to
+*Screening*, so re-opening a candidate does not mean creating a second record.
+
+> Keep Rejected and Withdrawn apart. "We said no" and "they said no" are the
+> same outcome and completely different information when the same CV arrives
+> again next year.
+
+### What an interviewer cannot see
+
+`candidate.read` is **not** part of `employee.read`, and managers do not hold it.
+Somebody interviewing a person is shown that person through the interview, which
+carries their name; they do not get to browse what everybody who ever applied is
+earning.
+
+Even with `candidate.read`, the **restricted block** — current salary, expected
+salary, your notes — is stripped without `candidate.manage`. So is anything in
+the candidate timeline that would reveal it.
+
+### Interviews
+
+Book a **day, two times and a timezone**. Not an instant: the interview is at ten
+o'clock in Karachi whoever is looking at it, and the server does the arithmetic.
+
+**Clashes refuse the booking and name who clashes**, and you can overrule them —
+sometimes the person really is double-booked and it is fine. The warning the form
+shows before you commit is the same check, so it cannot disagree with the
+refusal. A cancelled interview frees its slot; a completed one still occupied it.
+
+**Rescheduling is not editing the time.** It writes a history row saying where
+the interview moved from, in the same transaction as the move, and sets the
+status to *Rescheduled* — which nobody can pick by hand.
+
+Nothing comes back from **Cancelled**. An interview that is happening after all
+is a new booking, which keeps the cancellation visible rather than erasing it.
+*Completed* can still go to *No show*, because "marked complete by mistake" is an
+ordinary Tuesday.
+
+**The panel is notified in the app** when an interview is booked, moved or
+cancelled. The interface tells you honestly what happened to the email half —
+and on this installation mail is the console provider, so **no email is actually
+delivered**. A panellist with no login is skipped silently rather than failing
+the booking.
+
+**Candidates are never notified by the system.** Contacting them is your job,
+outside it.
+
+### Evaluations
+
+One per panellist per interview, **never merged and never averaged**. Nothing
+ranks candidates by score or moves a stage because of one. Three interviewers
+produce three opinions and a person reads them.
+
+Scores are **optional on purpose**: an HR interviewer has no business scoring
+technical skill, and a blank says "not assessed" where a zero would say
+"assessed, and terrible".
+
+They can only be filed once the interview is **Completed** or **No show**.
+Removing somebody from a panel removes their evaluation with it.
+
+### Offers
+
+`recruitment.offer.manage` is a separate grant from `recruitment.manage`,
+because an offer is a commitment about money and the person who arranges
+interviews need not be the person who makes one.
+
+**An answered offer is finished.** Nothing leaves Accepted, Declined or Expired —
+changing the terms afterwards is a **new offer**, which keeps the first one and
+what it promised on the record.
+
+Marking an offer *Sent* nudges the candidate forward to *Offer*, and only
+forward: marking an old offer expired can never drag somebody back from *Hired*.
+
+**Nothing expires on its own.** *Expired* is a status you set when the answer
+never came.
+
+### Convert to Employee
+
+Two steps, and the first one writes nothing.
+
+**Preview** assembles a proposal — from the accepted offer, then the opening,
+then the candidate — and shows you any existing employee who looks like this
+person, matched by email and by name.
+
+**Convert** creates the employee record from **what you confirmed on the form**,
+not from what the candidate record said. The name split is a guess (everything
+before the last space, then the rest), which is exactly why it lands on a form
+you edit.
+
+Four things it will not do:
+
+- **Create a second employee for the same candidate.** Ever, even under a race.
+- **Proceed silently past a look-alike.** It refuses until you acknowledge them,
+  and re-checks at the moment of writing rather than trusting a preview taken
+  ten minutes ago. Two people really do share a name, so it is overrulable — but
+  never silent.
+- **Create a login.** Do that afterwards, deliberately, under Users.
+- **Write any salary, payroll profile or contract.** The offer's figure stays on
+  the offer. Set their pay in payroll, on purpose.
+
+Employment status defaults to **Probation**.
+
+Conversion does not require the candidate to be at *Hired* first. It is a
+deliberate action by somebody holding the grant, and your review is the control.
+
+### Who sees what, and why it is not the data scope
+
+Recruitment is narrowed by **named involvement**, not by data scope, and that is
+a deliberate departure from the rest of the product.
+
+A data scope says whose **employee records** somebody may read. A reporting line
+is a good reason to read your own people's records; it is not a reason to read
+what the company is paying a stranger to replace them with. So:
+
+- `recruitment.read` alone returns the openings you are **named on** — as hiring
+  manager or recruiter.
+- `interview.read` alone returns the interviews you are **on**.
+- `candidate.read` returns candidates with the restricted block stripped.
+
+The dashboard is scoped the same way: a hiring manager's "open positions: 2" is
+their own two. And throughout the module a guessed id answers **404**, never
+403 — telling somebody "that exists but is not yours" confirms that a particular
+candidate is being interviewed, which is exactly what an unauthorised caller was
+probing for.
+
+A login that is not linked to an employee record has no anchor, so the narrow
+grants return nothing for it.
+
+### The Interviewer role
+
+A seeded system role holding `interview.read` and `interview.evaluate` and
+nothing else. The whole module for them is one sidebar row leading to their own
+calendar, with the interviews they are actually sitting on. Give it to people
+who join panels and should reach nothing else.
+
+### What is not here
+
+No careers portal and no public job board — openings are internal records and
+candidates are entered by you. No CV parsing. No email to candidates. No offer
+letter PDF. No automatic offer expiry. No scoring, ranking or automatic
+shortlisting. No approval workflow on opening a vacancy, making an offer or
+converting somebody. And nothing reaches payroll.

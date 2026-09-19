@@ -310,6 +310,23 @@ If you manage people, it also shows requests waiting on you — see the
 
 ---
 
+## If you sit on interview panels
+
+Most employees see nothing of recruitment. If your administrator has given you
+the **Interviewer** role, you gain one sidebar row — **Interviews** — showing
+the interviews you are booked on and nothing else.
+
+There you can **confirm** that you will be there, and after an interview has
+happened you can **file your evaluation**: a recommendation, and up to five
+scores out of ten. Leave a score blank if you did not assess it — a blank means
+"not assessed", and a zero means something much worse about a person.
+
+You do not see the candidate list, anyone's CV, salary expectations, or any
+interview you are not on. More in the
+[recruitment guide](HRMS-RECRUITMENT-GUIDE.md).
+
+---
+
 ## Not available
 
 **Performance** and **Documents** appear in the sidebar but are greyed out.
