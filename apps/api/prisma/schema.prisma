@@ -380,6 +380,17 @@ model Company {
   lunchOrders     LunchOrder[]
   lunchOrderItems LunchOrderItem[]
 
+  // --- recruitment ---
+  jobOpenings              JobOpening[]
+  candidates               Candidate[]
+  candidateApplications    CandidateApplication[]
+  candidateDocuments       CandidateDocument[]
+  interviews               Interview[]
+  interviewParticipants    InterviewParticipant[]
+  interviewEvaluations     InterviewEvaluation[]
+  interviewScheduleChanges InterviewScheduleChange[]
+  offers                   Offer[]
+
   @@map("companies")
 }
 
@@ -414,6 +425,11 @@ model Department {
   caseCategories CaseCategory[]
   cases          Case[]
 
+  /// Recruitment. A job opening is filed against a real department for the
+  /// same reason a case is: so "Development is hiring two people" is a query
+  /// rather than a string comparison.
+  jobOpenings JobOpening[]
+
   @@unique([companyId, name])
   @@index([companyId, isActive])
   @@index([parentDepartmentId])
@@ -435,6 +451,10 @@ model Designation {
 
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employees Employee[]
+
+  /// What a candidate is being offered. Pointed at rather than copied, so a
+  /// conversion hands the employee record the same designation row HR chose.
+  offers Offer[]
 
   @@unique([companyId, name])
   @@index([companyId, isActive])
@@ -474,6 +494,9 @@ model Location {
   holidays  Holiday[]
   devices   AttendanceDevice[]
 
+  /// Where a vacancy is based.
+  jobOpenings JobOpening[]
+
   @@unique([companyId, name])
   @@index([companyId, isActive])
   @@map("locations")
@@ -496,6 +519,9 @@ model Team {
   company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
   department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
   employees  Employee[] @relation("EmployeeTeam")
+
+  /// Which team the vacancy is for, where the department alone is too coarse.
+  jobOpenings JobOpening[]
 
   @@unique([departmentId, name])
   @@index([companyId, isActive])
@@ -720,6 +746,19 @@ model Employee {
   // --- lunch ---
   lunchOrders LunchOrder[]
 
+  // --- recruitment ---
+  // Employees appear in recruitment as the people DOING the hiring, never as
+  // the people being hired: a candidate is a separate record until the moment
+  // HR converts one, and `hiredFromCandidate` below is that single link back.
+  jobOpeningsManaged   JobOpening[]           @relation("JobOpeningHiringManager")
+  jobOpeningsRecruited JobOpening[]           @relation("JobOpeningRecruiter")
+  candidatesRecruited  Candidate[]            @relation("CandidateRecruiter")
+  interviewsScheduled  Interview[]            @relation("InterviewScheduledBy")
+  interviewSeats       InterviewParticipant[]
+  /// The candidate record this employee was created from, if any. Set once, by
+  /// Convert to Employee, and never by anything else.
+  hiredFromCandidate   Candidate?             @relation("CandidateHiredEmployee")
+
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
   @@index([companyId, employmentStatus])
@@ -832,6 +871,9 @@ model User {
   casesAssigned    Case[]           @relation("CaseAssignee")
   caseMessagesSent CaseMessage[]    @relation("CaseMessageSender")
   caseAttachments  CaseAttachment[] @relation("CaseAttachmentUploader")
+
+  // --- recruitment ---
+  candidateDocuments CandidateDocument[] @relation("CandidateDocumentUploader")
 
   // --- lunch ---
   /// Orders this account recorded the payment for. The office boy's own trail.
@@ -1000,6 +1042,18 @@ enum NotificationType {
   /// moved, or somebody replied. Its own type rather than SYSTEM so the
   /// inbox can group it and a company can mute it without muting everything.
   CASE_UPDATE
+  /// You have been put on an interview panel.
+  INTERVIEW_SCHEDULED
+  /// An interview you are on has moved. Carries both times in its message,
+  /// because "it moved" without saying from what is the one thing an
+  /// interviewer cannot act on.
+  INTERVIEW_RESCHEDULED
+  /// An interview you are on is off.
+  INTERVIEW_CANCELLED
+  /// An interview you are on is coming up.
+  INTERVIEW_REMINDER
+  /// An interview you sat on is over and your evaluation has not been filed.
+  INTERVIEW_EVALUATION_PENDING
 }
 
 enum AttendanceStatus {
@@ -4258,4 +4312,615 @@ model LunchOrderItem {
   @@index([orderId])
   @@index([companyId, menuItemId])
   @@map("lunch_order_items")
+}
+
+// ===========================================================================
+// RECRUITMENT - job openings, candidates, interviews and offers
+// ===========================================================================
+//
+// The one structural decision worth stating before the models: a CANDIDATE IS
+// NOT AN EMPLOYEE, and nothing here writes to the employees table.
+//
+// Somebody applying for a job has no employee number, no department, no
+// contract and no login, and forcing them into `employees` would mean every
+// headcount, payroll run, attendance report and org chart in this product
+// quietly counting people who have never worked here. So candidates live in
+// their own table with their own lifecycle, and the ONLY bridge between the
+// two is `Candidate.hiredEmployeeId` - written once, by Convert to Employee,
+// after a human has reviewed the mapping.
+//
+// The second decision is that a candidate is not duplicated per vacancy.
+// `CandidateApplication` is the join, so one person who applies for three
+// roles is one row in `candidates` and three in `candidate_applications` -
+// which is what lets "have we seen this person before?" be a query, and what
+// stops three half-maintained copies of somebody's phone number.
+
+/// Where a vacancy is in its life.
+///
+/// DRAFT is not OPEN: a half-written opening should not appear on a pipeline
+/// or count towards "open positions", and the difference between "we are
+/// hiring" and "somebody started typing" is a number HR reports upwards.
+///
+/// ON_HOLD and CANCELLED are deliberately apart from CLOSED. CLOSED is the
+/// good ending - the seats were filled; CANCELLED is the vacancy going away
+/// unfilled; ON_HOLD is neither, and is the state a budget freeze produces.
+enum JobOpeningStatus {
+  DRAFT
+  OPEN
+  ON_HOLD
+  CLOSED
+  CANCELLED
+}
+
+/// How far a candidate has got, for one job.
+///
+/// The stage lives on the APPLICATION rather than on the candidate, because a
+/// person can be shortlisted for one role and rejected for another on the same
+/// afternoon, and a single stage column on the candidate could only ever record
+/// one of those two facts. `Candidate.stage` exists as well and is a derived
+/// summary - the furthest stage across their applications - kept for the list
+/// screen, and never the thing a decision is made against.
+///
+/// REJECTED and WITHDRAWN are both terminal and are kept apart on purpose: who
+/// ended it is exactly the question somebody asks six months later when the
+/// same person applies again.
+enum CandidateStage {
+  NEW
+  SCREENING
+  SHORTLISTED
+  INTERVIEW
+  SELECTED
+  OFFER
+  HIRED
+  REJECTED
+  WITHDRAWN
+}
+
+/// What kind of conversation an interview is.
+enum InterviewType {
+  HR
+  TECHNICAL
+  MANAGER
+  FINAL
+  OTHER
+}
+
+/// Which pass through the process this is. Named rather than numbered so
+/// FINAL can exist: a final round is not "round 4", it is the last one.
+enum InterviewRound {
+  ROUND_1
+  ROUND_2
+  ROUND_3
+  FINAL
+}
+
+/// Where an interview stands.
+///
+/// COMPLETED and NO_SHOW are both endings and both keep the row. Nothing in
+/// this module deletes an interview that happened - a cancelled interview is
+/// CANCELLED and stays readable, because "we cancelled on this candidate
+/// twice" is a fact about us, not noise to be tidied away.
+enum InterviewStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  RESCHEDULED
+  CANCELLED
+  NO_SHOW
+}
+
+/// An interviewer's bottom line, in their own words.
+///
+/// Advice, never arithmetic. Nothing in this module adds these up, averages
+/// them or moves a candidate's stage because of them - the decision belongs to
+/// whoever is hiring, and an enum that silently drove the pipeline would make
+/// a panel's disagreement invisible.
+enum InterviewRecommendation {
+  STRONG_YES
+  YES
+  MAYBE
+  NO
+}
+
+enum OfferStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+/// What a file attached to a candidate is.
+enum CandidateDocumentType {
+  RESUME
+  COVER_LETTER
+  PORTFOLIO
+  CERTIFICATE
+  OTHER
+}
+
+// ------------------------------------------------------------- job openings
+
+model JobOpening {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Sequential, per company, e.g. JOB-0007. Readable in a conversation in a
+  /// way a cuid is not.
+  reference String
+
+  title String
+
+  /// Pointed at, never copied. The department and team are real organisation
+  /// rows, so a vacancy answers "which part of the company is short-handed"
+  /// with a join rather than with a string.
+  departmentId String?
+  teamId       String?
+  locationId   String?
+
+  employmentType EmploymentType @default(FULL_TIME)
+
+  /// What the successful candidate would be hired ON: probation, permanent or
+  /// an internship. The SAME canonical enum the employee record uses - there
+  /// is deliberately no second employment-status field anywhere in this
+  /// module, so a conversion carries the value across rather than translating
+  /// it. Nullable because a vacancy that has not decided is not the same as
+  /// one offering permanence.
+  expectedEmploymentStatus EmploymentStatus?
+
+  vacancies Int @default(1)
+
+  /// The two people a vacancy belongs to. Employees, not free text, and both
+  /// nullable because an opening can be drafted before either is settled.
+  /// They are also what narrows this module for a manager: somebody holding
+  /// only `recruitment.read` sees the openings where their own employee id is
+  /// in one of these two columns.
+  hiringManagerId String?
+  recruiterId     String?
+
+  description  String?
+  requirements String?
+  /// Free text rather than a skills table. A skills taxonomy is a product of
+  /// its own, and phase 1 needs "Unity, C#, 5 years" to be searchable, which
+  /// a text column with an index answers honestly.
+  skills       String?
+
+  minExperienceYears Int?
+
+  /// Optional, and optional for a reason: plenty of companies advertise
+  /// without a band. Stored as Decimal like every other money column here.
+  salaryMin      Decimal? @db.Decimal(12, 2)
+  salaryMax      Decimal? @db.Decimal(12, 2)
+  salaryCurrency String?
+
+  openingDate DateTime? @db.Date
+  closingDate DateTime? @db.Date
+
+  status JobOpeningStatus @default(DRAFT)
+
+  /// Set when the status last moved to CLOSED or CANCELLED, with the reason.
+  /// Kept rather than inferred from the audit log, because a list screen
+  /// cannot join the audit log.
+  closedAt     DateTime?
+  closedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department    Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  team          Team?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  location      Location?   @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  hiringManager Employee?   @relation("JobOpeningHiringManager", fields: [hiringManagerId], references: [id], onDelete: SetNull)
+  recruiter     Employee?   @relation("JobOpeningRecruiter", fields: [recruiterId], references: [id], onDelete: SetNull)
+
+  applications CandidateApplication[]
+  interviews   Interview[]
+  offers       Offer[]
+
+  @@unique([companyId, reference])
+  @@index([companyId, status])
+  @@index([companyId, departmentId])
+  @@index([companyId, teamId])
+  @@index([hiringManagerId])
+  @@index([recruiterId])
+  @@index([companyId, openingDate])
+  @@map("job_openings")
+}
+
+// ---------------------------------------------------------------- candidates
+
+model Candidate {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Sequential, per company, e.g. CAN-0042.
+  reference String
+
+  fullName String
+  email    String
+  phone    String?
+
+  currentLocation String?
+  linkedinUrl     String?
+  portfolioUrl    String?
+
+  skills          String?
+  experienceYears Int?
+  currentCompany  String?
+  currentTitle    String?
+
+  // --- restricted ------------------------------------------------------------
+  // What somebody earns now, what they want, and whatever HR has written about
+  // them. Readable only with `candidate.manage`; the API strips this block for
+  // anybody else, which is what lets an interviewer open a candidate they are
+  // meeting without being handed their salary history.
+  currentSalary  Decimal? @db.Decimal(12, 2)
+  expectedSalary Decimal? @db.Decimal(12, 2)
+  salaryCurrency String?
+  notes          String?
+
+  /// How long they have to give their present employer, in days. A number
+  /// rather than "one month" so a joining date can be worked out from it.
+  noticePeriodDays Int?
+
+  /// Where they came from: a referral, a job board, an agency. Free text,
+  /// matching `Employee.sourceOfHire`, so the value survives a conversion.
+  source String?
+
+  /// The recruiter carrying this person. An employee, and one of the two
+  /// columns a narrowed reader is matched against.
+  recruiterId String?
+
+  /// The furthest stage reached across this candidate's applications.
+  ///
+  /// DERIVED, and recomputed from `candidate_applications` whenever one of
+  /// them moves. It exists so the candidate list can show and filter a stage
+  /// without a per-row aggregate, and it is never what a decision reads: the
+  /// application's own stage is the fact, this is a summary of several facts.
+  stage CandidateStage @default(NEW)
+
+  /// The employee this candidate became, if HR converted them.
+  ///
+  /// The only link between recruitment and the employee record, written once
+  /// by Convert to Employee and never by anything else. Unique, so one
+  /// candidate cannot be converted into two employees - the duplicate
+  /// protection is a database constraint rather than a hopeful check.
+  hiredEmployeeId String?   @unique
+  hiredAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  recruiter     Employee? @relation("CandidateRecruiter", fields: [recruiterId], references: [id], onDelete: SetNull)
+  hiredEmployee Employee? @relation("CandidateHiredEmployee", fields: [hiredEmployeeId], references: [id], onDelete: SetNull)
+
+  applications CandidateApplication[]
+  interviews   Interview[]
+  documents    CandidateDocument[]
+  offers       Offer[]
+
+  /// One person, one record, per company. Case-insensitivity is enforced in
+  /// the service layer by storing and comparing a normalised address; the
+  /// index is what makes it impossible to end up with two by racing.
+  @@unique([companyId, email])
+  @@unique([companyId, reference])
+  @@index([companyId, stage])
+  @@index([companyId, recruiterId])
+  @@index([companyId, createdAt])
+  @@index([companyId, fullName])
+  @@map("candidates")
+}
+
+/// One person applying for one job. The join, and the thing a stage lives on.
+model CandidateApplication {
+  id           String @id @default(cuid())
+  companyId    String
+  candidateId  String
+  jobOpeningId String
+
+  stage CandidateStage @default(NEW)
+
+  /// When the stage last moved, and who moved it. Denormalised from the audit
+  /// log for the same reason `closedAt` is: a pipeline board cannot join it.
+  stageChangedAt DateTime @default(now())
+  stageChangedBy String?
+
+  /// Why a terminal stage was reached. Compulsory for REJECTED and WITHDRAWN
+  /// at the API, because "rejected" with no reason is the answer nobody can
+  /// use when the same CV arrives again next year.
+  outcomeReason String?
+
+  appliedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidate  Candidate  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOpening JobOpening @relation(fields: [jobOpeningId], references: [id], onDelete: Cascade)
+
+  interviews Interview[]
+  offers     Offer[]
+
+  /// Applying twice for the same job is the same application.
+  @@unique([candidateId, jobOpeningId])
+  @@index([companyId, stage])
+  @@index([jobOpeningId, stage])
+  @@index([companyId, stageChangedAt])
+  @@map("candidate_applications")
+}
+
+/// A file on a candidate: the CV, a cover letter, a portfolio, a certificate.
+///
+/// Deliberately the same shape as `CaseAttachment`, and stored through the same
+/// object store: a key, a sniffed content type, a size, and a display name that
+/// has no bearing on where the bytes live. Nothing here is a second file
+/// storage system.
+model CandidateDocument {
+  id          String @id @default(cuid())
+  companyId   String
+  candidateId String
+
+  type CandidateDocumentType @default(OTHER)
+
+  uploadedByUserId String?
+
+  /// The display name, sanitised. Never a path and never used to build one.
+  fileName    String
+  /// Sniffed from the bytes. What the file is served back as.
+  contentType String
+  sizeBytes   Int
+
+  /// Object-store key, e.g. `candidate-documents/<companyId>/<candidateId>/<uuid>.pdf`.
+  /// Never a filesystem path, and never sent to a browser.
+  objectKey String
+
+  /// A file only the HR side may read - a reference check, a background
+  /// report, an internal assessment. Filtered out by the QUERY for anybody
+  /// without `candidate.manage`, the way an internal case note is.
+  isConfidential Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidate  Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  uploadedBy User?     @relation("CandidateDocumentUploader", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([candidateId, isConfidential, createdAt])
+  @@index([companyId, createdAt])
+  @@map("candidate_documents")
+}
+
+// ---------------------------------------------------------------- interviews
+
+model Interview {
+  id        String @id @default(cuid())
+  companyId String
+
+  candidateId   String
+  jobOpeningId  String?
+  /// The application this interview is part of, where there is one. Null for
+  /// an exploratory conversation held before anybody picked a vacancy.
+  applicationId String?
+
+  type  InterviewType
+  round InterviewRound @default(ROUND_1)
+
+  /// Stored as instants, in UTC, like every other time in this product. The
+  /// zone below is the one the interview was ARRANGED in, kept so "10:00 AM"
+  /// still reads as 10:00 to the people who agreed to it even if the company
+  /// default changes or a panellist sits elsewhere.
+  startsAt DateTime
+  endsAt   DateTime
+  timezone String
+
+  /// A room, or an address. Free text; a meeting link is the column below.
+  location    String?
+  meetingLink String?
+
+  notes String?
+
+  status InterviewStatus @default(SCHEDULED)
+
+  /// Filled when the interview is marked over, so "did it happen" is one
+  /// column rather than an inference from the clock.
+  completedAt     DateTime?
+  /// Set when CANCELLED, with the reason. A cancelled interview is never
+  /// deleted: it is part of how this candidate was treated.
+  cancelledAt     DateTime?
+  cancelledReason String?
+
+  /// Who arranged it.
+  scheduledById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidate   Candidate             @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOpening  JobOpening?           @relation(fields: [jobOpeningId], references: [id], onDelete: SetNull)
+  application CandidateApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  scheduledBy Employee?             @relation("InterviewScheduledBy", fields: [scheduledById], references: [id], onDelete: SetNull)
+
+  participants    InterviewParticipant[]
+  evaluations     InterviewEvaluation[]
+  scheduleChanges InterviewScheduleChange[]
+
+  @@index([companyId, startsAt])
+  @@index([companyId, status, startsAt])
+  @@index([candidateId, startsAt])
+  @@index([jobOpeningId])
+  @@index([applicationId])
+  @@map("interviews")
+}
+
+/// One seat on an interview panel.
+///
+/// An interviewer is an EMPLOYEE - an existing HRMS person - and never a
+/// duplicate user record. That is the whole reason this table exists rather
+/// than a text column of names: it makes "show me my interviews" a query on
+/// an indexed foreign key, which is what the interviewer's own screen is.
+model InterviewParticipant {
+  id          String @id @default(cuid())
+  companyId   String
+  interviewId String
+  employeeId  String
+
+  /// The panellist whose call it is, where a panel has one. Purely
+  /// informational: it confers no extra permission and drives no arithmetic.
+  isLead Boolean @default(false)
+
+  /// The panellist said they will be there. Distinct from the interview's own
+  /// CONFIRMED, which is about the appointment rather than about one person.
+  confirmedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  evaluation InterviewEvaluation?
+
+  /// One seat per person per interview.
+  @@unique([interviewId, employeeId])
+  /// The interviewer's own screen, and the clash check, both read this.
+  @@index([employeeId])
+  @@index([companyId, employeeId])
+  @@map("interview_participants")
+}
+
+/// What one interviewer thought.
+///
+/// Hung off the PARTICIPANT rather than off the interview, and unique on it,
+/// which is the database's way of saying what section 12 asks for: three
+/// panellists produce three evaluations and none of them can overwrite
+/// another. A missing row is "pending", which is a different and honest thing
+/// from a row full of zeros.
+model InterviewEvaluation {
+  id            String @id @default(cuid())
+  companyId     String
+  interviewId   String
+  participantId String
+
+  /// Each out of ten, each optional: an HR interviewer has no business
+  /// scoring technical skill, and a nulled score says "not assessed" where a
+  /// zero would say "assessed, and terrible".
+  technicalScore      Int?
+  problemSolvingScore Int?
+  communicationScore  Int?
+  experienceScore     Int?
+  cultureFitScore     Int?
+
+  recommendation InterviewRecommendation
+
+  comments String?
+
+  submittedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  interview   Interview            @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  participant InterviewParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@unique([participantId])
+  @@index([interviewId])
+  @@index([companyId, submittedAt])
+  @@map("interview_evaluations")
+}
+
+/// An interview that moved, and what it moved from.
+///
+/// A rescheduled interview keeps its id, its panel and its evaluations - it is
+/// the same appointment - so without this table the old time would simply be
+/// overwritten and "you have changed this on me three times" would have no
+/// evidence behind it. One row per move, with both times and the reason.
+model InterviewScheduleChange {
+  id          String @id @default(cuid())
+  companyId   String
+  interviewId String
+
+  previousStartsAt DateTime
+  previousEndsAt   DateTime
+  previousTimezone String
+
+  newStartsAt DateTime
+  newEndsAt   DateTime
+  newTimezone String
+
+  reason String
+
+  changedById String?
+  createdAt   DateTime @default(now())
+
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@index([interviewId, createdAt])
+  @@map("interview_schedule_changes")
+}
+
+// -------------------------------------------------------------------- offers
+
+/// What a candidate is being offered.
+///
+/// Deliberately thin. Phase 1 is not a contract system and is not payroll: the
+/// proposed salary here is a NUMBER ON AN OFFER, it creates no EmployeeSalary,
+/// no payroll profile and no contract, and converting a candidate does not
+/// carry it into any of those. Somebody who accepts still has their pay set by
+/// payroll, by a person, on purpose.
+model Offer {
+  id            String  @id @default(cuid())
+  companyId     String
+  candidateId   String
+  jobOpeningId  String?
+  applicationId String?
+
+  /// The designation as an organisation row where one fits, and free text
+  /// beside it for the case where it does not - the same pair the employee
+  /// record carries, so a conversion can hand across whichever is set.
+  designationId String?
+  proposedTitle String?
+
+  employmentType EmploymentType @default(FULL_TIME)
+
+  /// The stage the hire would start on. Canonical `EmploymentStatus` again,
+  /// and defaulted to PROBATION at the API rather than here, so a company
+  /// that means something else has to say so.
+  employmentStatus EmploymentStatus?
+
+  proposedSalary Decimal? @db.Decimal(12, 2)
+  salaryCurrency String?
+
+  expectedJoiningDate DateTime? @db.Date
+
+  status OfferStatus @default(DRAFT)
+
+  /// The three dates an offer actually has. Kept as columns because "when did
+  /// we send it" and "when did they answer" are reportable facts, not audit
+  /// trivia.
+  sentAt      DateTime?
+  respondedAt DateTime?
+  expiresAt   DateTime? @db.Date
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidate   Candidate             @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobOpening  JobOpening?           @relation(fields: [jobOpeningId], references: [id], onDelete: SetNull)
+  application CandidateApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  designation Designation?          @relation(fields: [designationId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status])
+  @@index([candidateId])
+  @@index([jobOpeningId])
+  @@index([applicationId])
+  @@map("offers")
 }

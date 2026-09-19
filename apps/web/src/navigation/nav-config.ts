@@ -23,6 +23,9 @@ import {
   ClipboardPen,
   PencilLine,
   Receipt,
+  Briefcase,
+  CalendarSearch,
+  ContactRound,
   Sandwich,
   UtensilsCrossed,
   Settings,
@@ -402,6 +405,75 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    /*
+     * Recruitment, as its own section rather than four more rows under
+     * Management.
+     *
+     * It is a module somebody works IN for an afternoon - the dashboard, then
+     * the openings, then a candidate, then the calendar - and the four screens
+     * are read as a set. Filed under Management they would have sat between
+     * Leave types and Devices, which is how a hiring process ends up being run
+     * out of a spreadsheet instead.
+     *
+     * Each row carries the grant its own ENDPOINT needs, which is why they are
+     * four different permissions rather than one module-wide one:
+     *
+     *   - the dashboard and the openings need `recruitment.read`, and a holder
+     *     without `recruitment.manage` is served only the openings they are
+     *     named on. So a hiring manager sees these two rows and finds their
+     *     own vacancies behind them;
+     *   - Candidates needs `candidate.read`, which a manager does NOT hold.
+     *     That absence is the design: somebody interviewing a person is shown
+     *     that person through the interview, and has no business browsing what
+     *     everybody who ever applied is earning;
+     *   - Interviews needs `interview.read`, which the Interviewer role holds
+     *     on its own. It is the only row that role sees, and behind it the
+     *     server returns the seats they are on - so the whole section for them
+     *     is one entry leading to their own calendar.
+     *
+     * Hiding a row removes a signpost, never a right: every endpoint re-checks
+     * the same grant, and the narrow reads are WHERE clauses on the server.
+     */
+    key: 'recruitment',
+    label: 'Recruitment',
+    items: [
+      {
+        label: 'Recruitment',
+        to: '/recruitment',
+        icon: TrendingUp,
+        permission: PERMISSIONS.RECRUITMENT_READ,
+        status: 'ready',
+        // Exact: the three rows below are all nested under /recruitment and
+        // would light this one up as well.
+        matchPrefix: false,
+      },
+      {
+        label: 'Job openings',
+        to: '/recruitment/job-openings',
+        icon: Briefcase,
+        permission: PERMISSIONS.RECRUITMENT_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Candidates',
+        to: '/recruitment/candidates',
+        icon: ContactRound,
+        permission: PERMISSIONS.CANDIDATE_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Interviews',
+        to: '/recruitment/interviews',
+        icon: CalendarSearch,
+        permission: PERMISSIONS.INTERVIEW_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+    ],
+  },
+  {
     key: 'administration',
     label: 'Administration',
     items: [
@@ -472,6 +544,10 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/settings/attendance-policies': 'Policy overrides',
   '/settings/loan-policy': 'Loan policy',
   '/settings/medical-policy': 'Medical policy',
+  '/recruitment': 'Recruitment',
+  '/recruitment/job-openings': 'Job openings',
+  '/recruitment/candidates': 'Candidates',
+  '/recruitment/interviews': 'Interviews',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',
 };

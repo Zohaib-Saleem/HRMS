@@ -15,6 +15,18 @@ export const NOTIFICATION_TYPES = [
   'SYSTEM',
   /** A colleague greeted you on your birthday, anniversary or first week. */
   'CELEBRATION',
+  /** Something happened on a helpdesk case you raised. */
+  'CASE_UPDATE',
+  /** You have been put on an interview panel. */
+  'INTERVIEW_SCHEDULED',
+  /** An interview you are on has moved. The message carries both times. */
+  'INTERVIEW_RESCHEDULED',
+  /** An interview you are on is off. */
+  'INTERVIEW_CANCELLED',
+  /** An interview you are on is coming up. */
+  'INTERVIEW_REMINDER',
+  /** An interview you sat on is over and your evaluation is not filed. */
+  'INTERVIEW_EVALUATION_PENDING',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

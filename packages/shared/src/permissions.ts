@@ -265,6 +265,63 @@ export const PERMISSIONS = {
   /// who collects the money for them.
   LUNCH_MENU_MANAGE: 'lunch.menu.manage',
 
+  // --- Recruitment (job openings, candidates, interviews, offers) ---
+  /// See the recruitment module at all: the dashboard and the job openings.
+  ///
+  /// On its own it is a NARROW grant, and that is the point. A holder without
+  /// `recruitment.manage` sees only the openings they are named on - as hiring
+  /// manager or as recruiter - because a vacancy belongs to the people running
+  /// it. The widening grant is the next one, and nothing about a data scope
+  /// widens this: a DEPARTMENT scope is given so a head can read their PEOPLE's
+  /// records, and reading somebody's employee record is not a reason to read
+  /// what the company is paying a stranger to replace them with.
+  RECRUITMENT_READ: 'recruitment.read',
+  /// Run recruitment: create and edit job openings, close and cancel them, and
+  /// see every opening in the company rather than one's own. HR's grant.
+  RECRUITMENT_MANAGE: 'recruitment.manage',
+
+  /// See candidates: who has applied, for what, and how far they have got.
+  ///
+  /// Deliberately NOT part of `employee.read`. A candidate is not an employee
+  /// and an employee grant must never reach one - somebody who can read the
+  /// staff roster has no business reading the CVs of people who do not work
+  /// here. It is also the grant that gates candidate DOCUMENTS.
+  CANDIDATE_READ: 'candidate.read',
+  /// Maintain candidates, move them through the pipeline, and read the
+  /// restricted block - what they earn now, what they are asking for, and the
+  /// notes HR has written about them. That block is stripped from every
+  /// response without this grant, so an interviewer with `candidate.read`
+  /// opens the person they are meeting and finds no salary history.
+  CANDIDATE_MANAGE: 'candidate.manage',
+
+  /// See interviews. Narrow on its own, exactly like `recruitment.read`: a
+  /// holder without `interview.manage` sees the interviews they are ON, which
+  /// is what the interviewer's own screen is made of.
+  INTERVIEW_READ: 'interview.read',
+  /// Schedule, reschedule, cancel and complete interviews, and see every
+  /// interview in the company. The coordinator's grant.
+  INTERVIEW_MANAGE: 'interview.manage',
+  /// File an evaluation for an interview you sat on.
+  ///
+  /// Its own grant, and it reaches only the holder's own seat: the endpoint
+  /// matches the caller's employee id against the panel before it will write
+  /// anything, so this can never be used to file an opinion in somebody
+  /// else's name or to overwrite theirs.
+  INTERVIEW_EVALUATE: 'interview.evaluate',
+
+  /// Make, send and record the answer to an offer. Separate from
+  /// `recruitment.manage` because an offer is a commitment about money, and
+  /// the person who arranges interviews need not be the person who makes one.
+  RECRUITMENT_OFFER_MANAGE: 'recruitment.offer.manage',
+  /// Turn a hired candidate into an employee record.
+  ///
+  /// The narrowest and most deliberate grant in this module: it is the ONLY
+  /// thing in recruitment that writes to the employees table, and it creates a
+  /// person on the payroll roster. Held apart from every other recruitment
+  /// grant so that running a hiring process and adding somebody to the company
+  /// stay two decisions.
+  RECRUITMENT_CONVERT_EMPLOYEE: 'recruitment.convert.employee',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -551,6 +608,65 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
     ],
   },
   {
+    key: 'recruitment',
+    label: 'Recruitment',
+    description: 'Job openings, candidates, interviews and offers.',
+    permissions: [
+      {
+        value: PERMISSIONS.RECRUITMENT_READ,
+        label: 'View recruitment',
+        description:
+          'See the recruitment dashboard, and the job openings you are named on as hiring manager or recruiter.',
+      },
+      {
+        value: PERMISSIONS.RECRUITMENT_MANAGE,
+        label: 'Manage recruitment',
+        description:
+          'Create, edit, close and cancel job openings, and see every opening in the company.',
+      },
+      {
+        value: PERMISSIONS.CANDIDATE_READ,
+        label: 'View candidates',
+        description:
+          'See candidates, their applications and their documents. Salary and HR notes stay hidden without the next grant.',
+      },
+      {
+        value: PERMISSIONS.CANDIDATE_MANAGE,
+        label: 'Manage candidates',
+        description:
+          'Add and edit candidates, move them through the pipeline, and read what they earn, what they want and the notes about them.',
+      },
+      {
+        value: PERMISSIONS.INTERVIEW_READ,
+        label: 'View interviews',
+        description: 'See the interviews you are on. The whole calendar needs the next grant.',
+      },
+      {
+        value: PERMISSIONS.INTERVIEW_MANAGE,
+        label: 'Manage interviews',
+        description:
+          'Schedule, reschedule, cancel and complete interviews, and see every interview in the company.',
+      },
+      {
+        value: PERMISSIONS.INTERVIEW_EVALUATE,
+        label: 'Submit interview feedback',
+        description:
+          'File your own evaluation for an interview you sat on. It can never overwrite another interviewer\u2019s.',
+      },
+      {
+        value: PERMISSIONS.RECRUITMENT_OFFER_MANAGE,
+        label: 'Manage offers',
+        description: 'Draft an offer, send it, and record whether it was accepted or declined.',
+      },
+      {
+        value: PERMISSIONS.RECRUITMENT_CONVERT_EMPLOYEE,
+        label: 'Convert a candidate to an employee',
+        description:
+          'Create an employee record from a hired candidate. The only action in recruitment that writes to the employee roster.',
+      },
+    ],
+  },
+  {
     key: 'governance',
     label: 'Governance',
     description: 'Audit trail and system settings.',
@@ -608,6 +724,21 @@ export const SYSTEM_ROLES = {
    * role already there.
    */
   LUNCH_OPERATOR: 'LUNCH_OPERATOR',
+  /*
+   * Somebody who sits on interview panels and nothing more.
+   *
+   * A job rather than a rank, the same way the office boy is. A senior
+   * engineer asked to run the technical round needs to see the interviews they
+   * are on and file their own feedback; they do not need the candidate's
+   * salary history, the other panellists' notes, the pipeline, or any part of
+   * the employee roster. This role is that list and no more.
+   *
+   * A system role rather than something each company assembles by hand for the
+   * reason LUNCH_OPERATOR is: roles are seeded and nothing in the API creates
+   * one, so a role added by a release would otherwise exist on new
+   * installations and on no existing one.
+   */
+  INTERVIEWER: 'INTERVIEWER',
 } as const;
 
 export type SystemRoleKey = (typeof SYSTEM_ROLES)[keyof typeof SYSTEM_ROLES];
@@ -649,6 +780,12 @@ export const SYSTEM_ROLE_META: Record<
     name: 'Office Boy',
     description:
       'Runs the daily lunch round: takes the orders out, records who paid and reads what the day collected. Holds no HR, payroll or employee-record access.',
+    isProtected: false,
+  },
+  INTERVIEWER: {
+    name: 'Interviewer',
+    description:
+      'Sits on interview panels: sees the interviews assigned to them and files their own feedback. Reads no candidate salary, no HR notes and no part of the recruitment pipeline.',
     isProtected: false,
   },
 };
@@ -753,6 +890,25 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // and neither arrives with this role.
     PERMISSIONS.LUNCH_MENU_MANAGE,
     PERMISSIONS.LUNCH_COLLECTION_READ,
+    // Recruitment, in full. HR runs hiring: the openings, the candidates, the
+    // pipeline, the calendar and the offers. Including the restricted
+    // candidate block - what somebody earns and what they are asking for is
+    // the negotiation HR is conducting.
+    PERMISSIONS.RECRUITMENT_READ,
+    PERMISSIONS.RECRUITMENT_MANAGE,
+    PERMISSIONS.CANDIDATE_READ,
+    PERMISSIONS.CANDIDATE_MANAGE,
+    PERMISSIONS.INTERVIEW_READ,
+    PERMISSIONS.INTERVIEW_MANAGE,
+    // HR sits on the HR round, so they file feedback like any other panellist -
+    // and like any other panellist it reaches only their own seat.
+    PERMISSIONS.INTERVIEW_EVALUATE,
+    PERMISSIONS.RECRUITMENT_OFFER_MANAGE,
+    // Turning a hired candidate into an employee is HR's job, and HR already
+    // holds `employee.manage` - so withholding it here would mean HR could
+    // create the same employee by hand and lose the link back to the
+    // candidate, which is worse than granting it.
+    PERMISSIONS.RECRUITMENT_CONVERT_EMPLOYEE,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -800,6 +956,26 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LUNCH_ORDER_CREATE,
     PERMISSIONS.LUNCH_ORDER_READ_OWN,
     PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+    /*
+     * Recruitment, narrowed to what is theirs, and narrowed by the ENDPOINTS
+     * rather than by a data scope.
+     *
+     * A manager holds the two READ grants and neither MANAGE grant, which is
+     * what confines them: `recruitment.read` without `recruitment.manage`
+     * returns the openings where their own employee id sits in the hiring
+     * manager or recruiter column, and `interview.read` without
+     * `interview.manage` returns the interviews they have a seat on. Both are
+     * WHERE clauses on the server, not filters applied to a full list.
+     *
+     * No `candidate.read` and emphatically no `candidate.manage`. A manager
+     * interviewing somebody is shown that candidate's name, the role they
+     * applied for and their stage, through the interview itself - never their
+     * salary history, the HR notes or the document shelf. Hiring for your team
+     * is not a reason to read what everybody who ever applied is earning.
+     */
+    PERMISSIONS.RECRUITMENT_READ,
+    PERMISSIONS.INTERVIEW_READ,
+    PERMISSIONS.INTERVIEW_EVALUATE,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -844,6 +1020,16 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.LUNCH_ORDER_CREATE,
     PERMISSIONS.LUNCH_ORDER_READ_OWN,
     PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+    /*
+     * No recruitment grant of any kind, and the absence is deliberate rather
+     * than an oversight. An ordinary member of staff has no recruitment
+     * administration access: the whole module is invisible to them, including
+     * the dashboard, which is a company-wide figure about hiring.
+     *
+     * Somebody asked to sit on a panel is given the Interviewer role beside
+     * this one, which is the intended way in - by name, because interviewing
+     * is a job somebody is handed.
+     */
   ],
   /*
    * The office boy, and the list is short on purpose: this role is handed to
@@ -878,6 +1064,31 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
      * charged. That stays with HR Admin.
      */
   ],
+  /*
+   * The interviewer, and the list is three lines on purpose.
+   *
+   * `interview.read` WITHOUT `interview.manage` is the whole design: the
+   * endpoint behind it returns the interviews this person has a seat on, as a
+   * WHERE clause, so the role cannot be used to browse the calendar, to find
+   * out who else is being seen for a role, or to read an interview it was not
+   * invited to. `interview.evaluate` reaches only their own seat, for the same
+   * reason - the panel is checked before anything is written, so one
+   * panellist's opinion can never land in another's name.
+   *
+   * What is deliberately absent is longer than what is here. No
+   * `candidate.read`: the candidate's name, the job they applied for and their
+   * stage arrive WITH the interview, and everything else about them -
+   * salary history, expected salary, HR notes, the document shelf - does not.
+   * No `recruitment.read`: the pipeline and the openings are not this person's
+   * business. No employee, payroll, attendance or leave grant at all.
+   *
+   * A company that wants an interviewer to see more adds a second role
+   * deliberately, which is the point of the line being drawn here.
+   */
+  INTERVIEWER: [
+    PERMISSIONS.INTERVIEW_READ,
+    PERMISSIONS.INTERVIEW_EVALUATE,
+  ],
 };
 
 /** Default data scope per system role, applied when Phase 2 seeds roles. */
@@ -894,4 +1105,12 @@ export const DEFAULT_ROLE_SCOPES: Record<SystemRoleKey, DataScope> = {
    * reaches his own record and stops.
    */
   LUNCH_OPERATOR: DATA_SCOPES.OWN,
+  /*
+   * OWN, and like the office boy's it costs the role nothing: the interview
+   * endpoints narrow to the caller's own PANEL SEATS rather than through the
+   * data scope, so an interviewer sees every interview they are on whoever
+   * booked it. What OWN buys is that a permission which DOES consult the scope
+   * reaches their own record and stops.
+   */
+  INTERVIEWER: DATA_SCOPES.OWN,
 };

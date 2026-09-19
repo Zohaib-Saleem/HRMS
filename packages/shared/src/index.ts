@@ -24,3 +24,4 @@ export * from './dto/company-moments.js';
 export * from './dto/cases.js';
 export * from './dto/lunch.js';
 export * from './dto/timeline.js';
+export * from './dto/recruitment.js';

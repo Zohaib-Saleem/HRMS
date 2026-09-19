@@ -204,6 +204,34 @@ const DeviceMappingPage = lazyPage(
   () => import('@/features/settings/device-mapping-page'),
   'DeviceMappingPage',
 );
+const RecruitmentDashboardPage = lazyPage(
+  () => import('@/features/recruitment/recruitment-dashboard-page'),
+  'RecruitmentDashboardPage',
+);
+const JobOpeningsPage = lazyPage(
+  () => import('@/features/recruitment/job-openings-page'),
+  'JobOpeningsPage',
+);
+const JobOpeningDetailPage = lazyPage(
+  () => import('@/features/recruitment/job-opening-detail-page'),
+  'JobOpeningDetailPage',
+);
+const CandidatesPage = lazyPage(
+  () => import('@/features/recruitment/candidates-page'),
+  'CandidatesPage',
+);
+const CandidateDetailPage = lazyPage(
+  () => import('@/features/recruitment/candidate-detail-page'),
+  'CandidateDetailPage',
+);
+const InterviewsPage = lazyPage(
+  () => import('@/features/recruitment/interviews-page'),
+  'InterviewsPage',
+);
+const InterviewDetailPage = lazyPage(
+  () => import('@/features/recruitment/interview-detail-page'),
+  'InterviewDetailPage',
+);
 const RolesPage = lazyPage(() => import('@/features/settings/roles-page'), 'RolesPage');
 const AuditLogPage = lazyPage(() => import('@/features/settings/audit-log-page'), 'AuditLogPage');
 
@@ -445,6 +473,37 @@ export function AppRoutes() {
             the screen are drawn from its answer, not from this route. */}
         <Route element={<RequirePermission permission={PERMISSIONS.LUNCH_COLLECTION_READ} />}>
           <Route path="lunch-collection" element={<LunchCollectionPage />} />
+        </Route>
+
+        {/*
+            Recruitment, and the gates are three different grants rather than
+            one, because the module's own endpoints are.
+
+            `recruitment.read` opens the dashboard and the openings, and the
+            server then narrows WHICH openings: a hiring manager holding it
+            without `recruitment.manage` is served the vacancies they are named
+            on. `candidate.read` is a separate grant that a manager does not
+            hold - an interviewer is shown the person they are meeting through
+            the interview, never through the candidate list. And
+            `interview.read` stands alone, which is the whole Interviewer role:
+            the calendar behind it returns the seats they are on.
+
+            A guessed id answers 404 rather than 403 everywhere here, so none
+            of these routes can be used to find out that a record exists. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.RECRUITMENT_READ} />}>
+          <Route path="recruitment" element={<RecruitmentDashboardPage />} />
+          <Route path="recruitment/job-openings" element={<JobOpeningsPage />} />
+          <Route path="recruitment/job-openings/:id" element={<JobOpeningDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.CANDIDATE_READ} />}>
+          <Route path="recruitment/candidates" element={<CandidatesPage />} />
+          <Route path="recruitment/candidates/:id" element={<CandidateDetailPage />} />
+        </Route>
+
+        <Route element={<RequirePermission permission={PERMISSIONS.INTERVIEW_READ} />}>
+          <Route path="recruitment/interviews" element={<InterviewsPage />} />
+          <Route path="recruitment/interviews/:id" element={<InterviewDetailPage />} />
         </Route>
 
         {/* employee.read is the whole gate. Each block inside a row - pay,

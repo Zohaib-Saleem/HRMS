@@ -59,6 +59,14 @@ import { caseAttachmentRoutes } from './cases/case-attachments.routes.js';
 import { lunchOrderRoutes } from './lunch/lunch-orders.routes.js';
 import { lunchDeskRoutes } from './lunch/lunch-desk.routes.js';
 import { lunchMenuRoutes } from './lunch/lunch-menu.routes.js';
+import { jobOpeningRoutes } from './recruitment/job-openings.routes.js';
+import { candidateRoutes } from './recruitment/candidates.routes.js';
+import { candidateDocumentRoutes } from './recruitment/candidate-documents.routes.js';
+import { interviewRoutes } from './recruitment/interviews.routes.js';
+import { evaluationRoutes } from './recruitment/evaluations.routes.js';
+import { offerRoutes } from './recruitment/offers.routes.js';
+import { conversionRoutes } from './recruitment/conversion.routes.js';
+import { recruitmentDashboardRoutes } from './recruitment/recruitment-dashboard.routes.js';
 import {
   payrollDashboardRoutes,
   payrollReconciliationRoutes,
@@ -191,6 +199,36 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/lunch/desk', plugin: lunchDeskRoutes },
   { prefix: '/lunch/menu-items', plugin: lunchMenuRoutes },
   { prefix: '/lunch', plugin: lunchOrderRoutes },
+
+  // --- phase 14: recruitment --------------------------------------------
+  // Eight plugins under /recruitment, split by the GRANT each one needs rather
+  // than by where it sits. That is the point of the split: the job openings
+  // need `recruitment.read`, the candidates need `candidate.read`, the
+  // interviews need `interview.read` and the conversion needs
+  // `recruitment.convert.employee` - so an interviewer who can open the
+  // calendar cannot open the candidate list, and each plugin's preHandler says
+  // exactly which people it is for.
+  //
+  // The static segments are registered ahead of the parameterised ones, the
+  // same way `/loans/policy` sits ahead of `/loans`, so Fastify matches
+  // `/recruitment/candidates/board` unambiguously.
+  //
+  // The document routes are separate for the mechanical reason the case
+  // attachments and the employee photo are: they register raw-body
+  // content-type parsers, which are scoped to the plugin that adds them, so
+  // keeping them apart leaves the routes next door as plain JSON routes.
+  //
+  // Deliberately NOT registered anywhere near payroll, and sharing nothing
+  // with it: an offer's salary is a number on an offer, it creates no salary
+  // row, and converting a candidate writes one employee record and stops.
+  { prefix: '/recruitment/dashboard', plugin: recruitmentDashboardRoutes },
+  { prefix: '/recruitment/job-openings', plugin: jobOpeningRoutes },
+  { prefix: '/recruitment/candidates', plugin: candidateRoutes },
+  { prefix: '/recruitment/candidates', plugin: candidateDocumentRoutes },
+  { prefix: '/recruitment/candidates', plugin: conversionRoutes },
+  { prefix: '/recruitment/interviews', plugin: interviewRoutes },
+  { prefix: '/recruitment/interviews', plugin: evaluationRoutes },
+  { prefix: '/recruitment/offers', plugin: offerRoutes },
 
   // --- phase 5+ ---------------------------------------------------------
   // { prefix: '/documents', plugin: documentRoutes },

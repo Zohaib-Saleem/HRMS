@@ -223,6 +223,104 @@ describe('an administrator', () => {
   });
 });
 
+describe('the recruitment section', () => {
+  /*
+   * Four rows on three different grants, which is the whole point of the
+   * section: it is not one module-wide permission, and each row carries the
+   * grant its own endpoint needs. Driven from `DEFAULT_ROLE_PERMISSIONS` so
+   * that handing the Interviewer role `candidate.read` tomorrow fails here
+   * rather than quietly widening a sidebar.
+   */
+  const INTERVIEWER = DEFAULT_ROLE_PERMISSIONS.INTERVIEWER;
+
+  it('gives HR the whole set', () => {
+    const links = sidebarFor(HR_ADMIN);
+
+    for (const label of ['Recruitment', 'Job openings', 'Candidates', 'Interviews']) {
+      expect(links).toContain(label);
+    }
+  });
+
+  it('gives an interviewer their calendar and nothing else of hiring', () => {
+    // Two grants, and neither of them is a recruitment or candidate one.
+    expect(INTERVIEWER).toEqual([PERMISSIONS.INTERVIEW_READ, PERMISSIONS.INTERVIEW_EVALUATE]);
+
+    const links = sidebarFor(INTERVIEWER);
+
+    expect(links).toContain('Interviews');
+    for (const label of ['Recruitment', 'Job openings', 'Candidates']) {
+      expect(links).not.toContain(label);
+    }
+  });
+
+  it('shows a hiring manager the openings but not the candidate list', () => {
+    /*
+     * The section 20 rule made visible: somebody interviewing a person is
+     * shown that person through the interview, and has no business browsing
+     * what everybody who ever applied is earning.
+     */
+    const links = sidebarFor([
+      PERMISSIONS.RECRUITMENT_READ,
+      PERMISSIONS.INTERVIEW_READ,
+      PERMISSIONS.INTERVIEW_EVALUATE,
+    ]);
+
+    expect(links).toContain('Recruitment');
+    expect(links).toContain('Job openings');
+    expect(links).toContain('Interviews');
+    expect(links).not.toContain('Candidates');
+  });
+
+  it('shows an employee none of it', () => {
+    const links = sidebarFor(EMPLOYEE);
+
+    for (const label of ['Recruitment', 'Job openings', 'Candidates', 'Interviews']) {
+      expect(links).not.toContain(label);
+    }
+  });
+
+  it('is its own heading rather than four more rows under Management', () => {
+    permissions = new Set(HR_ADMIN);
+    render(
+      <MemoryRouter>
+        <SidebarNav collapsed={false} onToggleCollapsed={() => {}} />
+      </MemoryRouter>,
+    );
+
+    /*
+     * "Recruitment" is on screen twice for HR - once as the section heading
+     * and once as the dashboard row under it - so the heading is the one that
+     * is not a link.
+     */
+    const heading = screen
+      .getAllByText('Recruitment')
+      .find((node) => node.closest('a') === null);
+
+    expect(heading).toBeDefined();
+    // Filed on its own rather than among the management screens.
+    expect(heading?.closest('div')).not.toContainElement(
+      screen.queryByRole('link', { name: 'Leave types' }),
+    );
+  });
+
+  it('carries the grant each row’s own endpoint needs', () => {
+    const byPath = new Map(NAV_SECTIONS.flatMap((s) => s.items).map((i) => [i.to, i.permission]));
+
+    expect(byPath.get('/recruitment')).toBe(PERMISSIONS.RECRUITMENT_READ);
+    expect(byPath.get('/recruitment/job-openings')).toBe(PERMISSIONS.RECRUITMENT_READ);
+    expect(byPath.get('/recruitment/candidates')).toBe(PERMISSIONS.CANDIDATE_READ);
+    expect(byPath.get('/recruitment/interviews')).toBe(PERMISSIONS.INTERVIEW_READ);
+  });
+
+  it('lights the dashboard row only on the dashboard itself', () => {
+    // The three rows below are nested under /recruitment and would otherwise
+    // light it up as well.
+    const dashboard = NAV_SECTIONS.flatMap((s) => s.items).find((i) => i.to === '/recruitment');
+
+    expect(dashboard?.matchPrefix).toBe(false);
+  });
+});
+
 describe('the registry itself', () => {
   it('has no duplicate destinations - one row per screen', () => {
     const paths = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.to));
