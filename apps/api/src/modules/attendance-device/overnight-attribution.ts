@@ -167,3 +167,129 @@ export async function reattributeOvernightPunches(input: {
 
   return [...touched];
 }
+
+/** One day whose punches moved back, as the scan found it. */
+export interface RangeMove {
+  employeeId: string;
+  fromDayKey: string;
+  toDayKey: string;
+  punchesMoved: number;
+}
+
+/**
+ * Re-attributes a window of history that was imported before the rule existed.
+ *
+ * The import path only ever sees the days a batch touched, so a company that
+ * turns the rule on - or changes the window - still has every earlier late
+ * night read the old way. This is the way to go back for them.
+ *
+ * What it deliberately does NOT do is re-derive the range. Re-scoring every
+ * day in a window re-reads days nothing was wrong with under today's policy,
+ * which restates history that was correct; only the days where a punch
+ * actually changed sides are returned for scoring. That scope is the whole
+ * point of the function.
+ *
+ * `dryRun` answers the same question without writing, because "show me what
+ * would move" is the first thing anybody sane asks of a backfill.
+ */
+export async function reattributeDateRange(input: {
+  companyId: string;
+  from: string;
+  to: string;
+  employeeId?: string;
+  dryRun: boolean;
+  settingsFor: (employeeId: string, dayKey: string) => Promise<OvernightSettings | null>;
+}): Promise<{ employeesScanned: number; daysScanned: number; moved: RangeMove[] }> {
+  const { companyId, from, to, dryRun, settingsFor } = input;
+
+  /*
+   * `localDayKey` is a `YYYY-MM-DD` string, so the range is a string
+   * comparison. That is sound for this format and only this format - it is
+   * zero-padded and big-endian, so lexical order IS date order.
+   */
+  const candidates = await prisma.attendanceRawPunch.groupBy({
+    by: ['employeeId', 'localDayKey'],
+    where: {
+      companyId,
+      employeeId: input.employeeId ? input.employeeId : { not: null },
+      localDayKey: { gte: from, lte: to },
+    },
+  });
+
+  const byEmployee = new Map<string, string[]>();
+  for (const row of candidates) {
+    if (!row.employeeId) continue;
+    const list = byEmployee.get(row.employeeId) ?? [];
+    list.push(row.localDayKey);
+    byEmployee.set(row.employeeId, list);
+  }
+
+  const moved: RangeMove[] = [];
+
+  /*
+   * Punches this scan has already given to an earlier day.
+   *
+   * A real run has written them and would not read them back under their old
+   * day; a dry run has not. Without this a dry run reads a day that is about
+   * to lose its leading punches as though it still had them - so a chain of
+   * late nights reports only its first link, and the preview disagrees with
+   * the run it is previewing. Filtering here makes both paths read the same.
+   */
+  const relocated = new Set<string>();
+
+  const punchesOn = async (employeeId: string, dayKey: string) => {
+    const rows = await prisma.attendanceRawPunch.findMany({
+      where: { companyId, employeeId, localDayKey: dayKey },
+      select: { id: true, punchedAt: true, punchState: true },
+      orderBy: { punchedAt: 'asc' },
+    });
+    return rows.filter((row) => !relocated.has(row.id));
+  };
+
+  for (const [employeeId, dayKeys] of byEmployee) {
+    // Ascending, for the same reason the writer sorts: a day that has just
+    // been closed is settled before the day after it is considered.
+    const ordered = [...new Set(dayKeys)].sort();
+    const settings = await settingsFor(employeeId, ordered[0]!);
+    if (!settings || settings.windowMinutes <= 0) continue;
+
+    for (const dayKey of ordered) {
+      const yesterday = previousDayKey(dayKey);
+
+      const [previousDayPunches, dayPunches] = await Promise.all([
+        punchesOn(employeeId, yesterday),
+        punchesOn(employeeId, dayKey),
+      ]);
+
+      const moving = punchesBelongingToPreviousDay({
+        dayKey,
+        previousDayPunches,
+        dayPunches,
+        settings,
+      });
+      if (moving.length === 0) continue;
+
+      if (!dryRun) {
+        await prisma.attendanceRawPunch.updateMany({
+          where: { id: { in: moving } },
+          data: { localDayKey: yesterday },
+        });
+      }
+
+      for (const id of moving) relocated.add(id);
+
+      moved.push({
+        employeeId,
+        fromDayKey: dayKey,
+        toDayKey: yesterday,
+        punchesMoved: moving.length,
+      });
+    }
+  }
+
+  return {
+    employeesScanned: byEmployee.size,
+    daysScanned: candidates.length,
+    moved,
+  };
+}

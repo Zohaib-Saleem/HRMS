@@ -8,6 +8,7 @@ import {
   paginationQuerySchema,
   punchQuerySchema,
   reprocessSchema,
+  reattributeRangeSchema,
   type DeviceRecord,
   type DeviceSyncRecord,
   type DeviceTestResult,
@@ -15,6 +16,8 @@ import {
   type RawPunchRecord,
   type SyncErrorDetail,
   type ReprocessResult,
+  type ReattributeRangeResult,
+  type ReattributedDay,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
@@ -24,10 +27,12 @@ import { ConflictError, NotFoundError, ValidationError } from '../../core/errors
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { decryptSecret, encryptSecret } from '../../core/secrets.js';
 import { env } from '../../config/env.js';
-import { isValidTimeZone } from '../../core/zoned-time.js';
+import { dayKeyToDateColumn, isValidTimeZone } from '../../core/zoned-time.js';
 import { adapterFor, isPollable } from './registry.js';
 import { SyncInProgressError, connectionFor, syncDevice } from './sync.service.js';
 import { recalculateDays } from './attendance-import.service.js';
+import { reattributeDateRange } from './overnight-attribution.js';
+import { resolvePolicyFor } from '../time/attendance-policy.js';
 import { mappingDate, setMapping } from './mapping.service.js';
 
 /**
@@ -811,6 +816,137 @@ export const attendancePunchRoutes: FastifyPluginAsync = async (app) => {
 
       const result: ReprocessResult = {
         punchesConsidered: punches.length,
+        daysRecalculated: outcome.recalculated,
+        daysSkipped: outcome.skipped,
+        daysFailed: outcome.failed,
+      };
+
+      return reply.send({ data: result });
+    },
+  );
+
+  /**
+   * Re-reads a window of history against the overnight rule.
+   *
+   * The companion to `/reprocess`, for the opposite problem. Reprocessing
+   * rescues punches that were never scored; this one revisits punches that
+   * WERE scored, on the wrong side of midnight, because they landed before
+   * the rule existed or before the window was set to its present value.
+   *
+   * Only the days where a punch actually changed sides are rescored. The
+   * alternative - re-deriving the range - re-reads days nothing was wrong
+   * with under today's policy and quietly restates them, which is a much
+   * larger and less honest change than the one being asked for.
+   */
+  app.post(
+    '/reattribute-range',
+    { preHandler: requirePermission(PERMISSIONS.DEVICE_MANAGE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const input = parseOrThrow(reattributeRangeSchema, request.body ?? {});
+      if (input.to < input.from) {
+        throw new ValidationError({ to: ['The end of the range is before its start.'] });
+      }
+
+      const dryRun = input.dryRun === true;
+
+      /*
+       * Pairing comes from a device that actually reported in the range, the
+       * same way `/reprocess` takes it: the strategy is a property of the
+       * terminal, and reading it from the data keeps the two routes agreeing.
+       */
+      const sample = await prisma.attendanceRawPunch.findFirst({
+        where: {
+          companyId: auth.companyId,
+          employeeId: input.employeeId ? input.employeeId : { not: null },
+          localDayKey: { gte: input.from, lte: input.to },
+        },
+        select: { device: { select: { punchPairing: true } } },
+      });
+      const pairing = sample?.device.punchPairing ?? 'FIRST_IN_LAST_OUT';
+
+      const scan = await reattributeDateRange({
+        companyId: auth.companyId,
+        from: input.from,
+        to: input.to,
+        employeeId: input.employeeId,
+        dryRun,
+        settingsFor: async (employeeId, dayKey) => {
+          try {
+            const policy = await resolvePolicyFor(
+              auth.companyId,
+              employeeId,
+              dayKeyToDateColumn(dayKey),
+            );
+            return {
+              windowMinutes: policy.overnightCheckOutWindowMinutes,
+              cutoff: policy.overnightCheckOutCutoff,
+              timeZone: policy.timeZone,
+              pairing,
+              duplicateWindowSeconds: policy.duplicatePunchWindowSeconds,
+            };
+          } catch {
+            // An employee whose policy will not resolve is skipped, not fatal:
+            // the rest of the range is still worth fixing.
+            return null;
+          }
+        },
+      });
+
+      /*
+       * Score exactly the days that changed - both sides of every move, since
+       * a punch leaving one day and joining another makes two days wrong.
+       */
+      const touched = new Map<string, { employeeId: string; dayKey: string }>();
+      for (const move of scan.moved) {
+        for (const dayKey of [move.fromDayKey, move.toDayKey]) {
+          touched.set(`${move.employeeId}:${dayKey}`, { employeeId: move.employeeId, dayKey });
+        }
+      }
+
+      const outcome =
+        dryRun || touched.size === 0
+          ? { recalculated: 0, skipped: 0, failed: 0 }
+          : await recalculateDays({
+              companyId: auth.companyId,
+              pairing,
+              days: [...touched.values()],
+            });
+
+      const names = new Map(
+        (
+          await prisma.employee.findMany({
+            where: { companyId: auth.companyId, id: { in: [...new Set(scan.moved.map((m) => m.employeeId))] } },
+            select: { id: true, firstName: true, lastName: true, displayName: true },
+          })
+        ).map((e) => [e.id, displayName(e)]),
+      );
+
+      const moved: ReattributedDay[] = scan.moved.map((move) => ({
+        employeeId: move.employeeId,
+        employeeName: names.get(move.employeeId) ?? null,
+        fromDayKey: move.fromDayKey,
+        toDayKey: move.toDayKey,
+        punchesMoved: move.punchesMoved,
+      }));
+
+      if (!dryRun && scan.moved.length > 0) {
+        await recordAudit({
+          companyId: auth.companyId,
+          actorId: auth.userId,
+          action: 'device.punches.reattribute',
+          entityType: 'AttendanceRawPunch',
+          entityId: `${input.from}..${input.to}`,
+          summary: `Overnight re-attribution ${input.from} to ${input.to}: ${scan.moved.length} day(s) moved, ${outcome.recalculated} day(s) rescored`,
+          request,
+        });
+      }
+
+      const result: ReattributeRangeResult = {
+        dryRun,
+        employeesScanned: scan.employeesScanned,
+        daysScanned: scan.daysScanned,
+        moved,
         daysRecalculated: outcome.recalculated,
         daysSkipped: outcome.skipped,
         daysFailed: outcome.failed,

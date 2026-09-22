@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Fingerprint, RefreshCw } from 'lucide-react';
+import { Fingerprint, MoonStar, RefreshCw } from 'lucide-react';
 import {
   PERMISSIONS,
   type DeviceRecord,
@@ -22,6 +22,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
+import { ReattributeDialog } from './reattribute-dialog';
 
 /**
  * Raw device punches.
@@ -42,6 +43,7 @@ export function PunchesPage() {
   const canManage = has(PERMISSIONS.DEVICE_MANAGE);
   const queryClient = useQueryClient();
   const [filters, setFilters] = React.useState(INITIAL);
+  const [reattributing, setReattributing] = React.useState(false);
   const debounced = useDebounced(filters.q, 350);
 
   const update = React.useCallback(
@@ -97,16 +99,27 @@ export function PunchesPage() {
         description="Every transaction a terminal reported, exactly as it reported it. Attendance is calculated from these and never writes back to them."
         actions={
           canManage ? (
-            <Button
-              size="sm"
-              variant="outline"
-              loading={reprocess.isPending}
-              onClick={() => reprocess.mutate()}
-              title="Recalculate attendance for punches that have an employee but have not been scored"
-            >
-              <RefreshCw />
-              Reprocess
-            </Button>
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setReattributing(true)}
+                title="Give punches after midnight back to the day they close, over a range of history"
+              >
+                <MoonStar />
+                Re-attribute overnight
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                loading={reprocess.isPending}
+                onClick={() => reprocess.mutate()}
+                title="Recalculate attendance for punches that have an employee but have not been scored"
+              >
+                <RefreshCw />
+                Reprocess
+              </Button>
+            </>
           ) : null
         }
       />
@@ -223,6 +236,8 @@ export function PunchesPage() {
           </>
         )}
       </Card>
+
+      <ReattributeDialog open={reattributing} onClose={() => setReattributing(false)} />
     </>
   );
 }

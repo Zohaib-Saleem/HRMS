@@ -423,6 +423,50 @@ export interface ReprocessResult {
   daysFailed: number;
 }
 
+/**
+ * Re-attributing a window of history after the overnight rule changed.
+ *
+ * Separate from `reprocessSchema` because it answers a different question.
+ * Reprocessing asks "which punches were never scored?"; this asks "which
+ * already-scored days did we read on the wrong side of midnight?" - and the
+ * punches it touches have a `processedAt`, which is exactly what reprocessing
+ * filters out.
+ *
+ * Deliberately NOT a re-derive of the range. Re-scoring every day in a window
+ * re-reads untouched days under today's policy and silently restates history
+ * that nothing was wrong with; only the days where a punch actually moved are
+ * written. That is why there is no "recalculate everything" option here.
+ */
+export const reattributeRangeSchema = z.object({
+  /** Inclusive, `YYYY-MM-DD`, read as the company's local day key. */
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date such as 2026-08-01.'),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date such as 2026-08-31.'),
+  employeeId: z.string().trim().max(64).optional(),
+  /** Report what would move without writing anything. */
+  dryRun: z.coerce.boolean().optional(),
+});
+
+/** One day whose punches changed sides, named so a human can check it. */
+export interface ReattributedDay {
+  employeeId: string;
+  employeeName: string | null;
+  /** The day the punches carried before, and the day they close. */
+  fromDayKey: string;
+  toDayKey: string;
+  punchesMoved: number;
+}
+
+export interface ReattributeRangeResult {
+  dryRun: boolean;
+  employeesScanned: number;
+  daysScanned: number;
+  moved: ReattributedDay[];
+  /** Zero on a dry run: nothing is scored until something has moved. */
+  daysRecalculated: number;
+  daysSkipped: number;
+  daysFailed: number;
+}
+
 // --------------------------------------------------------------- LAN connector
 
 /**
