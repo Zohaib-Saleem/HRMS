@@ -18,7 +18,18 @@ const SORTABLE = ['name', 'createdAt', 'updatedAt'] as const;
 
 const INCLUDE = {
   department: { select: { id: true, name: true } },
-  leadEmployee: { select: { id: true, firstName: true, lastName: true } },
+  /*
+   * The ACTIVE roster, in appointment order. Not `leadEmployee`, which this
+   * supersedes: a team has one to three managers, and the single lead column
+   * could hold neither the second nor the third.
+   */
+  managers: {
+    where: { isActive: true },
+    orderBy: { assignedAt: 'asc' },
+    select: {
+      employee: { select: { id: true, firstName: true, lastName: true, displayName: true } },
+    },
+  },
   _count: { select: { employees: true } },
 } satisfies Prisma.TeamInclude;
 
@@ -32,10 +43,10 @@ function toRecord(row: TeamWithRelations): TeamRecord {
     isActive: row.isActive,
     departmentId: row.departmentId,
     departmentName: row.department.name,
-    leadEmployeeId: row.leadEmployeeId,
-    leadEmployeeName: row.leadEmployee
-      ? `${row.leadEmployee.firstName} ${row.leadEmployee.lastName}`.trim()
-      : null,
+    managerCount: row.managers.length,
+    managerNames: row.managers.map(
+      (m) => m.employee.displayName ?? `${m.employee.firstName} ${m.employee.lastName}`.trim(),
+    ),
     employeeCount: row._count.employees,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

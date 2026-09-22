@@ -18,7 +18,7 @@ import { buildMeta, toSkipTake } from '../../core/pagination.js';
 import { diff, recordAudit } from '../../core/audit.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope } from '../../auth/scope.js';
+import { assertAttendanceEmployeeInScope } from '../../auth/scope.js';
 import { toDateOnly } from './helpers.js';
 import { resolvePolicyFor } from './attendance-policy.js';
 
@@ -368,7 +368,7 @@ export const attendancePolicyRoutes: FastifyPluginAsync = async (app) => {
     const query = parseOrThrow(effectivePolicyQuerySchema, request.query);
 
     const employeeId = query.employeeId;
-    await assertEmployeeInScope(auth, employeeId);
+    await assertAttendanceEmployeeInScope(auth, employeeId);
 
     const date = toDateOnly(query.on ?? new Date().toISOString());
     const resolved = await resolvePolicyFor(auth.companyId, employeeId, date);

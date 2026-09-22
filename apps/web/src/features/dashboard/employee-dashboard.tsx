@@ -21,6 +21,7 @@ import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
 import { MyCasesCard } from '@/features/cases/my-cases-card';
 import { MyAssetsCard } from '@/features/assets/my-assets-card';
+import { AssetOperationsCard } from '@/features/assets/asset-operations-card';
 import { LunchTodayCard } from '@/features/lunch/lunch-today-card';
 import { useAuthenticatedSession } from '@/features/auth/session-context';
 import { MyAttendanceBarsCard } from './my-attendance-bars-card';
@@ -276,6 +277,22 @@ export function EmployeeDashboard() {
         <MyAssetsCard />
         <TodayLeaveCard balances={data?.leave?.balances ?? []} loading={loading} />
       </div>
+
+      {/*
+        * The asset register, for whoever runs it.
+        *
+        * Renders itself away without `asset.read.all`, so this is four tiles on
+        * one person's dashboard and nothing at all on everybody else's. It sits
+        * here - under the day's own cards, above the month - because for the
+        * person who holds that grant the register is the job, and their
+        * attendance is their attendance.
+        *
+        * It is the only company-wide figure on this page, and it is about
+        * EQUIPMENT. See the card for why that is a different kind of number
+        * from a company-wide attendance figure, which is about people and is
+        * not on this page at any scope.
+        */}
+      <AssetOperationsCard />
 
       {/* My attendance: the month as bars, drawn by the same component the
           /attendance page uses and from the very request the figures below are

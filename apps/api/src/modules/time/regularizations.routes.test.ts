@@ -31,6 +31,7 @@ const db = vi.hoisted(() => ({
     update: vi.fn(),
   },
   approvalRequest: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
+  approvalWorkflow: { findFirst: vi.fn() },
   approvalStep: { findFirst: vi.fn() },
   attendanceRecord: { upsert: vi.fn(), update: vi.fn(), create: vi.fn(), findUnique: vi.fn() },
   attendanceAdjustment: { create: vi.fn() },
@@ -129,6 +130,15 @@ beforeEach(() => {
     department: { headEmployeeId: 'emp-head' },
   });
   db.employee.findMany.mockResolvedValue([]);
+  /*
+   * Which candidates are ACTIVE, for the approval chain. Answers with the ids
+   * it was asked about; a test that wants a departed approver overrides it.
+   */
+  db.employee.findMany.mockImplementation((args: { where?: { id?: { in?: string[] } } }) =>
+    Promise.resolve((args?.where?.id?.in ?? []).map((id: string) => ({ id }))),
+  );
+  db.approvalWorkflow.findFirst.mockResolvedValue(null);
+
   db.employee.count.mockResolvedValue(0);
 
   db.attendanceRegularizationRequest.findFirst.mockResolvedValue(null);

@@ -4,7 +4,7 @@ import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { NotFoundError } from '../../core/errors.js';
 import { requireAuth, requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope } from '../../auth/scope.js';
+import { assertEmployeeInTeamScope } from '../../auth/scope.js';
 import {
   EMPLOYEE_ASSET_INCLUDE,
   buildClearance,
@@ -24,7 +24,7 @@ import {
  * TWO GATES, AND BOTH ARE THE EXISTING ONES.
  *
  *   `asset.read` says this caller may read asset records at all.
- *   `assertEmployeeInScope` says WHICH employee, and it is the same data-scope
+ *   `assertEmployeeInTeamScope` says WHICH employee, and it is the same data-scope
  *   machinery every other employee-shaped endpoint uses. An employee on an OWN
  *   scope can reach exactly their own id and is refused every other, which is
  *   section 3's "employees should only see their own assets" - enforced by the
@@ -51,7 +51,7 @@ export const assetEmployeeRoutes: FastifyPluginAsync = async (app) => {
     if (!employee) throw new NotFoundError('Employee');
 
     // Throws 403 for an employee this caller's scope does not reach.
-    await assertEmployeeInScope(auth, employee.id);
+    await assertEmployeeInTeamScope(auth, employee.id);
 
     /*
      * Every handover this person has ever had, in one query, split in the

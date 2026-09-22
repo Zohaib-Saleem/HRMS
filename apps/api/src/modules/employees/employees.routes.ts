@@ -24,7 +24,12 @@ import { diff, recordAudit } from '../../core/audit.js';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { restoreUser, suspendUser } from '../users/users.service.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
+import {
+  assertEmployeeInScope,
+  assertEmployeeInTeamScope,
+  employeeScopeFilter,
+  teamScopeFilter,
+} from '../../auth/scope.js';
 import { employeeProfileSummary } from './employee-profile.service.js';
 import { employeeTimeline } from './employee-timeline.service.js';
 import {
@@ -67,13 +72,27 @@ function csvCell(value: unknown): string {
 
 export const employeeRoutes: FastifyPluginAsync = async (app) => {
   /** Every route here needs at least read access. */
+  /*
+   * A NOTE ON WHICH SCOPE FUNCTION EACH ROUTE USES, because the difference is
+   * the whole of section 3's data boundary and it is one identifier long.
+   *
+   * The five READ paths - the list, the reporting tree, one record, the
+   * profile summary and the timeline - use `teamScopeFilter` /
+   * `assertEmployeeInTeamScope`, which is the caller's data scope UNION the
+   * teams they have actually been appointed to manage.
+   *
+   * Every WRITE path below - create, update, terminate, the sub-records -
+   * keeps `assertEmployeeInScope`. Being put in charge of a team is a reason
+   * to READ your people's records. It is not a reason to edit them, and
+   * `employee.manage` under the ordinary scope remains what that takes.
+   */
   app.addHook('preHandler', requirePermission(PERMISSIONS.EMPLOYEE_READ));
 
   app.get('/', async (request, reply) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(employeeQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await teamScopeFilter(auth);
     // NONE means no rows - never "no filter".
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
@@ -135,7 +154,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
   app.get('/tree', async (request, reply) => {
     const auth = requireAuthContext(request);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await teamScopeFilter(auth);
     if (scopeFilter === null) return reply.send({ data: [] });
 
     const rows = await prisma.employee.findMany({
@@ -248,7 +267,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const { id } = parseOrThrow(idParamSchema, request.params);
 
-    await assertEmployeeInScope(auth, id);
+    await assertEmployeeInTeamScope(auth, id);
 
     const row = await prisma.employee.findFirst({
       where: { id, companyId: auth.companyId },
@@ -291,7 +310,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const { id } = parseOrThrow(idParamSchema, request.params);
 
-    await assertEmployeeInScope(auth, id);
+    await assertEmployeeInTeamScope(auth, id);
 
     const exists = await prisma.employee.findFirst({
       where: { id, companyId: auth.companyId },
@@ -317,7 +336,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     const { id } = parseOrThrow(idParamSchema, request.params);
     const query = parseOrThrow(employeeTimelineQuerySchema, request.query);
 
-    await assertEmployeeInScope(auth, id);
+    await assertEmployeeInTeamScope(auth, id);
 
     const exists = await prisma.employee.findFirst({
       where: { id, companyId: auth.companyId },

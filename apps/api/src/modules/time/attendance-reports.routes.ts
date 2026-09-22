@@ -14,7 +14,10 @@ import { parseOrThrow } from '../../core/validate.js';
 import { recordAudit } from '../../core/audit.js';
 import { NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
+import {
+  assertAttendanceEmployeeInScope,
+  attendancePeopleFilter,
+} from '../../auth/scope.js';
 import { dayKeyToDateColumn, dateColumnToDayKey } from '../../core/zoned-time.js';
 import { deriveRangeForEmployees, shiftOnDate, type DerivedDay } from './attendance.service.js';
 import { EMPLOYMENT_WINDOW_SELECT, attendancePopulationWhere } from './employment-window.js';
@@ -33,7 +36,7 @@ import {
 /**
  * Attendance reports.
  *
- * Same scope rules as every other attendance route: `employeeScopeFilter`
+ * Same scope rules as every other attendance route: `attendancePeopleFilter`
  * narrows the employee set before a single day is derived, so a department
  * total cannot be used to infer attendance the caller could not read
  * person-by-person.
@@ -131,7 +134,7 @@ export const attendanceReportRoutes: FastifyPluginAsync = async (app) => {
   app.get('/employee-file', async (request, reply) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(attendanceEmployeeFileQuerySchema, request.query);
-    await assertEmployeeInScope(auth, query.employeeId);
+    await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const { from, to } = rangeFor(query);
     assertReportRange(from, to);
@@ -291,9 +294,9 @@ export const attendanceReportRoutes: FastifyPluginAsync = async (app) => {
     const { from, to } = rangeFor(query);
     assertReportRange(from, to);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) return null;
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const where: Prisma.EmployeeWhereInput = {
       AND: [

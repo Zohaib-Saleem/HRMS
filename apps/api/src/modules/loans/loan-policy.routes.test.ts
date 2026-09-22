@@ -35,6 +35,7 @@ const db = vi.hoisted(() => ({
   attendanceRegularizationRequest: { findMany: vi.fn() },
   loanPolicy: { findFirst: vi.fn(), upsert: vi.fn(), create: vi.fn(), findMany: vi.fn(), count: vi.fn() },
   approvalRequest: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn() },
+  approvalWorkflow: { findFirst: vi.fn() },
   approvalStep: { findFirst: vi.fn(), updateMany: vi.fn() },
   approvalEvent: { create: vi.fn() },
   user: { findMany: vi.fn() },
@@ -191,7 +192,20 @@ beforeEach(() => {
     secondaryManagerId: null,
     department: { headEmployeeId: null },
   });
-  db.employee.findMany.mockResolvedValue([]);
+
+  /*
+   * The two questions resolving an approval chain now asks: is this company
+   * using a configured chain (null = the built-in default, which for a loan is
+   * the reporting line exactly as before), and which candidates are still
+   * ACTIVE - because the resolver will not route a request to somebody who has
+   * left, whatever a roster says. The stub answers with the ids it was asked
+   * about; a test that wants a departed approver overrides it.
+   */
+  db.employee.findMany.mockImplementation((args: { where?: { id?: { in?: string[] } } }) =>
+    Promise.resolve((args?.where?.id?.in ?? []).map((id: string) => ({ id }))),
+  );
+  db.approvalWorkflow.findFirst.mockResolvedValue(null);
+
   db.employeeLoan.findFirst.mockResolvedValue(null);
   db.employeeLoan.findMany.mockResolvedValue([]);
   db.employeeLoan.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>

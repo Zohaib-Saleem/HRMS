@@ -31,12 +31,15 @@ import { buildMeta, toSkipTake } from '../../core/pagination.js';
 import { recordAudit } from '../../core/audit.js';
 import { ConflictError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import {
-  assertApproverChainUsable,
+  assertAttendanceEmployeeInScope,
+  attendancePeopleFilter,
+} from '../../auth/scope.js';
+import {
+  assertChainUsable,
   createApprovalRequest,
   notifyApprover,
-  resolveDefaultApprovers,
+  resolveChain,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
 import { summariseByTeam, teamFilterClause } from './team-attendance.service.js';
@@ -126,7 +129,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const query = parseOrThrow(attendanceQuerySchema, request.query);
 
     // Attendance rows inherit the employee data scope exactly.
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
@@ -206,7 +209,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       const auth = requireAuthContext(request);
       const input = parseOrThrow(attendanceUpsertSchema, request.body);
 
-      await assertEmployeeInScope(auth, input.employeeId);
+      await assertAttendanceEmployeeInScope(auth, input.employeeId);
 
       const date = toDateOnly(input.date);
       const checkInAt = input.checkInAt ? new Date(input.checkInAt) : null;
@@ -490,7 +493,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
 
     let employeeId = query.employeeId;
     if (employeeId) {
-      await assertEmployeeInScope(auth, employeeId);
+      await assertAttendanceEmployeeInScope(auth, employeeId);
     } else {
       const self = await callerEmployeeOrThrow(auth);
       employeeId = self.id;
@@ -513,17 +516,24 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Team attendance for everyone the caller may see.
    *
-   * Same derivation, same scope rules, one row per employee. There is no
-   * separate manager permission: `employeeScopeFilter` already answers "which
-   * people?", so a manager sees their reports, HR sees the company, and an
-   * employee with OWN scope sees exactly themselves - which is not a leak, just
-   * a very small team.
+   * Same derivation, one row per employee. There is no separate manager
+   * permission: `attendancePeopleFilter` answers "which people?", so a manager
+   * sees their reports, HR sees the company, and an employee with OWN scope
+   * sees exactly themselves - which is not a leak, just a very small team.
+   *
+   * It is `attendancePeopleFilter` and not the plain `employeeScopeFilter`,
+   * and the difference is one clause: a caller who does not hold
+   * `employee.read` is narrowed to their own record HOWEVER WIDE their data
+   * scope is. This endpoint is gated on `attendance.read`, which every member
+   * of staff holds for their own record, so the scope was previously the whole
+   * gate - and a custom role given an ALL scope for an unrelated module was
+   * thereby served the company's attendance. See auth/scope.ts.
    */
   app.get('/team', async (request, reply) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(attendanceQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({
         data: [],
@@ -539,7 +549,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
 
     // Asking for one specific person still goes through the scope check, so a
     // guessed id cannot widen what the caller sees.
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const terms = query.q ? query.q.split(/\s+/).filter(Boolean) : [];
     const searchClauses: Prisma.EmployeeWhereInput[] = terms.map((term) => ({
@@ -676,7 +686,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(attendanceQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) return reply.send({ data: [] });
 
     const todayIso = new Date().toISOString();
@@ -684,7 +694,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const to = toDateOnly(query.to ?? query.from ?? todayIso);
     assertUsableRange(from, to);
 
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const where: Prisma.EmployeeWhereInput = {
       AND: [
@@ -746,7 +756,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(payPeriodQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     const from = toDateOnly(query.from);
     const to = toDateOnly(query.to);
     assertUsableRange(from, to);
@@ -768,7 +778,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ data: empty });
     }
 
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const employees = await prisma.employee.findMany({
       where: {
@@ -884,7 +894,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      const scopeFilter = await employeeScopeFilter(auth);
+      const scopeFilter = await attendancePeopleFilter(auth);
       if (scopeFilter === null) {
         const empty: MarkAbsencesResult = {
           date: date.toISOString().slice(0, 10),
@@ -895,7 +905,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         return reply.send({ data: empty });
       }
 
-      if (input.employeeId) await assertEmployeeInScope(auth, input.employeeId);
+      if (input.employeeId) await assertAttendanceEmployeeInScope(auth, input.employeeId);
 
       const result = await markAbsencesForDate({
         companyId: auth.companyId,
@@ -937,11 +947,11 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(regularizationQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     // `mine` is the self-service view. Resolved from the session, never from
     // the query string, which is what makes it a filter and not a lookup.
@@ -1047,7 +1057,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
    *  - It does not touch `attendance_records`. Submitting asks for a change;
    *    only `applyRegularization`, called by the approval engine once the chain
    *    has actually approved, writes one.
-   *  - It does not invent an approval chain. `resolveDefaultApprovers` is the
+   *  - It does not invent an approval chain. `resolveChain` is the
    *    same manager -> secondary manager -> department head chain leave, shift
    *    changes and loans all run through.
    */
@@ -1087,8 +1097,8 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
      * ever decide. The loans module fixed this same ordering; this is the last
      * caller that had it the wrong way round.
      */
-    const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
-    assertApproverChainUsable(approvers, self.id);
+    const chain = await resolveChain(auth.companyId, 'ATTENDANCE_REGULARIZATION', self.id);
+    assertChainUsable(chain, self.id);
 
     const requestedCheckInAt = resolveRequestedTime(
       input.requestedCheckInAt,
@@ -1138,7 +1148,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         summary: input.issueType
           ? `${ATTENDANCE_CORRECTION_ISSUE_LABELS[input.issueType]} - ${input.reason}`
           : input.reason,
-        approverEmployeeIds: approvers,
+        chain,
         request,
         client: tx,
         deferAudit: true,

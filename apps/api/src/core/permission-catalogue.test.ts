@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ALL_PERMISSIONS,
   DEFAULT_ROLE_PERMISSIONS,
   DEFAULT_ROLE_SCOPES,
   PERMISSIONS,
@@ -333,6 +334,42 @@ describe('a system role a release introduced', () => {
     );
   });
 
+  it('creates the IT Asset Manager on an installation that predates it', async () => {
+    /*
+     * The migration story for this role, and the reason it needs none: it is a
+     * system role, so the boot-time sync creates it in every company that
+     * lacks it and grants it its defaults on that same run. Nothing has to be
+     * run by hand on any host, and an administrator who has since edited the
+     * role keeps their edits - see the "never revoked" tests above.
+     */
+    reset({ companies: [{ id: 'c1', name: 'GamEmpires' }] });
+
+    const { rolesCreated } = await syncPermissionCatalogue();
+
+    expect(rolesCreated).toContainEqual({ company: 'GamEmpires', role: 'IT Asset Manager' });
+
+    const itRole = state.roles.find((r) => r.key === SYSTEM_ROLES.IT_ASSET_MANAGER);
+    expect(itRole).toBeDefined();
+    const held = heldBy(itRole!.id);
+
+    // The register, which is the job.
+    expect(held).toEqual(
+      expect.arrayContaining([
+        PERMISSIONS.ASSET_READ,
+        PERMISSIONS.ASSET_READ_ALL,
+        PERMISSIONS.ASSET_CREATE,
+        PERMISSIONS.ASSET_UPDATE,
+        PERMISSIONS.ASSET_ASSIGN,
+        PERMISSIONS.ASSET_RETURN,
+        PERMISSIONS.ASSET_REPAIR,
+        PERMISSIONS.ASSET_RETIRE,
+        PERMISSIONS.ASSET_REPORT,
+      ]),
+    );
+    // And not the grant that opens the HR screens.
+    expect(held).not.toContain(PERMISSIONS.EMPLOYEE_READ);
+  });
+
   it('creates it in every company on the installation', async () => {
     reset({
       companies: [
@@ -386,6 +423,123 @@ describe('a system role a release introduced', () => {
 
     expect(rolesCreated).toEqual([]);
     expect(state.writes).not.toContain('role.create');
+  });
+});
+
+describe('what the IT asset manager may and may not do', () => {
+  const itManager = DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.IT_ASSET_MANAGER];
+  const employee = DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.EMPLOYEE];
+
+  it('is the Employee role plus the register, and nothing else', () => {
+    /*
+     * The shape of the role in one assertion. Everything it holds beyond an
+     * ordinary member of staff is an asset grant - so it cannot quietly become
+     * an HR role by acquiring one more line.
+     */
+    const extra = itManager.filter((p) => !employee.includes(p));
+    expect(extra.every((p) => p.startsWith('asset.'))).toBe(true);
+    expect(extra.length).toBeGreaterThan(0);
+
+    // And it holds everything an ordinary employee does, so the holder's own
+    // attendance, leave, payslip and lunch work exactly as before.
+    for (const permission of employee) expect(itManager).toContain(permission);
+  });
+
+  it('cannot read the employee directory', () => {
+    // The grant behind People, Team attendance, Attendance reports and the
+    // Employee Master Report. Picking somebody to hand a laptop to is
+    // `/assets/employee-lookup`, which is six fields.
+    expect(itManager).not.toContain(PERMISSIONS.EMPLOYEE_READ);
+    expect(itManager).not.toContain(PERMISSIONS.EMPLOYEE_SENSITIVE_READ);
+  });
+
+  it('cannot reach payroll, salary, or another person’s loan or medical record', () => {
+    for (const permission of [
+      PERMISSIONS.PAYROLL_READ,
+      PERMISSIONS.PAYROLL_MANAGE,
+      PERMISSIONS.LOAN_MANAGE,
+      PERMISSIONS.LOAN_APPROVE,
+      PERMISSIONS.MEDICAL_MANAGE,
+      PERMISSIONS.MEDICAL_CLAIM_APPROVE,
+    ]) {
+      expect(itManager).not.toContain(permission);
+    }
+  });
+
+  it('cannot manage attendance, leave or devices', () => {
+    for (const permission of [
+      PERMISSIONS.ATTENDANCE_MANAGE,
+      PERMISSIONS.ATTENDANCE_RULES_MANAGE,
+      PERMISSIONS.LEAVE_MANAGE,
+      PERMISSIONS.DEVICE_READ,
+      PERMISSIONS.DEVICE_MANAGE,
+    ]) {
+      expect(itManager).not.toContain(permission);
+    }
+  });
+
+  it('cannot write an asset off for good', () => {
+    // Retiring is reversible and is theirs; disposal is not and is not.
+    expect(itManager).toContain(PERMISSIONS.ASSET_RETIRE);
+    expect(itManager).not.toContain(PERMISSIONS.ASSET_DISPOSE);
+  });
+
+  it('sees only its own record, which is what keeps every module above honest', () => {
+    expect(DEFAULT_ROLE_SCOPES[SYSTEM_ROLES.IT_ASSET_MANAGER]).toBe('OWN');
+  });
+
+  it('is not protected, so a company can adjust it', () => {
+    expect(SYSTEM_ROLE_META[SYSTEM_ROLES.IT_ASSET_MANAGER].isProtected).toBe(false);
+  });
+});
+
+describe('the roles that already existed are untouched by the new one', () => {
+  it('leaves HR Admin holding the HR grants it always held', () => {
+    for (const permission of [
+      PERMISSIONS.EMPLOYEE_READ,
+      PERMISSIONS.EMPLOYEE_MANAGE,
+      PERMISSIONS.EMPLOYEE_SENSITIVE_READ,
+      PERMISSIONS.ATTENDANCE_READ,
+      PERMISSIONS.ATTENDANCE_MANAGE,
+      PERMISSIONS.PAYROLL_READ,
+      PERMISSIONS.PAYROLL_MANAGE,
+      PERMISSIONS.ASSET_READ_ALL,
+      PERMISSIONS.ASSET_DISPOSE,
+    ]) {
+      expect(DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.HR_ADMIN]).toContain(permission);
+    }
+    expect(DEFAULT_ROLE_SCOPES[SYSTEM_ROLES.HR_ADMIN]).toBe('ALL');
+  });
+
+  it('leaves the Manager reading their own reporting line', () => {
+    expect(DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.MANAGER]).toContain(PERMISSIONS.EMPLOYEE_READ);
+    expect(DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.MANAGER]).toContain(PERMISSIONS.ATTENDANCE_READ);
+    expect(DEFAULT_ROLE_SCOPES[SYSTEM_ROLES.MANAGER]).toBe('REPORTS_AND_OWN');
+  });
+
+  it('leaves the Employee role exactly as it was - no asset write of any kind', () => {
+    const employeeGrants = DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.EMPLOYEE];
+    expect(employeeGrants).toContain(PERMISSIONS.ASSET_READ);
+    expect(employeeGrants).toContain(PERMISSIONS.ASSET_ACKNOWLEDGE);
+    for (const permission of [
+      PERMISSIONS.ASSET_READ_ALL,
+      PERMISSIONS.ASSET_CREATE,
+      PERMISSIONS.ASSET_UPDATE,
+      PERMISSIONS.ASSET_ASSIGN,
+      PERMISSIONS.ASSET_TRANSFER,
+      PERMISSIONS.ASSET_RETURN,
+      PERMISSIONS.ASSET_DISPOSE,
+      PERMISSIONS.EMPLOYEE_READ,
+    ]) {
+      expect(employeeGrants).not.toContain(permission);
+    }
+    expect(DEFAULT_ROLE_SCOPES[SYSTEM_ROLES.EMPLOYEE]).toBe('OWN');
+  });
+
+  it('leaves Super Admin holding everything, as it must', () => {
+    expect(DEFAULT_ROLE_PERMISSIONS[SYSTEM_ROLES.SUPER_ADMIN]).toEqual(ALL_PERMISSIONS);
+    expect(DEFAULT_ROLE_SCOPES[SYSTEM_ROLES.SUPER_ADMIN]).toBe('ALL');
+    expect(SYSTEM_ROLE_META[SYSTEM_ROLES.SUPER_ADMIN].isProtected).toBe(true);
   });
 });
 

@@ -4,9 +4,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowLeft, Ban, Check, History, X } from 'lucide-react';
 import {
+  APPROVAL_STAGE_MODE_LABELS,
   APPROVAL_STATUS_LABELS,
   APPROVAL_SUBJECT_LABELS,
   type ApprovalDetail,
+  type ApprovalStepRecord,
 } from '@hrms/shared';
 import { api, errorMessage } from '@/lib/api';
 import { formatDateTime, formatRelative, humanise } from '@/lib/utils';
@@ -230,13 +232,12 @@ export function ApprovalDetailPage() {
                     {step.stepOrder}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-medium">
-                      {step.approverName ?? 'Unassigned'}
-                    </p>
+                    <p className="truncate text-[13px] font-medium">{step.stageLabel}</p>
                     <p className="text-[12px] text-muted-foreground">
                       {APPROVAL_STATUS_LABELS[step.status]}
                       {step.decidedAt ? ` · ${formatRelative(step.decidedAt)}` : ''}
                     </p>
+                    <StageApprovers step={step} />
                     {step.comment ? (
                       <p className="mt-1 text-[12.5px] text-muted-foreground">{step.comment}</p>
                     ) : null}
@@ -248,6 +249,52 @@ export function ApprovalDetailPage() {
         </Card>
       </div>
     </>
+  );
+}
+
+/**
+ * Who fills a rung, and what became of each of them.
+ *
+ * The list matters most when a stage has SEVERAL approvers, which is the whole
+ * point of the team-manager rung: three people may sign it and one of them
+ * will. Once one has, the other two must be able to see that the stage is
+ * finished and who finished it - the alternative is two managers looking at a
+ * screen that says "waiting for you" about something nobody is waiting for.
+ *
+ * A seat that was never used shows as "not needed" rather than as cancelled.
+ * The seat was closed by somebody else's approval, which is not a thing that
+ * happened TO that person and should not read like one.
+ */
+function StageApprovers({ step }: { step: ApprovalStepRecord }) {
+  if (step.approvers.length === 0) {
+    return <p className="text-[12px] text-muted-foreground">{step.approverName ?? 'Unassigned'}</p>;
+  }
+
+  return (
+    <div className="mt-1 space-y-0.5">
+      {step.approvers.length > 1 ? (
+        <p className="text-[11.5px] uppercase tracking-wide text-muted-foreground">
+          {APPROVAL_STAGE_MODE_LABELS[step.mode]}
+        </p>
+      ) : null}
+      {step.approvers.map((approver) => (
+        <p key={approver.employeeId} className="text-[12.5px]">
+          <span className={cn(approver.status === 'APPROVED' && 'font-medium')}>
+            {approver.name}
+            {approver.isMe ? ' (you)' : ''}
+          </span>
+          <span className="text-muted-foreground">
+            {approver.status === 'APPROVED'
+              ? ' · approved'
+              : approver.status === 'REJECTED'
+                ? ' · rejected'
+                : approver.status === 'CANCELLED'
+                  ? ' · not needed'
+                  : ' · waiting'}
+          </span>
+        </p>
+      ))}
+    </div>
   );
 }
 

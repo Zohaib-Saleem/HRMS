@@ -20,11 +20,11 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import {
-  assertApproverChainUsable,
+  assertChainUsable,
   cancel as cancelApproval,
   createApprovalRequest,
   notifyApprover,
-  resolveDefaultApprovers,
+  resolveChain,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow } from '../time/helpers.js';
 import { evaluateLoanEligibility } from './loan-eligibility.service.js';
@@ -394,8 +394,8 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         select: { currency: true },
       });
 
-      const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
-      assertApproverChainUsable(approvers, self.id);
+      const chain = await resolveChain(auth.companyId, 'LOAN_REQUEST', self.id);
+      assertChainUsable(chain, self.id);
 
       const monthly = monthlyDeductionFor(input.principalAmount, input.installmentCount);
 
@@ -440,7 +440,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           requesterUserId: auth.userId,
           title: `Loan: ${company.currency} ${input.principalAmount} over ${input.installmentCount} month${input.installmentCount === 1 ? '' : 's'}`,
           summary: input.purpose,
-          approverEmployeeIds: approvers,
+          chain,
           request,
           client: tx,
           deferAudit: true,
@@ -461,7 +461,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         entityType: 'ApprovalRequest',
         entityId: approval.id,
         summary: `Submitted for approval: loan of ${company.currency} ${input.principalAmount}`,
-        after: { subjectType: 'LOAN_REQUEST', subjectId: created.id, steps: approvers.length },
+        after: { subjectType: 'LOAN_REQUEST', subjectId: created.id, steps: chain.stages.length },
         request,
       });
       await notifyApprover(approval.id, 1, request);

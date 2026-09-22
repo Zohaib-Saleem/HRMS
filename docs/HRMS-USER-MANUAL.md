@@ -139,10 +139,26 @@ The six data scopes:
 
 Where a user holds several roles, **the widest scope wins**.
 
-### The four seeded roles
+### The seeded roles
 
 There is no separate "Company Admin" role. **HR Admin is the company
 administrator**; Super Admin is the unrestricted technical role.
+
+Four of them are **ranks** — Super Admin, HR Admin, Manager, Employee — and are
+described in full below. Three more are **jobs**, handed out by name beside
+Employee to somebody who has been given that job:
+
+| Job role | Scope | Reaches |
+|---|---|---|
+| **Office Boy** | OWN | The daily lunch round: the day's orders, who paid, what was collected. No HR, payroll or employee-record access of any kind |
+| **Interviewer** | OWN | The interviews they are sitting on, and their own feedback. No candidate list, no salaries, no pipeline |
+| **IT Asset Manager** | OWN | The company's equipment register — add, assign, transfer, return, repair, retire, report. Plus ordinary employee self-service, and no HR access |
+
+All three are seeded, so a company that hires somebody to run lunch, sit on
+panels or look after the laptops finds the role already there. The IT Asset
+Manager is documented in the
+[admin manual](HRMS-ADMIN-MANUAL.md#the-it-asset-manager-role) and the
+[asset guide](HRMS-ASSET-GUIDE.md#the-it-asset-manager-role).
 
 #### Super Admin — scope ALL
 
@@ -192,6 +208,19 @@ The day-to-day administrator.
 - **Can approve:** nothing.
 - **Cannot access:** anyone else's record. Requesting another employee's
   payslip by changing the id in the URL returns **403**, not the payslip.
+
+### Two rules about scope that cause most of the surprises
+
+1. **Scopes union across a user's roles and the widest wins.** Somebody holding
+   Employee (OWN) and a second role scoped ALL runs their *whole session* at
+   ALL — every module, not just the one the second role was created for.
+2. **`attendance.read` is held by everybody**, for their own record, so before
+   the rule below a wide scope granted for an unrelated reason served that
+   holder the whole company's attendance. A caller who does **not** hold
+   `employee.read` is now narrowed to their own record on every attendance,
+   timesheet and shift-assignment screen, whatever their data scope says. Super
+   Admin, HR Admin and Manager all hold `employee.read`, so none of them is
+   affected.
 
 ### Permission catalogue
 

@@ -1,10 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import {
+  APPROVAL_STAGE_LABELS,
   PERMISSIONS,
   type ApprovalDetail,
   type ApprovalListItem,
+  type ApprovalStage,
+  type ApprovalStageMode,
   type ApprovalStatus,
+  type ApprovalStepRecord,
   type ApprovalSubjectType,
   approvalCancelSchema,
   approvalDecisionSchema,
@@ -52,7 +56,13 @@ export const approvalRoutes: FastifyPluginAsync = async (app) => {
       query.view === 'inbox' && self
         ? {
             status: 'PENDING',
-            steps: { some: { approverEmployeeId: self.id, status: 'PENDING' } },
+            /*
+             * "Waiting on me" is a seat of mine that is still PENDING on the
+             * step the request is actually sitting on. Reading the step's
+             * display column instead would hide a request from two of the
+             * three managers who may sign it.
+             */
+            steps: { some: { approvers: { some: { employeeId: self.id, status: 'PENDING' } } } },
           }
         : query.view === 'mine' && self
           ? { requesterEmployeeId: self.id }
@@ -85,7 +95,7 @@ export const approvalRoutes: FastifyPluginAsync = async (app) => {
         orderBy: buildOrderBy(query.sort, query.order, SORTABLE, 'createdAt'),
         include: {
           requesterEmployee: { select: { id: true, firstName: true, lastName: true, displayName: true } },
-          steps: { orderBy: { stepOrder: 'asc' } },
+          steps: { orderBy: { stepOrder: 'asc' }, include: { approvers: true } },
         },
       }),
     ]);
@@ -107,9 +117,10 @@ export const approvalRoutes: FastifyPluginAsync = async (app) => {
         decidedAt: row.decidedAt?.toISOString() ?? null,
         awaitingMyDecision:
           row.status === 'PENDING' &&
-          Boolean(self) &&
-          current?.approverEmployeeId === self?.id &&
-          current?.status === 'PENDING',
+          current?.status === 'PENDING' &&
+          Boolean(
+            self && current?.approvers.some((a) => a.employeeId === self.id && a.status === 'PENDING'),
+          ),
       };
     });
 
@@ -130,7 +141,7 @@ export const approvalRoutes: FastifyPluginAsync = async (app) => {
       where: {
         companyId: auth.companyId,
         status: 'PENDING',
-        steps: { some: { approverEmployeeId: self.id, status: 'PENDING' } },
+        steps: { some: { approvers: { some: { employeeId: self.id, status: 'PENDING' } } } },
       },
     });
 
@@ -151,6 +162,12 @@ export const approvalRoutes: FastifyPluginAsync = async (app) => {
           orderBy: { stepOrder: 'asc' },
           include: {
             approverEmployee: { select: { firstName: true, lastName: true, displayName: true } },
+            approvers: {
+              orderBy: { createdAt: 'asc' },
+              include: {
+                employee: { select: { id: true, firstName: true, lastName: true, displayName: true } },
+              },
+            },
           },
         },
         events: { orderBy: { createdAt: 'asc' } },
@@ -175,7 +192,18 @@ export const approvalRoutes: FastifyPluginAsync = async (app) => {
 
     const current = row.steps.find((s) => s.stepOrder === row.currentStep);
     const isOwner = Boolean(self && row.requesterEmployeeId === self.id);
-    const isAssigned = Boolean(self && current?.approverEmployeeId === self.id);
+    /*
+     * ASSIGNED MEANS "I HAVE AN OPEN SEAT ON THE STAGE THAT IS WAITING".
+     *
+     * Both halves matter. A manager whose colleague has already signed an
+     * ANY_ONE stage has a seat, but it was closed when the stage completed, so
+     * they are shown a finished stage rather than a live Approve button - which
+     * is what section 5 of the brief asks for, and the server refuses the call
+     * as well if they send it anyway.
+     */
+    const isAssigned = Boolean(
+      self && current?.approvers.some((a) => a.employeeId === self.id && a.status === 'PENDING'),
+    );
     const isAdmin = auth.permissions.has(PERMISSIONS.APPROVAL_MANAGE);
 
     const detail: ApprovalDetail = {
@@ -192,14 +220,37 @@ export const approvalRoutes: FastifyPluginAsync = async (app) => {
       createdAt: row.createdAt.toISOString(),
       decidedAt: row.decidedAt?.toISOString() ?? null,
       awaitingMyDecision: row.status === 'PENDING' && isAssigned && current?.status === 'PENDING',
-      steps: row.steps.map((s) => ({
-        id: s.id,
-        stepOrder: s.stepOrder,
-        status: s.status as ApprovalStatus,
-        approverName: s.approverEmployee ? name(s.approverEmployee) : null,
-        decidedAt: s.decidedAt?.toISOString() ?? null,
-        comment: s.comment,
-      })),
+      steps: row.steps.map((s): ApprovalStepRecord => {
+        const stage = (s.stage as ApprovalStage | null) ?? null;
+        return {
+          id: s.id,
+          stepOrder: s.stepOrder,
+          status: s.status as ApprovalStatus,
+          approverName: s.approverEmployee ? name(s.approverEmployee) : null,
+          decidedAt: s.decidedAt?.toISOString() ?? null,
+          comment: s.comment,
+          stage,
+          stageLabel: stage ? APPROVAL_STAGE_LABELS[stage] : `Step ${s.stepOrder}`,
+          mode: s.mode as ApprovalStageMode,
+          approvers: s.approvers.map((a) => ({
+            employeeId: a.employeeId,
+            name: name(a.employee),
+            status: a.status as ApprovalStatus,
+            decidedAt: a.decidedAt?.toISOString() ?? null,
+            comment: a.comment,
+            isMe: Boolean(self && a.employeeId === self.id),
+          })),
+          /*
+           * Who actually signed. Read off the seats rather than off the step,
+           * because the step records the LAST decision and an ALL stage is
+           * carried by several - "approved by Manager A" on a rung two people
+           * had to sign is a false sentence.
+           */
+          decidedByNames: s.approvers
+            .filter((a) => a.status === 'APPROVED' || a.status === 'REJECTED')
+            .map((a) => name(a.employee)),
+        };
+      }),
       events: row.events.map((e) => ({
         id: e.id,
         action: e.action,

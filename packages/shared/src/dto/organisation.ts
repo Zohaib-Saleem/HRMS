@@ -41,7 +41,19 @@ export const teamInputSchema = z.object({
   name: z.string().trim().min(2, 'Team name is required.').max(120),
   departmentId: z.string().trim().min(1, 'Choose a department.'),
   description: optionalText(500),
-  leadEmployeeId: optionalText(64),
+  /*
+   * NOTE THE ABSENCE OF `leadEmployeeId`.
+   *
+   * A team has one to three MANAGERS, and they are appointed on their own
+   * endpoint (`/teams/:id/managers`) because appointing one is not the same
+   * act as renaming a team: it has a ceiling, it ends rather than being
+   * overwritten, and it decides who approves that team's requests. The old
+   * single `leadEmployeeId` could express none of that - it was one person,
+   * and it was globally unique, so a lead could hold exactly one team.
+   *
+   * The column still exists and still holds whatever it held; the migration
+   * copied every lead into the roster and nothing reads it any more.
+   */
   isActive: z.boolean().default(true),
 });
 
@@ -124,8 +136,9 @@ export interface TeamRecord {
   isActive: boolean;
   departmentId: string;
   departmentName: string;
-  leadEmployeeId: string | null;
-  leadEmployeeName: string | null;
+  /** How many active managers this team has, and who they are. */
+  managerCount: number;
+  managerNames: string[];
   employeeCount: number;
   createdAt: string;
   updatedAt: string;

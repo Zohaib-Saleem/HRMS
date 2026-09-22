@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { paginationQuerySchema } from './common.js';
+import type { EmployeeStatus } from './employee.js';
 
 /**
  * Asset management: the things the company owns, and who is holding one.
@@ -1675,3 +1676,76 @@ export const ASSET_TIMELINE_STEPS: Record<string, AssetTimelineStep> = {
 export function assetTimelineStep(action: string): AssetTimelineStep {
   return ASSET_TIMELINE_STEPS[action] ?? { label: action, tone: 'neutral' };
 }
+
+// --------------------------------------------------------- employee lookup
+
+/**
+ * A person, as the asset module is allowed to see them.
+ *
+ * Six fields, and the list is a refusal rather than a selection. Handing an
+ * asset to somebody means finding them in a search box; it does not mean
+ * reading their record. So this shape carries what it takes to be sure you have
+ * the right Ahmed - his number, his department, his team, whether he still
+ * works here - and refuses everything the employee record holds that an asset
+ * manager has no business reading: national ID, bank account, salary, date of
+ * birth, home address, personal email and personal phone are not omitted from
+ * the mapper, they are absent from the SELECT, so no route can accidentally
+ * spread them into a response.
+ *
+ * `workEmail` is here and `personalEmail` is not, deliberately. Chasing an
+ * unreturned laptop is company correspondence and goes to the company address.
+ *
+ * Note what is NOT here either: `photoUrl`, `phone`, `hireDate`, `manager` and
+ * `jobTitle`, all of which `EmployeeListItem` carries. This is not a smaller
+ * `EmployeeListItem` and must never become one - it is its own shape precisely
+ * so that a field added to the directory does not arrive here as well.
+ */
+export interface AssetEmployeeLookupItem {
+  id: string;
+  employeeNumber: string;
+  fullName: string;
+  departmentName: string | null;
+  teamName: string | null;
+  /**
+   * Whether this person can still be handed equipment.
+   *
+   * False for the two exit statuses - RESIGNED and TERMINATED - and true for
+   * everybody else, read off `isExitStatus` rather than from a second list
+   * written here. Published beside the raw status rather than instead of it, so
+   * the picker can grey somebody out without having to know the vocabulary, and
+   * still say WHY when it does.
+   */
+  isActive: boolean;
+  /** The employee status as stored - ACTIVE, PROBATION, ON_LEAVE and so on. */
+  status: EmployeeStatus;
+  workEmail: string | null;
+}
+
+/**
+ * The lookup's query.
+ *
+ * `q` and a small page, and nothing else. No department filter, no status
+ * filter, no sort: this is a search box behind a select, not a second employee
+ * list, and every option it does not have is an option nobody can use to
+ * enumerate the roster a different way. The limit is capped well below the
+ * pagination default's 100 for the same reason - a picker shows what you typed
+ * enough of, and a caller asking for a thousand rows is not picking anybody.
+ */
+export const assetEmployeeLookupQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(25),
+  /**
+   * Include people who have left.
+   *
+   * Off by default, because the question the picker asks is "who am I giving
+   * this to". On, it also returns leavers - which is what the RETURN and
+   * DISPOSE dialogs need, since the person handing a laptop back on their last
+   * day may already be marked RESIGNED.
+   */
+  includeInactive: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .optional()
+    .transform((value) => value === true || value === 'true'),
+});
+
+export type AssetEmployeeLookupQuery = z.infer<typeof assetEmployeeLookupQuerySchema>;

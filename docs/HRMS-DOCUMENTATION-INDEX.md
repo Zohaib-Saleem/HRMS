@@ -29,6 +29,7 @@ something is missing, it says so.
 
 | Document | Covers |
 |---|---|
+| [Organisation hierarchy guide](HRMS-ORG-HIERARCHY-GUIDE.md) | Teams and their managers, what a team manager can see, and the multi-level approval chain |
 | [Attendance guide](HRMS-ATTENDANCE-GUIDE.md) | the full attendance lifecycle and every calculation rule |
 | [Device guide](HRMS-DEVICE-GUIDE.md) | ZKTeco K50 integration: pull, ADMS push and the LAN connector |
 | [Asset guide](HRMS-ASSET-GUIDE.md) | Company equipment: the register, handovers, repairs, disposal, clearance and the two reports |

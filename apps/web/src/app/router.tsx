@@ -53,6 +53,10 @@ const DepartmentsPage = lazyPage(
   'DepartmentsPage',
 );
 const TeamsPage = lazyPage(() => import('@/features/organisation/teams-page'), 'TeamsPage');
+const TeamHierarchyPage = lazyPage(
+  () => import('@/features/organisation/team-hierarchy-page'),
+  'TeamHierarchyPage',
+);
 const DesignationsPage = lazyPage(
   () => import('@/features/organisation/designations-page'),
   'DesignationsPage',
@@ -213,6 +217,14 @@ const AssetDetailPage = lazyPage(
 const AssetCategoriesPage = lazyPage(
   () => import('@/features/settings/asset-categories-page'),
   'AssetCategoriesPage',
+);
+const AssetRequestsPage = lazyPage(
+  () => import('@/features/assets/asset-requests-page'),
+  'AssetRequestsPage',
+);
+const ApprovalHierarchyPage = lazyPage(
+  () => import('@/features/settings/approval-hierarchy-page'),
+  'ApprovalHierarchyPage',
 );
 const AssetDashboardPage = lazyPage(
   () => import('@/features/assets/asset-dashboard-page'),
@@ -572,6 +584,13 @@ export function AppRoutes() {
         <Route element={<RequirePermission permission={PERMISSIONS.ASSET_READ_ALL} />}>
           <Route path="assets/dashboard" element={<AssetDashboardPage />} />
         </Route>
+        {/* Equipment requests: `asset.request.read`, which every member of
+            staff holds for their own. The queue tab inside needs
+            `asset.request.read.all` and the page checks for it - the same
+            grant the endpoint checks. */}
+        <Route element={<RequirePermission permission={PERMISSIONS.ASSET_REQUEST_READ} />}>
+          <Route path="assets/requests" element={<AssetRequestsPage />} />
+        </Route>
         <Route element={<RequirePermission permission={PERMISSIONS.ASSET_REPORT} />}>
           <Route path="assets/reports" element={<AssetReportsPage />} />
         </Route>
@@ -623,6 +642,12 @@ export function AppRoutes() {
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.TEAM_READ} />}>
               <Route path="teams" element={<TeamsPage />} />
+            </Route>
+            {/* Names people, so it is gated on the directory grant rather than
+                on `team.read` - and the server narrows the teams to the ones
+                holding somebody this caller may already see. */}
+            <Route element={<RequirePermission permission={PERMISSIONS.EMPLOYEE_READ} />}>
+              <Route path="hierarchy" element={<TeamHierarchyPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.DESIGNATION_READ} />}>
               <Route path="designations" element={<DesignationsPage />} />
@@ -700,6 +725,15 @@ export function AppRoutes() {
               element={<RequirePermission permission={PERMISSIONS.ASSET_CATEGORY_MANAGE} />}
             >
               <Route path="asset-categories" element={<AssetCategoriesPage />} />
+            </Route>
+            {/* The approval hierarchy: the stages a request climbs and who
+                fills the company-wide ones. READ is the gate, because "who has
+                to sign this" is a fair question for anybody raising a request;
+                the page itself offers no controls without
+                `approval.workflow.manage`, and the endpoint refuses the writes
+                either way. */}
+            <Route element={<RequirePermission permission={PERMISSIONS.APPROVAL_WORKFLOW_READ} />}>
+              <Route path="approval-hierarchy" element={<ApprovalHierarchyPage />} />
             </Route>
             <Route element={<RequirePermission permission={PERMISSIONS.USER_READ} />}>
               <Route path="users" element={<UsersPage />} />

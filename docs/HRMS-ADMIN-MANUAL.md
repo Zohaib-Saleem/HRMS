@@ -244,9 +244,24 @@ Names must be unique within a department at each level, case-insensitively.
 
 ### Settings → Roles and permissions
 
-Lists the five seeded roles — Super Admin, HR Admin, Manager, Employee and
-Office Boy — and lets `role.manage` holders change what each may do. Super Admin
-is protected from editing.
+Lists the seeded roles and lets `role.manage` holders change what each may do.
+Super Admin is protected from editing. A company can also **create** its own
+roles here.
+
+| Role | Scope | What it is for |
+|---|---|---|
+| **Super Admin** | ALL | Everything. Protected — its grants cannot be edited away, so nobody can lock the company out |
+| **HR Admin** | ALL | People, organisation structure, attendance, leave, payroll, recruitment and the asset register |
+| **Manager** | REPORTS_AND_OWN | Their own reporting line: their reports' records, attendance, leave and approvals |
+| **Employee** | OWN | Baseline self-service for every member of staff |
+| **Office Boy** | OWN | The daily lunch round and nothing else. No HR, payroll or employee-record access |
+| **Interviewer** | OWN | The interviews they are sitting on, and their own feedback. Nothing of the pipeline |
+| **IT Asset Manager** | OWN | The company's equipment register, plus ordinary employee self-service. **No HR access** — see [below](#the-it-asset-manager-role) |
+
+The last three are **jobs rather than ranks**. They are handed out by name,
+beside Employee, to somebody who has been given that job — and each is seeded
+rather than left for a company to assemble, because a role introduced by a
+release would otherwise exist on new installations and on no existing one.
 
 A seeded role a company is missing is created at API start-up, so a role
 introduced by a later release arrives on an existing installation rather than
@@ -255,6 +270,71 @@ re-scoped, not re-granted.
 
 Changing a role's grants takes effect on the affected users' **next request** —
 sessions are resolved per request.
+
+#### Scope is not a permission, and it is the half people forget
+
+A permission answers *"may you read attendance?"*. A **data scope** answers
+*"whose?"*. They are orthogonal, and two rules about scope cause almost every
+surprise in this area:
+
+1. **Scopes union across a user's roles, and the widest wins.** Somebody holding
+   Employee (OWN) and a custom role scoped ALL runs the *whole session* at ALL.
+2. **A scope granted for one module applies to every module.** `attendance.read`
+   is held by every member of staff, for their own record — so a custom role
+   given an ALL scope because *its own* module is company-wide will also be
+   served the whole company's attendance, leave and timesheets, without holding
+   a single HR permission.
+
+Since the release that added the IT Asset Manager role, one rule limits the
+blast radius of (2) for attendance specifically: **a caller who does not hold
+`employee.read` is narrowed to their own record on every attendance screen,
+however wide their data scope is.** `employee.read` is already what the sidebar
+gates Team attendance and Attendance reports on, so this makes the data agree
+with the signposts. Super Admin, HR Admin and Manager all hold it, so nothing
+about them changed.
+
+The rule covers `/attendance`, `/attendance/team`, `/attendance/team-summary`,
+`/attendance/monthly`, `/attendance/analytics`, `/attendance/reports/*`,
+`/attendance/pay-period`, `/attendance/regularizations`, `/timesheets`,
+`/shifts/assignments` and `/shifts/change-requests`. It is a narrowing and only
+ever a narrowing: a scope of NONE still means no rows.
+
+#### The IT Asset Manager role
+
+For the person who looks after the company's laptops, phones and desks. Give it
+to them **beside** the Employee role, not instead of it.
+
+**What they get:** the whole asset register — add, correct, assign, transfer,
+return, send for repair, retire, maintain the category catalogue, and run the
+two asset reports — plus everything an ordinary member of staff holds for
+themselves: their own attendance, leave, corrections, approvals, timesheets,
+payslips, lunch, cases, loans and medical.
+
+**What they do not get, deliberately:**
+
+| Not held | Consequence |
+|---|---|
+| `employee.read` | No People screen, no Team attendance, no Attendance reports, no Employee Master Report, and no company-wide dashboard figures |
+| `asset.dispose` | They can *retire* an asset — out of service, still owned — but writing one off for good stays with HR Admin and Super Admin |
+| `attendance.manage` | No Correction centre. They raise their own correction requests like anybody else |
+| `payroll.*` | No payroll, no salaries, no payslips but their own |
+| `loan.manage`, `medical.manage` | Their own loans and their own medical benefit, and nobody else's |
+| `device.read` | No device list and no raw punches |
+
+Their sidebar is an employee's sidebar plus exactly three rows: **Asset
+dashboard**, **Assets** and **Asset reports**.
+
+**Their scope is OWN, and it costs the register nothing.** `asset.read.all` is
+checked before the data scope is consulted, so this role sees every asset the
+company owns from the narrowest scope in the system. Picking an employee to
+hand equipment to goes through a six-field lookup rather than the employee
+directory — see the [asset guide](HRMS-ASSET-GUIDE.md#picking-the-person-to-hand-it-to).
+
+> **Replacing a hand-made asset role?** Remove the old one rather than adding
+> this beside it. Scopes union and the widest wins, so leaving an ALL-scoped
+> role attached keeps the holder at ALL and undoes the point of the change.
+> The swap is **Settings → Users → [person] → Roles**, and it is recorded in the
+> audit trail as `user.roles.update` with the roles before and after.
 
 ### Settings → Audit log
 
@@ -269,8 +349,36 @@ See the [payroll guide](HRMS-PAYROLL-GUIDE.md#2-payroll-settings).
 
 ## 3. Dashboard
 
-**Dashboard** — the landing page for every role. All four cards come from a
-single endpoint, `GET /company/stats`, gated on **`company.read`**.
+**There are two dashboards, and which one you land on is decided by one
+permission and one scope.**
+
+| You hold | You get |
+|---|---|
+| `employee.read` **and** an ALL data scope | The **company dashboard** — headcount, present/absent/late today, the attendance trend, and attendance by department and by team |
+| anything else | The **personal dashboard** — your own day, your own month, your own leave, and the self-service cards you hold grants for |
+
+Both halves of the test matter, and the second was added because the first was
+not enough on its own. A company built a role for the person who looks after
+its laptops and gave it an ALL data scope, because the asset register *is*
+company-wide. That role holds no HR permission at all — and it landed on the
+company dashboard, where half the page refused to load and the other half
+rendered the whole company's attendance. Scope alone could not tell an HR
+administrator from an asset manager; `employee.read` can.
+
+The server enforces the same thing independently, so this is not a matter of
+which screen is drawn: `GET /company/stats` refuses a caller without
+`employee.read` or without a full scope, and every attendance endpoint narrows
+to the caller's own record without `employee.read`. See
+[Scope is not a permission](#scope-is-not-a-permission-and-it-is-the-half-people-forget).
+
+### The company dashboard
+
+Its figures come from two places. The **KPI cards** come from
+`GET /company/stats`; every **attendance** figure on the page — today's counts,
+the trend, the department and team breakdowns, the exception lists — is folded
+in the browser from `GET /attendance/team`, which returns one classified day per
+employee per date. Nothing on the page is estimated or sampled: a figure that
+cannot be derived is shown as a dash, because zero is a claim.
 
 | Card | Exactly what it counts |
 |---|---|
@@ -279,76 +387,109 @@ single endpoint, `GET /company/stats`, gated on **`company.read`**.
 | On leave | Employees whose **status field** is `ON_LEAVE` |
 | Active accounts | User accounts with status `ACTIVE` |
 
-Three things about this are worth stating plainly, because none of them is what
-the labels suggest:
+Two of those labels do not mean what they say, and both are worth stating:
 
-1. **The figures are company-wide and are *not* narrowed by data scope.** Every
-   role that holds `company.read` — which includes **Manager** by default — sees
-   the whole company's totals here, not their own reporting line. No individual
-   record is exposed, but the counts are not scoped the way every other screen
-   in the system is.
-
-2. **"On leave" does not mean "on leave today".** It counts employees whose
+1. **"On leave" does not mean "on leave today".** It counts employees whose
    *employment status* is set to `ON_LEAVE` — a long-term status like a
    sabbatical or extended absence, set by hand on the employee record. It has
    nothing to do with approved leave requests, and somebody on annual leave this
    week will **not** appear in it.
 
-3. **"Total employees" includes leavers.** It is an unfiltered count. The
+2. **"Total employees" includes leavers.** It is an unfiltered count. The
    endpoint also returns an `activeEmployees` figure, but the card does not use
    it.
 
-There is no date filter — the figures are "as of now".
+There is no date filter on the KPI cards — those figures are "as of now". Below
+them: recent activity from the audit log, and a setup checklist that links to
+whatever is not yet configured.
 
-Below the cards: recent activity from the audit log, and a setup checklist that
-links to whatever is not yet configured.
+### The personal dashboard
 
-> Recorded as a discrepancy rather than corrected: this phase is documentation
-> only. See [contradictions](#14-contradictions-between-interface-and-backend).
+The landing page for everybody else, including every role built for a job. It
+shows the holder's own day — check-in and check-out, today's status, the month
+as bars and its totals — their own leave balance, their upcoming holidays, and
+one card per self-service module they hold a grant for: lunch, cases, loans,
+medical, and the assets issued to them.
+
+Each card renders itself away when the grant behind it is absent, so a narrow
+role gets a shorter page rather than a page of empty boxes. **No figure on it is
+about anybody else**, and the endpoints behind it take no employee id — the
+subject is resolved from the session, so there is no parameter to change.
+
+One strip is added for whoever holds `asset.read.all`: **Asset register** —
+total assets, assigned, available and under repair, with a link through to the
+asset dashboard. It is the only company-wide figure on the page, and it is about
+equipment. An asset count is a fact about things the company owns; an attendance
+count is a fact about people, and in a small company "absent today: 1" beside a
+visibly empty desk names a colleague. That distinction is the whole reason the
+two dashboards are separate.
 
 ---
 
 ## 4. Approvals
 
-Four things route through the generic approval engine:
+Six things route through the generic approval engine:
 
-| Subject | Raised by | Applied on approval |
-|---|---|---|
-| `LEAVE_REQUEST` | the employee | the leave is marked approved and starts affecting attendance |
-| `TIMESHEET` | the owner | the timesheet is marked approved; its overtime becomes payable |
-| `ATTENDANCE_REGULARIZATION` | the employee or their manager | the attendance record is written with `source: ADMIN` |
-| `SHIFT_CHANGE` | the employee or their manager | the shift assignment is created |
+| Subject | Raised by | Default chain | Applied on approval |
+|---|---|---|---|
+| `LEAVE_REQUEST` | the employee | Team Manager → HR Manager → CEO | the leave is marked approved and starts affecting attendance |
+| `ASSET_REQUEST` | the employee | Team Manager → HR Manager → CEO | the request becomes APPROVED, and IT may then issue against it |
+| `TIMESHEET` | the owner | reporting line | the timesheet is marked approved; its overtime becomes payable |
+| `ATTENDANCE_REGULARIZATION` | the employee or their manager | reporting line | the attendance record is written with `source: ADMIN` |
+| `SHIFT_CHANGE` | the employee or their manager | reporting line | the shift assignment is created |
+| `LOAN_REQUEST` | the employee | reporting line | the loan is agreed; releasing it is a separate act |
 
 **Payroll approval is not part of this engine.** It has its own status machine
 and its own permission (`payroll.approve`).
 
 ### Who approves
 
-The chain is resolved when the request is raised:
+A chain is a sequence of **stages**, and a stage is a job rather than a person.
+It is resolved when the request is raised, and written down as it was resolved.
 
-1. The requester's **primary manager**
-2. Then their **secondary manager**, if set
-3. If neither exists, the **head of their department**
+| Stage | Filled from |
+|---|---|
+| Team Manager | the active managers of the requester's own team, from the team roster |
+| HR Manager | the people named for that stage in Settings → Approval hierarchy |
+| CEO | the people named for that stage |
+| Reporting manager | the requester's manager and second manager, falling back to their department head |
 
-Never the requester themselves. If none of the three exists the request is
-**refused at creation** with *"No approver could be determined... Assign a
-reporting manager or a department head first."*
+Nothing is inferred from a job title, a designation, a department name or a
+role name.
+
+A stage may have several approvers — a team has one to three managers — and
+carries a mode: **any one** (the default: the first decision carries the stage)
+or **every approver**. Four rules apply to every stage: the requester is never
+on their own chain, nobody who has left is ever asked, nobody appears twice in
+one chain, and a stage that resolves to nobody is **skipped with the skip
+recorded on the request**.
+
+If no stage can be filled at all the chain falls back to the reporting line,
+and if that is empty too the request is **refused at creation**, before
+anything is written, naming the fix.
 
 ### The flow
 
 ```
-REQUEST ──► PENDING ──► step 1 decides ──► (step 2 decides) ──► APPROVED
-                             └──────────────────────────────► REJECTED
-   requester may CANCEL while PENDING ─────────────────────► CANCELLED
+REQUEST ──► PENDING ──► stage 1 decides ──► stage 2 ──► stage 3 ──► APPROVED
+                             └────────────────────────────────────► REJECTED
+   requester may CANCEL while PENDING ──────────────────────────► CANCELLED
 ```
 
-A multi-step chain exists so several different people sign off. Separation of
-duties is enforced: someone who decided step 1 cannot also decide step 2.
+A multi-stage chain exists so several different people sign off. Separation of
+duties is enforced: someone who decided an earlier stage cannot also decide a
+later one, whatever they hold.
 
-`approval.act` lets you decide requests **assigned to you**. `approval.manage`
-is an administrative override — see and decide any request in the company.
+`approval.act` lets you decide the stages **you are named on**.
+`approval.manage` is an administrative override — see and decide any request in
+the company, recorded as an override.
 
-Terminal states are immutable: re-approving returns 409.
+Terminal states are immutable: re-approving returns 409, and so does approving
+a stage a colleague has already carried.
+
+The full picture — the team roster, the stage assignees, the configuration
+screen and what happens on upgrade — is in the
+[organisation hierarchy guide](HRMS-ORG-HIERARCHY-GUIDE.md).
 
 ---
 
@@ -1037,15 +1178,21 @@ Reactivating restores it, unless an administrator had suspended it separately
 for a reason of its own — in which case it stays suspended, and both the refusal
 and the reason appear in the audit trail and on the account's detail panel.
 
-### 3. The dashboard is not scope-narrowed
+### 3. ~~The dashboard is not scope-narrowed~~ — *resolved*
 
-Every other screen in the system narrows what it returns by the caller's data
-scope. `GET /company/stats` does not — it counts the whole company for anyone
-holding `company.read`, which includes Manager by default.
+`GET /company/stats` used to count the whole company for anyone holding
+`company.read`, which every member of staff holds. It now requires
+**`employee.read` and a full data scope**, and refuses everybody else — so a
+manager no longer sees "Total employees: 250" on a twelve-person team, and an
+employee is served their own dashboard instead.
 
-The exposure is aggregate counts, not individual records. But it is inconsistent
-with the rule the rest of the system follows, and a manager seeing "Total
-employees: 250" on a 12-person team is at best confusing.
+A second half of the same problem was found later and is also closed: the
+attendance figures on that page come from `/attendance/team`, which was narrowed
+by the data scope alone. A role given a wide scope for an unrelated module was
+therefore served the company's attendance while holding no HR permission.
+Attendance now additionally requires `employee.read` to reach anybody but
+yourself. See [Dashboard](#3-dashboard) and
+[Scope is not a permission](#scope-is-not-a-permission-and-it-is-the-half-people-forget).
 
 ### 4. Dashboard labels do not match what is counted
 

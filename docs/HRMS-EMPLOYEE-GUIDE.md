@@ -278,6 +278,26 @@ This raises the issue with HR. It does **not** mark the asset damaged — that i
 HR's decision, and they make it after looking at what you reported. Say what is
 actually wrong rather than what you think the status should be.
 
+### Asking for something
+
+**My work → Equipment requests → Request equipment.** Pick what you need — a
+laptop, two monitors, a headset — say how many, and say **why**. The reason is
+compulsory and it is the only thing the people deciding will have to go on, so
+"my machine will not run the build any more" beats "laptop".
+
+Before you send it the form tells you, by name, who it is going to: your team's
+manager or managers first — any one of them is enough — then HR, then the CEO.
+
+Then it waits. You can watch it on the same screen, and withdraw it while
+nobody has decided it. Once it is approved it goes to whoever looks after the
+equipment, who picks an actual machine and hands it over. **Approved is not
+delivered**: the request stays on the screen as *Approved - awaiting IT* until
+somebody physically gives you something, and then you acknowledge it exactly as
+above.
+
+If the company cannot supply part of it you get a note saying so, with a reason
+— "no spare monitors until April" — rather than silence.
+
 ### Handing it back
 
 You do not record a return yourself. HR does it when they physically take the
@@ -303,6 +323,12 @@ If you manage people, you also see what your team is holding — see the
 
 **Approvals** shows requests you raised and their status. The bell in the header
 shows notifications when a request of yours is approved, rejected or cancelled.
+
+Leave and equipment requests climb a chain: **your team's manager, then HR,
+then the CEO**, in that order, and the request page shows you which rung it is
+sitting on and who is on that rung. A rejection at any rung ends it there. If
+your company has not named an HR Manager or a CEO, those rungs are skipped and
+the request's history says so — nothing waits on a stage nobody fills.
 
 If you manage people, it also shows requests waiting on you — see the
 [manager guide](HRMS-MANAGER-GUIDE.md).

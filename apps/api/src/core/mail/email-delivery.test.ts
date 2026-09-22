@@ -158,13 +158,17 @@ describe('password reset email', () => {
 });
 
 describe('approval notification email', () => {
+  /**
+   * A stage as the engine now reads it: the candidates live in `approvers`,
+   * which is where authority moved when a rung became able to hold three team
+   * managers. One seat here is the ordinary single-approver case.
+   */
+  const seat = (id: string, userId: string | null, email: string) => ({
+    employee: { id, userId, user: userId ? { email } : null },
+  });
+
   const step = {
-    approverEmployee: {
-      id: 'employee-2',
-      userId: 'user-2',
-      workEmail: 'manager@example.com',
-      user: { email: 'manager@example.com' },
-    },
+    approvers: [seat('employee-2', 'user-2', 'manager@example.com')],
     approvalRequest: {
       id: 'approval-1',
       companyId: 'company-1',
@@ -196,7 +200,7 @@ describe('approval notification email', () => {
     // The production case today: managers exist as employees, with no user.
     db.approvalStep.findFirst.mockResolvedValue({
       ...step,
-      approverEmployee: { ...step.approverEmployee, userId: null },
+      approvers: [seat('employee-2', null, 'manager@example.com')],
     });
 
     await notifyApprover('approval-1', 1, request);
@@ -213,6 +217,35 @@ describe('approval notification email', () => {
     await flush();
 
     expect(db.notification.create).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The claim that a team of three managers depends on.
+   *
+   * A stage in ANY_ONE mode is waiting for whichever of them gets there first,
+   * and telling only the first name in the set would make the other two's
+   * ability to sign a secret they could only discover by browsing. All three
+   * are told; the first to act closes the stage for the rest.
+   */
+  it('tells every approver on a stage, not just the first', async () => {
+    db.approvalStep.findFirst.mockResolvedValue({
+      ...step,
+      approvers: [
+        seat('employee-2', 'user-2', 'a@example.com'),
+        seat('employee-3', 'user-3', 'b@example.com'),
+        seat('employee-4', 'user-4', 'c@example.com'),
+      ],
+    });
+
+    await notifyApprover('approval-1', 1, request);
+    await flush();
+
+    expect(provider.sent.map((m) => m.to).sort()).toEqual([
+      'a@example.com',
+      'b@example.com',
+      'c@example.com',
+    ]);
+    expect(db.notification.create).toHaveBeenCalledTimes(3);
   });
 });
 

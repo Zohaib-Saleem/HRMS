@@ -17,10 +17,13 @@ import { buildMeta, toSkipTake } from '../../core/pagination.js';
 import { recordAudit } from '../../core/audit.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
+import {
+  assertAttendanceEmployeeInScope,
+  attendancePeopleFilter,
+} from '../../auth/scope.js';
 import {
   createApprovalRequest,
-  resolveDefaultApprovers,
+  resolveChain,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
 
@@ -64,7 +67,7 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(timesheetQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
@@ -119,7 +122,7 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!row) throw new NotFoundError('Timesheet');
 
-    await assertEmployeeInScope(auth, row.employeeId);
+    await assertAttendanceEmployeeInScope(auth, row.employeeId);
 
     return reply.send({ data: toRecord(row) });
   });
@@ -139,7 +142,7 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
       const employeeId = input.employeeId ?? self.id;
 
       if (employeeId !== self.id) {
-        await assertEmployeeInScope(auth, employeeId);
+        await assertAttendanceEmployeeInScope(auth, employeeId);
       }
 
       const periodStart = toDateOnly(input.periodStart);
@@ -218,7 +221,7 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
 
       // Same rule as reading one: you may only reach a timesheet for someone
       // your data scope covers.
-      await assertEmployeeInScope(auth, timesheet.employeeId);
+      await assertAttendanceEmployeeInScope(auth, timesheet.employeeId);
 
       if (timesheet.status !== 'DRAFT') {
         throw new ConflictError(
@@ -369,7 +372,7 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
-      const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
+      const chain = await resolveChain(auth.companyId, 'TIMESHEET', self.id);
       const approval = await createApprovalRequest({
         companyId: auth.companyId,
         subjectType: 'TIMESHEET',
@@ -378,7 +381,7 @@ export const timesheetRoutes: FastifyPluginAsync = async (app) => {
         requesterUserId: auth.userId,
         title: `Timesheet ${timesheet.periodStart.toISOString().slice(0, 10)} to ${timesheet.periodEnd.toISOString().slice(0, 10)}`,
         summary: `${(timesheet.totalMinutes / 60).toFixed(1)} hours across ${timesheet.entries.length} entr${timesheet.entries.length === 1 ? 'y' : 'ies'}`,
-        approverEmployeeIds: approvers,
+        chain,
         request,
       });
 

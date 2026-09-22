@@ -19,13 +19,17 @@ import { buildMeta, toSkipTake } from '../../core/pagination.js';
 import { recordAudit } from '../../core/audit.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
 import {
-  assertApproverChainUsable,
+  assertEmployeeInScope,
+  assertEmployeeInTeamScope,
+  teamScopeFilter,
+} from '../../auth/scope.js';
+import {
+  assertChainUsable,
   cancel as cancelApproval,
   createApprovalRequest,
   notifyApprover,
-  resolveDefaultApprovers,
+  resolveChain,
   syncSubjectStatus,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow } from '../time/helpers.js';
@@ -82,8 +86,13 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(leaveRequestQuerySchema, request.query);
 
-    // Leave inherits the employee data scope exactly.
-    const scopeFilter = await employeeScopeFilter(auth);
+    /*
+     * Leave inherits the employee data scope, widened by the teams the caller
+     * manages. A team manager opens their team's leave; nobody else's list
+     * changes, because `teamScopeFilter` is the ordinary scope until an active
+     * appointment says otherwise.
+     */
+    const scopeFilter = await teamScopeFilter(auth);
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
@@ -145,7 +154,7 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!row) throw new NotFoundError('Leave request');
 
-    await assertEmployeeInScope(auth, row.employeeId);
+    await assertEmployeeInTeamScope(auth, row.employeeId);
 
     const self = await prisma.employee.findFirst({
       where: { companyId: auth.companyId, userId: auth.userId },
@@ -228,8 +237,8 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
        * cancelled because the cancel path looks up the (missing) approval
        * record. Validating first means that failure now writes nothing at all.
        */
-      const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
-      assertApproverChainUsable(approvers, self.id);
+      const chain = await resolveChain(auth.companyId, 'LEAVE_REQUEST', self.id);
+      assertChainUsable(chain, self.id);
 
       /**
        * The row and its approval record are one atomic unit. If either insert
@@ -262,7 +271,7 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
           requesterUserId: auth.userId,
           title: `${leaveType.name}: ${input.startDate} to ${input.endDate} (${totalDays} day${totalDays === 1 ? '' : 's'})`,
           summary: input.reason,
-          approverEmployeeIds: approvers,
+          chain,
           request,
           client: tx,
           // Audit and notification are side effects; they run below, once the
@@ -285,7 +294,7 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
         entityType: 'ApprovalRequest',
         entityId: approval.id,
         summary: `Submitted for approval: ${leaveType.name}`,
-        after: { subjectType: 'LEAVE_REQUEST', subjectId: created.id, steps: approvers.length },
+        after: { subjectType: 'LEAVE_REQUEST', subjectId: created.id, steps: chain.stages.length },
         request,
       });
       await notifyApprover(approval.id, 1, request);

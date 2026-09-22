@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Building2, GitBranch, IdCard, MapPin, Users2 } from 'lucide-react';
+import { Building2, GitBranch, IdCard, MapPin, Network, Users2 } from 'lucide-react';
 import { PERMISSIONS, type Permission } from '@hrms/shared';
 import { PageHeader } from '@/components/layout/page-header';
 import { usePermissions } from '@/features/auth/session-context';
@@ -11,6 +11,14 @@ const TABS: Array<{ to: string; label: string; icon: typeof Building2; permissio
   { to: '/organisation/designations', label: 'Designations', icon: IdCard, permission: PERMISSIONS.DESIGNATION_READ },
   { to: '/organisation/locations', label: 'Locations', icon: MapPin, permission: PERMISSIONS.LOCATION_READ },
   { to: '/organisation/structure', label: 'Structure', icon: GitBranch, permission: PERMISSIONS.DEPARTMENT_READ },
+  /*
+   * The hierarchy the APPROVAL CHAIN walks: CEO, HR, teams, managers, people.
+   * Distinct from Structure, which is the department tree, and from
+   * /people/org-chart, which is the reporting line. Gated on `employee.read`
+   * because it names people, and narrowed on the server to the people the
+   * caller may already see.
+   */
+  { to: '/organisation/hierarchy', label: 'Org hierarchy', icon: Network, permission: PERMISSIONS.EMPLOYEE_READ },
 ];
 
 export function OrganisationLayout() {

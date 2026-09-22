@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
-import { Pencil, Plus, Trash2, Users2 } from 'lucide-react';
+import { Pencil, Plus, Trash2, UserCog, Users2 } from 'lucide-react';
 import { PERMISSIONS, type TeamInput, type TeamRecord, teamInputSchema } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
 import { LOOKUPS_QUERY_KEY, useLookups } from '@/lib/lookups';
@@ -28,6 +28,7 @@ import {
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { usePermissions } from '@/features/auth/session-context';
+import { TeamManagersDialog } from './team-managers-dialog';
 
 const INITIAL = {
   q: '',
@@ -49,6 +50,7 @@ export function TeamsPage() {
   const [filters, setFilters] = React.useState(INITIAL);
   const [editing, setEditing] = React.useState<TeamRecord | null>(null);
   const [creating, setCreating] = React.useState(false);
+  const [rosterFor, setRosterFor] = React.useState<TeamRecord | null>(null);
   const debouncedQuery = useDebounced(filters.q, 350);
 
   const update = React.useCallback(
@@ -158,7 +160,7 @@ export function TeamsPage() {
                       Team
                     </SortableTH>
                     <TH>Department</TH>
-                    <TH>Lead</TH>
+                    <TH>Managers</TH>
                     <TH className="w-24 text-right">People</TH>
                     <TH className="w-28">Status</TH>
                     {canManage ? <TH className="w-24 text-right">Actions</TH> : null}
@@ -199,7 +201,26 @@ export function TeamsPage() {
                           ) : null}
                         </TD>
                         <TD className="text-[13px]">{row.departmentName}</TD>
-                        <TD className="text-[13px]">{row.leadEmployeeName ?? '--'}</TD>
+                        <TD className="text-[13px]">
+                          {/*
+                            A button rather than a column of names, and that is a
+                            deliberate loss of density. Who runs a team is now an
+                            appointment with a ceiling, a history and a warning
+                            when the person cannot see what they manage - none of
+                            which fits in a cell, and all of which is the point.
+                          */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="-ml-2 h-7 gap-1.5 text-[13px]"
+                            onClick={() => setRosterFor(row)}
+                          >
+                            <UserCog className="size-3.5" />
+                            {row.managerCount === 0
+                              ? 'None'
+                              : row.managerNames.join(', ')}
+                          </Button>
+                        </TD>
                         <TD className="tabular text-right text-[13px]">{row.employeeCount}</TD>
                         <TD>
                           <Badge variant={row.isActive ? 'success' : 'neutral'}>
@@ -243,6 +264,12 @@ export function TeamsPage() {
         )}
       </Card>
 
+      <TeamManagersDialog
+        teamId={rosterFor?.id ?? null}
+        teamName={rosterFor?.name ?? ''}
+        onClose={() => setRosterFor(null)}
+      />
+
       <TeamDrawer
         open={creating || editing !== null}
         team={editing}
@@ -274,7 +301,6 @@ function TeamDrawer({
       name: team?.name ?? '',
       departmentId: team?.departmentId ?? '',
       description: team?.description ?? '',
-      leadEmployeeId: team?.leadEmployeeId ?? '',
       isActive: team?.isActive ?? true,
     },
   });
@@ -318,17 +344,6 @@ function TeamDrawer({
               <NativeSelect {...register('departmentId')}>
                 <option value="">Choose a department</option>
                 {lookups.departments.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </NativeSelect>
-            </FormField>
-
-            <FormField label="Team lead" htmlFor="team-lead" error={formState.errors.leadEmployeeId?.message}>
-              <NativeSelect {...register('leadEmployeeId')}>
-                <option value="">Not assigned</option>
-                {lookups.managers.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
                   </option>

@@ -9,7 +9,10 @@ import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
+import {
+  assertAttendanceEmployeeInScope,
+  attendancePeopleFilter,
+} from '../../auth/scope.js';
 import { dateColumnToDayKey, dayKeyToDateColumn } from '../../core/zoned-time.js';
 import { deriveRangeForEmployees } from './attendance.service.js';
 import { EMPLOYMENT_WINDOW_SELECT, attendancePopulationWhere } from './employment-window.js';
@@ -30,7 +33,7 @@ import { aggregateDailyTotals, datesInRange, emptySummary } from './attendance-a
  * assigned here, no threshold is read here, and no clock time appears here.
  *
  * Scope is applied before a single day is derived, exactly as everywhere else.
- * `employeeScopeFilter` answers "which people?"; the department, team and
+ * `attendancePeopleFilter` answers "which people?"; the department, team and
  * employee filters narrow inside that answer and can never widen it.
  */
 
@@ -99,7 +102,7 @@ export const attendanceAnalyticsRoutes: FastifyPluginAsync = async (app) => {
 
     const range = { from: dateColumnToDayKey(from), to: dateColumnToDayKey(to) };
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       // NONE means no rows, never "no filter". The axis is still drawn.
       const empty: AttendanceAnalyticsResponse = {
@@ -115,7 +118,7 @@ export const attendanceAnalyticsRoutes: FastifyPluginAsync = async (app) => {
 
     // A guessed employee id cannot widen what the caller sees: the same check
     // every other attendance route makes, made before any work is done.
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const where: Prisma.EmployeeWhereInput = {
       AND: [

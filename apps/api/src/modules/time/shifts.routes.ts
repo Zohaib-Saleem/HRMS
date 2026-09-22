@@ -18,10 +18,13 @@ import { buildMeta, buildOrderBy, toSkipTake } from '../../core/pagination.js';
 import { recordAudit } from '../../core/audit.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
+import {
+  assertAttendanceEmployeeInScope,
+  attendancePeopleFilter,
+} from '../../auth/scope.js';
 import {
   createApprovalRequest,
-  resolveDefaultApprovers,
+  resolveChain,
 } from '../../core/approvals/approval.service.js';
 import { callerEmployeeOrThrow, toDateOnly } from './helpers.js';
 import { isInvertedRange, overlappingAssignmentWhere } from './shift-assignment.js';
@@ -233,7 +236,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(shiftAssignmentQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
@@ -258,7 +261,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
 
     // Asking for one person still goes through the scope check, so a guessed
     // id cannot widen what the caller sees.
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const { skip, take } = toSkipTake(query.page, query.limit);
     const [total, rows] = await Promise.all([
@@ -324,7 +327,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
         include: { shift: { select: { name: true } } },
       });
       if (!existing) throw new NotFoundError('Shift assignment');
-      await assertEmployeeInScope(auth, existing.employeeId);
+      await assertAttendanceEmployeeInScope(auth, existing.employeeId);
 
       const range = {
         effectiveFrom:
@@ -393,7 +396,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
       const auth = requireAuthContext(request);
       const input = parseOrThrow(shiftAssignmentSchema, request.body);
 
-      await assertEmployeeInScope(auth, input.employeeId);
+      await assertAttendanceEmployeeInScope(auth, input.employeeId);
 
       const shift = await prisma.shift.findFirst({
         where: { id: input.shiftId, companyId: auth.companyId },
@@ -466,7 +469,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(paginationQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
@@ -547,7 +550,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
-    const approvers = await resolveDefaultApprovers(auth.companyId, self.id);
+    const chain = await resolveChain(auth.companyId, 'SHIFT_CHANGE', self.id);
     const approval = await createApprovalRequest({
       companyId: auth.companyId,
       subjectType: 'SHIFT_CHANGE',
@@ -556,7 +559,7 @@ export const shiftRoutes: FastifyPluginAsync = async (app) => {
       requesterUserId: auth.userId,
       title: `Shift change to ${requestedShift.name}`,
       summary: input.reason,
-      approverEmployeeIds: approvers,
+      chain,
       request,
     });
 

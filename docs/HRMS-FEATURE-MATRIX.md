@@ -8,8 +8,9 @@ Status values are exactly four:
 - **NOT IMPLEMENTED** — no table, no API, no screen.
 
 Roles are the four seeded ones: Super Admin (SA), HR Admin (HR), Manager (MGR),
-Employee (EMP), plus the two narrow ones where they are relevant — Interviewer
-(INT) and Office Boy. A role appears only if it holds the permission by default.
+Employee (EMP), plus the narrow ones where they are relevant — Team Manager
+(TM), Interviewer (INT), IT Asset Manager and Office Boy. A role appears only if
+it holds the permission by default.
 
 > **Known coverage gap.** **Cases**, **Lunch**, **Loans** and **Medical** are
 > built and running, and have never had a section here. Their behaviour is
@@ -49,10 +50,14 @@ Employee (EMP), plus the two narrow ones where they are relevant — Interviewer
 | Timezone | IMPLEMENTED | SA, HR | — | Drives every attendance day boundary |
 | Weekend days | IMPLEMENTED | SA, HR | — | Any combination of weekdays, not just Sat/Sun |
 | Departments | IMPLEMENTED | SA, HR | — | Nestable, with an optional head |
-| Teams | IMPLEMENTED | SA, HR | departments | |
+| Teams | IMPLEMENTED | SA, HR | departments | One primary team per employee |
+| Team managers | IMPLEMENTED | SA, HR | teams | Explicit appointment, 1 to 3 active per team; replace in one action |
+| Team manager data scope | IMPLEMENTED | TM, MGR | `team.data.read` | Directory, attendance, leave, timesheets, approvals and assets for teams you manage. Never payroll, loans, medical or restricted fields |
+| Approval hierarchy | IMPLEMENTED | SA | approval engine | Stages per request type, ANY_ONE or ALL per stage; HR Manager and CEO named explicitly |
 | Designations | IMPLEMENTED | SA, HR | — | Job titles |
 | Locations | IMPLEMENTED | SA, HR | — | Optional coordinates and geofence radius |
-| Org chart | IMPLEMENTED | SA, HR, MGR | employees | Built from `managerId`; narrowed by data scope |
+| Org chart (reporting line) | IMPLEMENTED | SA, HR, MGR | employees | Built from `managerId`; narrowed by data scope |
+| Org hierarchy (teams) | IMPLEMENTED | SA, HR, MGR, TM | teams, stage assignees | CEO, HR, teams, managers, members; narrowed to what the caller may see |
 
 ## People
 
@@ -179,7 +184,8 @@ Employee (EMP), plus the two narrow ones where they are relevant — Interviewer
 | Export row ceiling | IMPLEMENTED | SA, HR | — | Over 20,000 rows is refused with a message, never silently truncated |
 | Depreciation schedule | **NOT IMPLEMENTED** | — | — | Current value is a number somebody sets. Nothing calculates it |
 | Barcode / QR scanning | **NOT IMPLEMENTED** | — | — | The tag is typed or searched for |
-| Asset approval workflow | **NOT IMPLEMENTED** | — | — | Assign, retire and dispose are audited, not routed for approval |
+| Asset request approval | IMPLEMENTED | all | approval engine | Employee asks; Team Manager → HR → CEO; IT fulfils after approval |
+| Asset handover approval | **NOT IMPLEMENTED** | — | — | Assigning outside a request, retiring and disposing are audited, not routed |
 | Asset bulk import | **NOT IMPLEMENTED** | — | — | Added one at a time |
 
 ## Recruitment

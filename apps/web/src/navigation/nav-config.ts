@@ -25,6 +25,7 @@ import {
   Receipt,
   Boxes,
   Briefcase,
+  PackagePlus,
   CalendarSearch,
   ContactRound,
   Sandwich,
@@ -135,6 +136,24 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/timesheets',
         icon: FileClock,
         permission: PERMISSIONS.TIMESHEET_READ,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        /*
+         * Asking the company for kit, and following what happened to the ask.
+         *
+         * In "My work" rather than under Operations because every member of
+         * staff holds `asset.request.read` for their own requests, and the
+         * screen's first tab is theirs. The asset manager's fulfilment queue
+         * is the same screen with an extra tab, which appears for whoever
+         * holds `asset.request.read.all` - one row rather than two, because it
+         * is one list of requests seen from two ends.
+         */
+        label: 'Equipment requests',
+        to: '/assets/requests',
+        icon: PackagePlus,
+        permission: PERMISSIONS.ASSET_REQUEST_READ,
         status: 'ready',
         matchPrefix: true,
       },
@@ -596,6 +615,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/organisation': 'Organisation',
   '/organisation/departments': 'Departments',
   '/organisation/teams': 'Teams',
+  '/organisation/hierarchy': 'Org hierarchy',
   '/organisation/designations': 'Designations',
   '/organisation/locations': 'Locations',
   '/organisation/structure': 'Structure',
@@ -623,12 +643,14 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/assets': 'Assets',
   '/assets/dashboard': 'Asset dashboard',
   '/assets/reports': 'Asset reports',
+  '/assets/requests': 'Equipment requests',
   '/assets/:id': 'Asset',
   '/settings/asset-categories': 'Asset management',
   '/recruitment': 'Recruitment',
   '/recruitment/job-openings': 'Job openings',
   '/recruitment/candidates': 'Candidates',
   '/recruitment/interviews': 'Interviews',
+  '/settings/approval-hierarchy': 'Approval hierarchy',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',
 };

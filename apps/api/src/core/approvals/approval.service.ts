@@ -1,12 +1,18 @@
 import type { FastifyRequest } from 'fastify';
 import type { ApprovalStatus, ApprovalSubjectType, Prisma } from '@prisma/client';
-import { PERMISSIONS } from '@hrms/shared';
+import { APPROVAL_STAGE_LABELS, PERMISSIONS } from '@hrms/shared';
 import { prisma } from '../db.js';
 import { recordAudit } from '../audit.js';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
 import { notify } from '../notifications/notification.service.js';
 import type { AuthContext } from '../../auth/session.js';
-import { employeeScopeFilter } from '../../auth/scope.js';
+import { teamScopeFilter } from '../../auth/scope.js';
+import {
+  describeSkip,
+  resolveApprovalChain,
+  type ResolvedChain,
+  type ResolvedStage,
+} from './hierarchy.service.js';
 import { applyRegularization, applyShiftChange } from '../../modules/time/attendance.service.js';
 import { applyLoanDecision } from '../../modules/loans/loans.routes.js';
 
@@ -22,6 +28,25 @@ import { applyLoanDecision } from '../../modules/loans/loans.routes.js';
  *   PENDING -> REJECTED   any step rejected
  *   PENDING -> CANCELLED  requester withdraws
  *   APPROVED/REJECTED/CANCELLED are terminal - no transition leaves them.
+ *
+ * A STEP IS A STAGE, AND A STAGE MAY HAVE SEVERAL APPROVERS.
+ *
+ * Step 1 used to mean "one named person decides". It now means "one rung of
+ * the hierarchy decides", and the rung carries a set of candidates in
+ * `approval_step_approvers` plus a mode:
+ *
+ *   ANY_ONE  the first approval carries the rung. A team with three managers
+ *            needs one of them, and the other two are shown a completed stage
+ *            rather than a second button.
+ *   ALL      every candidate must approve before the rung is done.
+ *
+ * Either way ONE REJECTION ENDS THE REQUEST, at any rung, whatever the mode:
+ * a rejection is a decision about the request, not a vote about the stage.
+ *
+ * Authority is the approver SET, never `approverEmployeeId` - that column
+ * survives as the display name of a single-approver step and as the shape
+ * every row written before stages existed still has. The migration copied each
+ * one into the set, so both kinds of row are decided by the same code.
  */
 
 export interface CreateApprovalInput {
@@ -32,8 +57,14 @@ export interface CreateApprovalInput {
   requesterUserId?: string | null;
   title: string;
   summary?: string | null;
-  /** Ordered chain. Step 1 decides first. */
-  approverEmployeeIds: readonly string[];
+  /**
+   * The resolved chain, in order. Stage 1 decides first.
+   *
+   * Resolved by the caller rather than here, because a caller has to be able
+   * to find out whether a chain EXISTS before it writes the row the approval
+   * will hang off - see `assertChainUsable`.
+   */
+  chain: ResolvedChain;
   request?: FastifyRequest;
   /**
    * Runs the write on a transaction client instead of the global one, so a
@@ -55,65 +86,73 @@ export function isTerminal(status: ApprovalStatus): boolean {
 }
 
 /**
- * Default approver chain: the requester's primary manager, then their
- * secondary manager if there is one. Falls back to the department head so a
- * request never becomes unactionable just because a manager is unset.
+ * The chain for one request, resolved from the company's hierarchy.
+ *
+ * A thin pass-through to `resolveApprovalChain`, kept here so that every
+ * domain module reaches the hierarchy through the approval engine rather than
+ * importing the resolver itself - the engine stays the one door.
  */
-export async function resolveDefaultApprovers(
+export async function resolveChain(
   companyId: string,
-  employeeId: string,
-): Promise<string[]> {
-  const employee = await prisma.employee.findFirst({
-    where: { id: employeeId, companyId },
-    select: {
-      managerId: true,
-      secondaryManagerId: true,
-      department: { select: { headEmployeeId: true } },
-    },
-  });
-  if (!employee) return [];
-
-  const chain: string[] = [];
-  const add = (id: string | null | undefined) => {
-    // Never route a request to its own author, and never duplicate a step.
-    if (id && id !== employeeId && !chain.includes(id)) chain.push(id);
-  };
-
-  add(employee.managerId);
-  add(employee.secondaryManagerId);
-  if (chain.length === 0) add(employee.department?.headEmployeeId);
-
-  return chain;
+  subjectType: ApprovalSubjectType,
+  requesterEmployeeId: string,
+): Promise<ResolvedChain> {
+  return resolveApprovalChain(companyId, subjectType, requesterEmployeeId);
 }
 
 /**
- * Every reason an approval chain can be rejected, checked without writing
- * anything.
+ * Every reason a chain can be refused, checked without writing anything.
  *
  * Callers run this BEFORE creating the row the approval will hang off. The
  * checks used to live only inside `createApprovalRequest`, which meant a caller
  * that had already inserted its subject row was left with an orphan when the
  * chain turned out to be empty.
  */
-export function assertApproverChainUsable(
-  approverEmployeeIds: readonly string[],
-  requesterEmployeeId: string,
-): void {
-  if (approverEmployeeIds.length === 0) {
+export function assertChainUsable(chain: ResolvedChain, requesterEmployeeId: string): void {
+  if (chain.stages.length === 0) {
     throw new ValidationError({
       _: [
-        'No approver could be determined for this request. Assign a reporting manager or a department head first.',
+        'No approver could be determined for this request. Appoint a manager for this team, name an HR Manager or a CEO on the approval hierarchy, or set a reporting manager on the employee record.',
       ],
     });
   }
 
-  if (approverEmployeeIds.includes(requesterEmployeeId)) {
-    throw new ValidationError({ _: ['A request cannot be approved by the person who raised it.'] });
+  for (const stage of chain.stages) {
+    if (stage.approverEmployeeIds.includes(requesterEmployeeId)) {
+      throw new ValidationError({ _: ['A request cannot be approved by the person who raised it.'] });
+    }
+    if (stage.approverEmployeeIds.length === 0) {
+      throw new ValidationError({ _: ['One stage of this approval chain has nobody to fill it.'] });
+    }
   }
 }
 
+/** The `steps` payload for one resolved stage. */
+function stepData(stage: ResolvedStage, index: number) {
+  return {
+    stepOrder: index + 1,
+    stage: stage.stage,
+    mode: stage.mode,
+    /*
+     * The display column, and ONLY when the stage has exactly one approver.
+     * Writing the first of three managers into it would name one person as
+     * "the" approver of a rung any of them may sign, which is the sentence the
+     * screen would then show and the wrong one.
+     */
+    approverEmployeeId:
+      stage.approverEmployeeIds.length === 1 ? stage.approverEmployeeIds[0] : null,
+    status: 'PENDING' as ApprovalStatus,
+    approvers: {
+      create: stage.approverEmployeeIds.map((employeeId) => ({
+        employeeId,
+        status: 'PENDING' as ApprovalStatus,
+      })),
+    },
+  };
+}
+
 export async function createApprovalRequest(input: CreateApprovalInput) {
-  assertApproverChainUsable(input.approverEmployeeIds, input.requesterEmployeeId);
+  assertChainUsable(input.chain, input.requesterEmployeeId);
 
   const db = input.client ?? prisma;
 
@@ -128,19 +167,30 @@ export async function createApprovalRequest(input: CreateApprovalInput) {
       summary: input.summary ?? null,
       status: 'PENDING',
       currentStep: 1,
-      steps: {
-        create: input.approverEmployeeIds.map((approverEmployeeId, index) => ({
-          stepOrder: index + 1,
-          approverEmployeeId,
-          status: 'PENDING' as ApprovalStatus,
-        })),
-      },
+      steps: { create: input.chain.stages.map(stepData) },
       events: {
-        create: {
-          actorUserId: input.requesterUserId ?? null,
-          action: 'approval.submitted',
-          toStatus: 'PENDING' as ApprovalStatus,
-        },
+        create: [
+          {
+            actorUserId: input.requesterUserId ?? null,
+            action: 'approval.submitted',
+            toStatus: 'PENDING' as ApprovalStatus,
+            comment: describeChain(input.chain),
+          },
+          /*
+           * A skipped stage is written into the history as its own event.
+           *
+           * Silence here is the failure mode worth spending a row on: leave
+           * that never reached the CEO because nobody is named as CEO looks
+           * exactly like leave the CEO approved, six months later, to somebody
+           * reading the trail. This says which rung was not asked, and why.
+           */
+          ...input.chain.skipped.map((skip) => ({
+            actorUserId: input.requesterUserId ?? null,
+            action: 'approval.stage.skipped',
+            toStatus: 'PENDING' as ApprovalStatus,
+            comment: describeSkip(skip),
+          })),
+        ],
       },
     },
     include: { steps: { orderBy: { stepOrder: 'asc' } } },
@@ -154,7 +204,12 @@ export async function createApprovalRequest(input: CreateApprovalInput) {
       entityType: 'ApprovalRequest',
       entityId: approval.id,
       summary: `Submitted for approval: ${input.title}`,
-      after: { subjectType: input.subjectType, subjectId: input.subjectId, steps: approval.steps.length },
+      after: {
+        subjectType: input.subjectType,
+        subjectId: input.subjectId,
+        steps: approval.steps.length,
+        chain: describeChain(input.chain),
+      },
       request: input.request,
     });
 
@@ -164,7 +219,33 @@ export async function createApprovalRequest(input: CreateApprovalInput) {
   return approval;
 }
 
-/** Tells whoever owns the given step that something is waiting for them. */
+/** "Team Manager (any one of 3), then HR Manager, then CEO". */
+export function describeChain(chain: ResolvedChain): string {
+  if (chain.stages.length === 0) return 'No approval stages.';
+  return chain.stages
+    .map((stage) => {
+      const label = APPROVAL_STAGE_LABELS[stage.stage];
+      const count = stage.approverEmployeeIds.length;
+      if (count === 1) return label;
+      return stage.mode === 'ALL'
+        ? `${label} (all ${count})`
+        : `${label} (any one of ${count})`;
+    })
+    .join(' -> ');
+}
+
+/**
+ * Tells everybody who can decide the given step that it is waiting for them.
+ *
+ * All of them, not one of them. A stage filled by three team managers in
+ * ANY_ONE mode is waiting for whichever gets there first, and notifying only
+ * the first name in the set would make the other two's ability to sign a
+ * secret. The first to act completes the stage and the others find it closed,
+ * which is the intended outcome and is what the decision path enforces.
+ *
+ * Best-effort throughout: `notify` never throws, and an approver with no login
+ * account is skipped rather than blocking the rest.
+ */
 export async function notifyApprover(
   approvalRequestId: string,
   stepOrder: number,
@@ -173,39 +254,55 @@ export async function notifyApprover(
   const step = await prisma.approvalStep.findFirst({
     where: { approvalRequestId, stepOrder },
     include: {
-      approverEmployee: { select: { id: true, userId: true, workEmail: true, user: { select: { email: true } } } },
+      approvers: {
+        where: { status: 'PENDING' },
+        include: {
+          employee: { select: { id: true, userId: true, user: { select: { email: true } } } },
+        },
+      },
       approvalRequest: { select: { id: true, companyId: true, title: true, summary: true } },
     },
   });
 
-  const approver = step?.approverEmployee;
-  if (!step || !approver?.userId) return;
+  if (!step) return;
 
-  await notify({
-    companyId: step.approvalRequest.companyId,
-    userId: approver.userId,
-    type: 'APPROVAL_REQUESTED',
-    title: 'Approval needed',
-    message: step.approvalRequest.title,
-    entityType: 'ApprovalRequest',
-    entityId: step.approvalRequest.id,
-    logger: request?.log,
-    email: approver.user?.email
-      ? {
-          to: approver.user.email,
-          subject: `Approval needed: ${step.approvalRequest.title}`,
-          text: `A request is waiting for your decision.\n\n${step.approvalRequest.title}\n${step.approvalRequest.summary ?? ''}`.trim(),
-        }
-      : undefined,
-  });
+  const seen = new Set<string>();
+  for (const seat of step.approvers) {
+    const userId = seat.employee.userId;
+    if (!userId || seen.has(userId)) continue;
+    seen.add(userId);
+
+    await notify({
+      companyId: step.approvalRequest.companyId,
+      userId,
+      type: 'APPROVAL_REQUESTED',
+      title: 'Approval needed',
+      message: step.approvalRequest.title,
+      entityType: 'ApprovalRequest',
+      entityId: step.approvalRequest.id,
+      logger: request?.log,
+      email: seat.employee.user?.email
+        ? {
+            to: seat.employee.user.email,
+            subject: `Approval needed: ${step.approvalRequest.title}`,
+            text: `A request is waiting for your decision.\n\n${step.approvalRequest.title}\n${step.approvalRequest.summary ?? ''}`.trim(),
+          }
+        : undefined,
+    });
+  }
 }
 
 /**
  * Visibility filter.
  *
- * A caller may see a request when they raised it, when they are an assigned
- * approver, or when the requester falls inside their employee data scope.
- * `approval.manage` widens this to the whole company.
+ * A caller may see a request when they raised it, when they are one of the
+ * named approvers on ANY of its steps, or when the requester falls inside the
+ * employee records they may read - including, for a team manager, the teams
+ * they have been appointed to. `approval.manage` widens this to the company.
+ *
+ * "One of the named approvers" reads the approver SET, not the step's display
+ * column. A manager who shares a rung with two colleagues must be able to open
+ * the request they may sign, and the display column names at most one of them.
  *
  * Returns null when the caller can see nothing, which callers must treat as an
  * empty result rather than an absent filter.
@@ -220,12 +317,12 @@ export async function approvalVisibilityFilter(
     select: { id: true },
   });
 
-  const scopeFilter = await employeeScopeFilter(auth);
+  const scopeFilter = await teamScopeFilter(auth);
 
   const clauses: Prisma.ApprovalRequestWhereInput[] = [];
   if (self) {
     clauses.push({ requesterEmployeeId: self.id });
-    clauses.push({ steps: { some: { approverEmployeeId: self.id } } });
+    clauses.push({ steps: { some: { approvers: { some: { employeeId: self.id } } } } });
   }
   if (scopeFilter !== null) {
     clauses.push({ requesterEmployee: scopeFilter });
@@ -255,18 +352,34 @@ export interface DecisionInput {
 }
 
 /**
- * Approve or reject the current step.
+ * Approve or reject the current stage.
  *
- * Refuses, in this order: an already-finished request, a caller who is not the
- * assigned approver of the current step, a caller acting on their own request,
- * and a request whose requester is outside the caller's data scope.
+ * Refuses, in this order: an already-finished request, a caller who is not one
+ * of the stage's named approvers, a caller acting on their own request, a
+ * caller who has already decided an earlier stage, and a request whose
+ * requester is outside what the caller may see.
+ *
+ * WHAT A DECISION DOES TO A STAGE:
+ *
+ *   REJECTED, in either mode, ends the whole request. A rejection is a
+ *   decision about the request rather than a vote about the rung, so the first
+ *   one wins and nobody else is asked.
+ *
+ *   APPROVED in ANY_ONE mode completes the stage. The other approvers' seats
+ *   are closed - not left PENDING - so the screen can say "approved by Manager
+ *   A" to all three of them, and so a second manager arriving a minute later
+ *   is told the stage is done rather than being shown a live button.
+ *
+ *   APPROVED in ALL mode closes only the caller's own seat. The stage stays
+ *   open, the request stays on the same step, and the remaining approvers are
+ *   reminded. It completes when the last seat closes.
  */
 export async function decide(input: DecisionInput) {
   const { auth, approvalId, decision } = input;
 
   const approval = await prisma.approvalRequest.findFirst({
     where: { id: approvalId, companyId: auth.companyId },
-    include: { steps: { orderBy: { stepOrder: 'asc' } } },
+    include: { steps: { orderBy: { stepOrder: 'asc' }, include: { approvers: true } } },
   });
   if (!approval) throw new NotFoundError('Approval request');
 
@@ -293,29 +406,48 @@ export async function decide(input: DecisionInput) {
   }
 
   const isAdmin = auth.permissions.has(PERMISSIONS.APPROVAL_MANAGE);
-  const isAssignedApprover = Boolean(self && step.approverEmployeeId === self.id);
+  const seat = self ? step.approvers.find((a) => a.employeeId === self.id) : undefined;
+  const isAssignedApprover = Boolean(seat);
 
   if (!isAdmin && !isAssignedApprover) {
-    throw new ForbiddenError('Only the assigned approver can decide this request.');
+    throw new ForbiddenError('Only an approver named on this stage can decide it.');
+  }
+
+  /*
+   * A seat that has already been used cannot be used again.
+   *
+   * In ANY_ONE mode this is unreachable - the first approval closes the whole
+   * step - but in ALL mode it is the rule that stops one approver approving
+   * twice and satisfying a rung on their own. It is checked on the SEAT rather
+   * than on the step for exactly that reason.
+   */
+  if (seat && seat.status !== 'PENDING') {
+    throw new ConflictError('You have already decided this stage.');
   }
 
   /*
    * Separation of duties.
    *
-   * A multi-step chain exists so that several different people sign off. The
+   * A multi-stage chain exists so that several different people sign off. The
    * administrative override in the check above would otherwise let one person
-   * approve step 1 as an override, land on step 2 as the assigned approver,
-   * and approve that too - satisfying a two-person chain single-handedly and
-   * quietly defeating the whole point of the chain.
+   * approve stage 1 as an override, land on stage 2 as a named approver, and
+   * approve that too - satisfying a three-rung chain single-handedly and
+   * quietly defeating the whole point of it.
    *
-   * Nobody decides two steps of the same request, whatever they hold.
+   * Nobody decides two stages of the same request, whatever they hold. The
+   * resolver keeps this from biting honest configurations: a person who fills
+   * two rungs is struck from the later one when the chain is built, so this
+   * only ever fires on an override.
    */
   const alreadyDecidedEarlierStep = approval.steps.some(
-    (s) => s.status !== 'PENDING' && s.decidedByUserId === auth.userId,
+    (s) =>
+      s.stepOrder !== step.stepOrder &&
+      (s.decidedByUserId === auth.userId ||
+        s.approvers.some((a) => a.status !== 'PENDING' && a.decidedByUserId === auth.userId)),
   );
   if (alreadyDecidedEarlierStep) {
     throw new ForbiddenError(
-      'You have already decided an earlier step of this request. Another approver must decide this one.',
+      'You have already decided an earlier stage of this request. Another approver must decide this one.',
     );
   }
 
@@ -323,24 +455,75 @@ export async function decide(input: DecisionInput) {
   // left, say - but it must never look like the assigned approver acted.
   const isOverride = isAdmin && !isAssignedApprover;
 
-  // Even an administrator stays inside their data scope.
+  // Even an administrator stays inside what they may see.
   await assertApprovalVisible(auth, approvalId);
 
   const now = new Date();
+
+  /*
+   * Does this decision finish the rung?
+   *
+   * ANY_ONE: yes, on the first approval. ALL: only when every OTHER seat has
+   * already approved - computed from the rows read above rather than from a
+   * second query, so the answer cannot drift between the check and the write.
+   * An override always completes the rung: an administrator standing in for an
+   * absent approver is not signing one of three seats, they are unblocking the
+   * stage.
+   */
+  const othersOutstanding = step.approvers.filter(
+    (a) => a.id !== seat?.id && a.status === 'PENDING',
+  ).length;
+  const stageCompletes =
+    decision === 'REJECTED' || isOverride || step.mode === 'ANY_ONE' || othersOutstanding === 0;
+
   const isLastStep = approval.currentStep >= approval.steps.length;
   const nextStatus: ApprovalStatus =
-    decision === 'REJECTED' ? 'REJECTED' : isLastStep ? 'APPROVED' : 'PENDING';
+    decision === 'REJECTED'
+      ? 'REJECTED'
+      : stageCompletes && isLastStep
+        ? 'APPROVED'
+        : 'PENDING';
+
+  const stageLabel = step.stage ? APPROVAL_STAGE_LABELS[step.stage] : `Step ${step.stepOrder}`;
 
   const updated = await prisma.$transaction(async (tx) => {
-    await tx.approvalStep.update({
-      where: { id: step.id },
-      data: {
-        status: decision,
-        decidedByUserId: auth.userId,
-        decidedAt: now,
-        comment: input.comment ?? null,
-      },
-    });
+    if (seat) {
+      await tx.approvalStepApprover.update({
+        where: { id: seat.id },
+        data: {
+          status: decision,
+          decidedByUserId: auth.userId,
+          decidedAt: now,
+          comment: input.comment ?? null,
+        },
+      });
+    }
+
+    if (stageCompletes) {
+      await tx.approvalStep.update({
+        where: { id: step.id },
+        data: {
+          status: decision,
+          decidedByUserId: auth.userId,
+          decidedAt: now,
+          comment: input.comment ?? null,
+        },
+      });
+
+      /*
+       * Close the seats nobody used.
+       *
+       * Left PENDING they would sit in three other people's inboxes for ever,
+       * and `awaitingMyDecision` - which is a query over exactly these rows -
+       * would keep saying yes to a stage that is finished. CANCELLED rather
+       * than APPROVED because these people did not approve anything; the seat
+       * simply stopped being needed.
+       */
+      await tx.approvalStepApprover.updateMany({
+        where: { approvalStepId: step.id, status: 'PENDING' },
+        data: { status: 'CANCELLED', decidedAt: now },
+      });
+    }
 
     await tx.approvalEvent.create({
       data: {
@@ -351,9 +534,13 @@ export async function decide(input: DecisionInput) {
           (isOverride ? '.override' : ''),
         fromStatus: approval.status,
         toStatus: nextStatus,
-        comment: isOverride
-          ? `[administrative override] ${input.comment ?? ''}`.trim()
-          : (input.comment ?? null),
+        comment: [
+          isOverride ? '[administrative override]' : null,
+          stageCompletes ? `${stageLabel} stage ${decision.toLowerCase()}` : `${stageLabel}: one of ${step.approvers.length} approvals recorded`,
+          input.comment ?? null,
+        ]
+          .filter(Boolean)
+          .join(' - '),
       },
     });
 
@@ -361,10 +548,11 @@ export async function decide(input: DecisionInput) {
       where: { id: approval.id },
       data: {
         status: nextStatus,
-        currentStep: nextStatus === 'PENDING' ? approval.currentStep + 1 : approval.currentStep,
-        ...(nextStatus !== 'PENDING'
-          ? { decidedAt: now, decidedByUserId: auth.userId }
-          : {}),
+        currentStep:
+          nextStatus === 'PENDING' && stageCompletes
+            ? approval.currentStep + 1
+            : approval.currentStep,
+        ...(nextStatus !== 'PENDING' ? { decidedAt: now, decidedByUserId: auth.userId } : {}),
       },
       include: { steps: { orderBy: { stepOrder: 'asc' } } },
     });
@@ -378,13 +566,21 @@ export async function decide(input: DecisionInput) {
       (isOverride ? '.override' : ''),
     entityType: 'ApprovalRequest',
     entityId: approval.id,
-    summary: `${decision === 'APPROVED' ? 'Approved' : 'Rejected'} step ${approval.currentStep} of "${approval.title}"${isOverride ? ' (administrative override)' : ''}`,
+    summary: `${decision === 'APPROVED' ? 'Approved' : 'Rejected'} the ${stageLabel} stage of "${approval.title}"${isOverride ? ' (administrative override)' : ''}`,
     before: { status: approval.status, currentStep: approval.currentStep },
-    after: { status: nextStatus, comment: input.comment ?? null },
+    after: {
+      status: nextStatus,
+      stage: step.stage,
+      mode: step.mode,
+      stageCompleted: stageCompletes,
+      comment: input.comment ?? null,
+    },
     request: input.request,
   });
 
   if (nextStatus === 'PENDING') {
+    // A completed rung moves on and tells the next one; an ALL rung still
+    // waiting tells the people it is still waiting for.
     await notifyApprover(approval.id, updated.currentStep, input.request);
   } else {
     await notifyRequester(updated.id, nextStatus, input.comment ?? null, input.request);
@@ -424,6 +620,19 @@ export async function cancel(
 
   const now = new Date();
   const updated = await prisma.$transaction(async (tx) => {
+    /*
+     * Close every seat still waiting on this request.
+     *
+     * A withdrawn request that leaves PENDING approver rows behind stays in
+     * the inbox of everybody who was going to decide it, and `pending-count` -
+     * a query over exactly those rows - keeps counting it. The request is
+     * gone; the seats go with it.
+     */
+    await tx.approvalStepApprover.updateMany({
+      where: { approvalStep: { approvalRequestId: approval.id }, status: 'PENDING' },
+      data: { status: 'CANCELLED', decidedAt: now },
+    });
+
     await tx.approvalEvent.create({
       data: {
         approvalRequestId: approval.id,
@@ -532,6 +741,23 @@ export async function syncSubjectStatus(
       if (status === 'APPROVED' || status === 'REJECTED' || status === 'CANCELLED') {
         await applyLoanDecision(subjectId, status);
       }
+      return;
+    case 'ASSET_REQUEST':
+      /*
+       * APPROVED here means the company has AGREED to the request. It does not
+       * mean anybody has been handed a laptop, and this function must never
+       * write FULFILLED - that status belongs to the fulfilment path and to
+       * nobody else. The guard on `status: 'PENDING'` says so in SQL: a
+       * request that has somehow already moved on is left exactly as it is.
+       */
+      await prisma.assetRequest.updateMany({
+        where: { id: subjectId, status: 'PENDING' },
+        data: {
+          status,
+          ...(status === 'CANCELLED' ? { cancelledAt: new Date() } : {}),
+          ...(status === 'APPROVED' || status === 'REJECTED' ? { decidedAt: new Date() } : {}),
+        },
+      });
       return;
     case 'LEAVE_REQUEST':
       await prisma.leaveRequest.updateMany({

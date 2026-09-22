@@ -1144,11 +1144,23 @@ export function DisposeAssetDialog({ open, asset, onClose }: DialogProps) {
           htmlFor="dispose-approver"
           error={errors.approvedByEmployeeId}
         >
+          {/*
+            * Leavers included here, and only here.
+            *
+            * The other two pickers - assign and transfer - are choosing
+            * somebody to HAND a machine to, and the endpoints behind them
+            * already refuse an employee who has left, so listing them would
+            * only offer a choice that 422s. This field is different: it records
+            * WHO SIGNED OFF a write-off, which is a historical fact, and the
+            * manager who approved one last quarter may well have moved on
+            * since.
+            */}
           <EmployeePicker
             id="dispose-approver"
             value={approvedBy}
             onChange={setApprovedBy}
             placeholder="Nobody recorded"
+            includeInactive
           />
         </FormField>
       </div>

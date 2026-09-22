@@ -8,17 +8,49 @@ your team.
 
 ## What "your team" means
 
-Your default data scope is **reports and own** — you and the people whose
-`managerId` or `secondaryManagerId` points at you. Every screen narrows itself
-to that set automatically.
+There are now **two** ways somebody is yours, and they are not the same set.
 
-If someone is missing from your team views, they are not assigned to you. Ask
-HR to set their reporting manager.
+**The reporting line.** Your default data scope is *reports and own* — you and
+the people whose `managerId` or `secondaryManagerId` points at you. Every
+screen narrows itself to that automatically. If someone is missing, they are
+not assigned to you: ask HR to set their reporting manager.
+
+**The team.** If HR has appointed you a manager of a team (Organisation →
+Teams → Managers), the people ON that team are yours as well — added to the
+reporting line, never replacing it. A team has one to three managers and they
+all see the same team.
+
+The team half needs two things, and both are real:
+
+1. an **active appointment** on the team, and
+2. a role carrying **See your team as a manager** (`team.data.read`) — the
+   seeded **Team Manager** role has it.
+
+With the appointment and no role you still decide that team's requests and see
+nothing of the team. The Teams screen says so, by name, beside each manager.
+If that is you, ask HR for the Team Manager role.
 
 A **head of department** picks up requests from anyone in the department who has
 no manager set. That is a fallback in the approval chain, not a wider data
 scope: it does not by itself let you see the whole department. If you need
 that, ask an administrator for a `DEPARTMENT` scope.
+
+### What the team half does NOT widen
+
+Your team's **payroll, payslips, loans, medical information** and their
+**national ID, passport, visa and bank details** stay closed, whatever teams
+you manage. Those screens read your plain data scope, which is unchanged by an
+appointment. Being put in charge of a team is a reason to see somebody's work,
+not their pay or their treatment.
+
+### Approving as a team manager
+
+Requests from your team reach you at the **Team Manager** stage, the first rung
+of the chain. If the team has three managers, **any one of you is enough** —
+whoever gets there first signs for the team, and the other two see a finished
+stage rather than a second button. After you, the request goes to HR and then
+to the CEO. The full chain is in the
+[organisation hierarchy guide](HRMS-ORG-HIERARCHY-GUIDE.md).
 
 ---
 
@@ -192,8 +224,10 @@ The full picture is in the [recruitment guide](HRMS-RECRUITMENT-GUIDE.md).
 
 | Symptom | What to do |
 |---|---|
-| Someone missing from your team views | They are not assigned to you — ask HR |
-| A request cannot be raised: "no approver could be determined" | The employee has no manager and their department has no head — ask HR |
+| Someone missing from your team views | They are not assigned to you, and not on a team you manage — ask HR |
+| You manage a team but see nothing of it | You have the appointment and not the grant — ask HR for the Team Manager role |
+| A request cannot be raised: "no approver could be determined" | The team has no manager, nobody is named as HR or CEO, and the employee has no reporting manager — ask HR |
+| A request you could approve yesterday shows no buttons | Another manager of your team has already signed that stage |
 | An employee shows absent but was at work | Check whether the terminal synced. Ask them to raise a correction |
 | Overtime recorded but not paid | Their timesheet for that period is not approved. Approve it, then ask payroll to recalculate |
 | Attendance shows nothing after a device outage | Punches import once the device reconnects; the sync looks back far enough to catch up |

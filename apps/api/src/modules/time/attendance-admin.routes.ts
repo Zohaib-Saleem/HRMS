@@ -20,7 +20,10 @@ import { buildMeta, toSkipTake } from '../../core/pagination.js';
 import { recordAudit } from '../../core/audit.js';
 import { ValidationError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
-import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js';
+import {
+  assertAttendanceEmployeeInScope,
+  attendancePeopleFilter,
+} from '../../auth/scope.js';
 import { dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
 import { resolveAttendancePolicy } from './attendance-policy.js';
 import { EMPLOYMENT_WINDOW_SELECT, attendancePopulationWhere } from './employment-window.js';
@@ -45,7 +48,7 @@ import {
  * day, correct it, read the ledger - and keeping it in its own file means the
  * self-service endpoints stay small enough to read.
  *
- * Every route here is scoped. `employeeScopeFilter` decides which people the
+ * Every route here is scoped. `attendancePeopleFilter` decides which people the
  * caller may see before a single day is derived, so a manager searching the
  * correction centre finds their own team and an employee finds themselves.
  * Correcting anything additionally requires `attendance.manage`.
@@ -161,7 +164,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(attendanceMonthlyQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({
         data: [],
@@ -169,7 +172,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
         totals: emptyMonthlyTotals(),
       });
     }
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const { from, to } = rangeFor(query);
     assertUsableRange(from, to);
@@ -320,7 +323,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
   app.get('/day', async (request, reply) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(attendanceDayQuerySchema, request.query);
-    await assertEmployeeInScope(auth, query.employeeId);
+    await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const data = await attendanceDayDetail({
       companyId: auth.companyId,
@@ -345,7 +348,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const auth = requireAuthContext(request);
       const input = parseOrThrow(attendanceCorrectionSchema, request.body);
-      await assertEmployeeInScope(auth, input.employeeId);
+      await assertAttendanceEmployeeInScope(auth, input.employeeId);
 
       const outcome = await applyCorrection({
         companyId: auth.companyId,
@@ -386,11 +389,11 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const query = parseOrThrow(attendanceAdjustmentQuerySchema, request.query);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     if (scopeFilter === null) {
       return reply.send({ data: [], meta: buildMeta(query.page, query.limit, 0) });
     }
-    if (query.employeeId) await assertEmployeeInScope(auth, query.employeeId);
+    if (query.employeeId) await assertAttendanceEmployeeInScope(auth, query.employeeId);
 
     const where: Prisma.AttendanceAdjustmentWhereInput = {
       AND: [
@@ -440,7 +443,7 @@ export const attendanceAdminRoutes: FastifyPluginAsync = async (app) => {
     const dayKey = query.date ?? todayInZone(policy.timeZone);
     const date = dayKeyToDateColumn(dayKey);
 
-    const scopeFilter = await employeeScopeFilter(auth);
+    const scopeFilter = await attendancePeopleFilter(auth);
     const empty: AttendanceDashboard = {
       date: dayKey,
       truncated: false,

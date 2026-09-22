@@ -129,6 +129,14 @@ describe('what an employee is shown', () => {
     expect(links).not.toContain('Cases');
   });
 
+  it('gives an employee their own equipment requests, and not the queue', () => {
+    expect(EMPLOYEE).toContain(PERMISSIONS.ASSET_REQUEST_READ);
+    expect(EMPLOYEE).not.toContain(PERMISSIONS.ASSET_REQUEST_READ_ALL);
+    expect(EMPLOYEE).not.toContain(PERMISSIONS.ASSET_REQUEST_FULFIL);
+
+    expect(sidebarFor(EMPLOYEE)).toContain('Equipment requests');
+  });
+
   it('is a short list - the point of the exercise', () => {
     /*
      * Twenty before, with the employee's own attendance below Approvals and
@@ -136,8 +144,13 @@ describe('what an employee is shown', () => {
      * genuinely holds a grant for - Settings among it, because every member of
      * staff holds company.read and the screen behind it is the company's own
      * profile, read-only.
+     *
+     * Raised from 17 to 18 when equipment requests landed: asking for a laptop
+     * is an employee's own errand, like leave, and the row is theirs. The cap
+     * exists so that a row added for HR or for a desk cannot drift into this
+     * list unnoticed - it is meant to be argued with, not padded.
      */
-    expect(sidebarFor(EMPLOYEE).length).toBeLessThanOrEqual(17);
+    expect(sidebarFor(EMPLOYEE).length).toBeLessThanOrEqual(18);
   });
 });
 
@@ -191,6 +204,97 @@ describe('the order an employee reads it in', () => {
     }
     // Sections whose every item is hidden are not rendered as bare headings.
     expect(screen.queryByText('Management')).not.toBeInTheDocument();
+  });
+});
+
+describe('the IT asset manager', () => {
+  /*
+   * The sidebar this role gets, and it is worth stating that NOTHING in
+   * nav-config.ts was changed to produce it. Every row below appears or is
+   * absent because of a grant the role holds or does not hold - which is the
+   * whole claim: the navigation permission system already knew how to describe
+   * this person, and what was wrong was the role, not the menu.
+   *
+   * The absences are the interesting half. Team attendance, Attendance
+   * reports, People and the Employee Master Report all gate on
+   * `employee.read`, which this role deliberately does not hold; Payroll on
+   * `payroll.read`; the Correction centre on `attendance.manage`; Devices and
+   * Device punches on `device.read`. None of them arrives.
+   */
+  const IT_ASSET_MANAGER = DEFAULT_ROLE_PERMISSIONS.IT_ASSET_MANAGER;
+
+  it('gets their own work and their own services, like any member of staff', () => {
+    const links = sidebarFor(IT_ASSET_MANAGER);
+
+    for (const label of [
+      'Dashboard',
+      'Attendance',
+      'My leave',
+      'Leave requests',
+      'My corrections',
+      'Approvals',
+      'Lunch',
+      'My cases',
+      'Loans',
+      'Medical',
+      'Payslips',
+      'Holidays',
+      'Shifts',
+      'Organisation',
+    ]) {
+      expect(links).toContain(label);
+    }
+  });
+
+  it('gets the three asset screens, which are the job', () => {
+    const links = sidebarFor(IT_ASSET_MANAGER);
+
+    expect(links).toContain('Asset dashboard');
+    expect(links).toContain('Assets');
+    expect(links).toContain('Asset reports');
+  });
+
+  it('gets no screen about another employee’s attendance', () => {
+    const links = sidebarFor(IT_ASSET_MANAGER);
+
+    for (const label of ['Team attendance', 'Attendance reports', 'Correction centre']) {
+      expect(links).not.toContain(label);
+    }
+    // Because of the grant, not because of the label.
+    expect(IT_ASSET_MANAGER).not.toContain(PERMISSIONS.EMPLOYEE_READ);
+    expect(IT_ASSET_MANAGER).not.toContain(PERMISSIONS.ATTENDANCE_MANAGE);
+  });
+
+  it('gets no HR screen at all', () => {
+    const links = sidebarFor(IT_ASSET_MANAGER);
+
+    for (const label of [
+      'People',
+      'Payroll',
+      'Employee Master Report',
+      'Leave types',
+      'Devices',
+      'Device punches',
+      'Case queue',
+      'Lunch collection',
+      'Candidates',
+      'Interviews',
+      'Recruitment',
+    ]) {
+      expect(links).not.toContain(label);
+    }
+  });
+
+  it('is an employee’s sidebar plus three rows, and no other difference', () => {
+    const employeeLinks = sidebarFor(EMPLOYEE);
+    cleanup();
+    const itLinks = sidebarFor(IT_ASSET_MANAGER);
+
+    const extra = itLinks.filter((label) => !employeeLinks.includes(label));
+    expect(extra.sort()).toEqual(['Asset dashboard', 'Asset reports', 'Assets']);
+
+    const missing = employeeLinks.filter((label) => !itLinks.includes(label));
+    expect(missing).toEqual([]);
   });
 });
 

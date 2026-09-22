@@ -122,6 +122,22 @@ export const DOC_ENTRIES: readonly DocEntry[] = [
     permission: PERMISSIONS.APPROVAL_ACT,
     order: 2,
   },
+  {
+    /*
+     * Readable by everybody, deliberately. Half of it answers "who has to sign
+     * my leave and why has it not moved", which is a question an employee asks
+     * far more often than an administrator does - gating it on the grant that
+     * CONFIGURES the hierarchy would hide the explanation from everybody it is
+     * written for.
+     */
+    slug: 'org-hierarchy',
+    file: 'HRMS-ORG-HIERARCHY-GUIDE.md',
+    title: 'Organisation hierarchy and approvals',
+    summary:
+      'Teams and their managers, what a team manager can see, and the chain a request climbs before it is approved.',
+    category: 'workforce',
+    order: 3,
+  },
 
   // --- time ------------------------------------------------------------------
   {

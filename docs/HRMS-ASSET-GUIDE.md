@@ -165,13 +165,76 @@ sections.
 |---|---|
 | **Super Admin** | everything |
 | **HR Admin** | everything — read, read all, create, update, assign, transfer, return, repair, retire, dispose, category manage, report, acknowledge |
+| **IT Asset Manager** | everything **except `asset.dispose`** — read, read all, create, update, assign, transfer, return, repair, retire, category manage, report, acknowledge |
 | **Manager** | `asset.read` and `asset.acknowledge`. **Not** `asset.read.all`: the assets nobody is holding are the company's stock, not their team's |
 | **Employee** | `asset.read` and `asset.acknowledge`, and nothing else |
 | **Office Boy** | nothing of this module |
+| **Interviewer** | nothing of this module |
 
 An employee holding the widest employee-facing permissions in the product —
 including `employee.manage` and `employee.sensitive.read` — still cannot add,
 edit or assign a single asset.
+
+### The IT Asset Manager role
+
+A seeded system role for the person who looks after the company's equipment and
+nothing else. Give it to them **beside** the Employee role.
+
+**What it is:** every permission an ordinary member of staff holds — their own
+attendance, leave, corrections, approvals, timesheets, payslips, lunch, cases,
+loans and medical — plus the operational grants for the register above. That is
+the whole definition, and the first half of it is a copy of the Employee role
+rather than a reference to it, so a company that later widens what every
+employee may see does not thereby widen this.
+
+**What it is not** is an HR role, and three absences are deliberate:
+
+- **No `employee.read`.** That single grant is what opens People, Team
+  attendance, Attendance reports and the Employee Master Report, and it is half
+  the gate on the company dashboard's figures. An asset manager needs to *pick*
+  a person to hand a laptop to, which is a lookup rather than a directory — see
+  below.
+- **No `asset.dispose`.** Retiring takes a machine out of service and the
+  company still owns it; disposal writes it off for good and nothing comes back
+  from that. Retiring is theirs, disposal stays with HR Admin and Super Admin.
+- **No `attendance.manage`, `leave.manage`, `payroll.*`, `loan.manage` or
+  `medical.manage`.** Everything the holder has in those modules is their own.
+
+**Its data scope is OWN — the narrowest in the system — and that costs the
+register nothing.** `asset.read.all` is checked *before* the data scope is ever
+consulted, so this role sees every asset the company owns from the narrowest
+scope there is. The assign, return, repair and retire routes resolve their
+employee against the **company** rather than against the scope, because issuing
+somebody company property is not a claim to be able to read their record.
+
+> **Scopes union across a user's roles, and the widest wins.** Giving somebody
+> this role alongside a role scoped ALL leaves them at ALL, and an ALL scope
+> hands a holder of `attendance.read` — which everybody holds, for their own
+> record — the whole company's attendance. This role is meant to sit beside
+> **Employee**, which is OWN. If you are replacing a hand-made asset role,
+> remove the old one rather than adding this to it.
+
+### Picking the person to hand it to
+
+The employee chooser on the **Assign**, **Transfer** and **Dispose** dialogs
+reads `GET /assets/employee-lookup`, not the employee directory. It is open to
+whoever holds any one of `asset.assign`, `asset.transfer` or `asset.dispose`,
+and it returns six fields:
+
+**name · employee number · department · team · employment status · work email**
+
+Nothing else is *read from the database* — the restriction is in the query, not
+in a filter applied to the result — so national ID, passport, bank account,
+salary, date of birth, home address, personal email and personal phone are
+never fetched by it. It searches on name, employee number and work email only:
+being able to ask "who is in Finance" and get a list back would make it a
+directory, which is the thing it exists in order not to be.
+
+People who have left are excluded, because you do not issue equipment to
+somebody who has gone — and the assign endpoint refuses them anyway. The one
+exception is the **Approved by** field on a disposal, which records who signed a
+write-off off; that is a historical fact, and the manager who approved one last
+quarter may since have moved on.
 
 ---
 
@@ -255,6 +318,9 @@ holder, and moves the asset to *Assigned*.
 - The holder gets an **in-app notification** asking them to confirm they have
   it. If they have no login account, the handover still happens; there is simply
   nobody to notify.
+- The employee chooser is fed by `/assets/employee-lookup`, which needs no
+  employee-directory grant and returns six fields. See [Picking the person to
+  hand it to](#picking-the-person-to-hand-it-to).
 
 **Transfer** (`asset.transfer`) moves an asset from one person straight to
 another without it coming back. The outgoing assignment ends as *Transferred
@@ -517,8 +583,59 @@ the whole of their write access, and both reach only their own handover.
 They cannot see what a colleague is holding, what anything cost, who had their
 laptop before them, or any asset that is sitting in a cupboard.
 
-A **manager** sees the same for their reporting line, by data scope, and still
-not the unheld stock.
+A **manager** sees the same for their reporting line and for the teams they
+manage, by data scope, and still not the unheld stock.
+
+What an employee may also do is **ask for** equipment — see the next section.
+
+---
+
+## 14a. Requests: asking for kit, and being given it
+
+The one place in this module where an approval chain is involved, and the
+distinction it turns on is the whole reason it exists:
+
+> **Approving a request and fulfilling it are different acts, done by different
+> people, recorded separately.**
+
+```
+Employee asks for a laptop
+        │
+  Team Manager → HR Manager → CEO      ← the chain agrees
+        │
+   APPROVED - awaiting IT
+        │
+  Asset manager picks a machine and issues it
+        │
+   FULFILLED
+```
+
+| Who | Grant | What they can do |
+|---|---|---|
+| Employee | `asset.request.create` | Raise a request for themselves; withdraw it while undecided |
+| Anybody | `asset.request.read` | See their own requests; their team's if they manage one |
+| Approvers | `approval.act` | Decide the stage they are named on, under **Approvals** |
+| Asset manager | `asset.request.read.all` | The queue: every approved request not yet delivered |
+| Asset manager | `asset.request.fulfil` + `asset.assign` | Issue an asset against an approved line, or decline a line with a reason |
+
+**The IT Asset Manager role holds no approval grant at all.** It cannot advance
+a request by one stage, and the fulfilment endpoint refuses anything the chain
+has not finished: *"That request has not finished the approval chain yet.
+Issuing equipment is not an approval."* There is no approve endpoint in the
+module to hold wrongly.
+
+A request names a **category**, never an asset. Which laptop somebody gets is
+chosen at fulfilment time, from the available stock in that category, and the
+handover is an ordinary asset assignment — the same conditional update, the
+same acknowledgement, the same history — carrying the request line's id so the
+request can say how much of it has actually been delivered. Delivery is counted
+from those assignments rather than from a column somebody remembers to tick.
+
+A line the company cannot supply is **declined with a compulsory reason**. The
+request is FULFILLED when every line is either delivered in full or declined.
+
+The chain, the stages and how to configure them are in the
+[organisation hierarchy guide](HRMS-ORG-HIERARCHY-GUIDE.md).
 
 ---
 
@@ -552,7 +669,13 @@ All under `/api/v1`.
 | GET | `/assets/my` | `asset.read` |
 | POST | `/assets/assignments/:id/acknowledge` | `asset.acknowledge` |
 | POST | `/assets/assignments/:id/report-issue` | `asset.acknowledge` |
-| GET | `/employees/:id/assets` | `asset.read` + the employee must be in your data scope |
+| GET | `/assets/employee-lookup` | any one of `asset.assign`, `asset.transfer`, `asset.dispose`. **Not** `employee.read` |
+| GET | `/employees/:id/assets` | `asset.read` + the employee must be in your data scope (or on a team you manage) |
+| GET · POST | `/asset-requests` | read: `asset.request.read` · write: `asset.request.create` |
+| GET | `/asset-requests/:id` | `asset.request.read` |
+| POST | `/asset-requests/:id/cancel` | `asset.request.create`, and only your own |
+| POST | `/asset-requests/:id/fulfil` | `asset.request.fulfil` **and** `asset.assign`, and only once APPROVED |
+| POST | `/asset-requests/:id/decline-item` | `asset.request.fulfil`, and only once APPROVED |
 
 There is **no DELETE** for an asset, a handover, a repair or an incident. The
 omission is the design.
@@ -564,8 +687,11 @@ omission is the design.
 Stated plainly, because this documentation does not describe features that do
 not exist:
 
-- **No approval step.** Assigning, retiring and disposing happen when somebody
-  with the grant does them. They are audited, not routed for approval.
+- **No approval step on a HANDOVER.** Assigning outside a request, retiring and
+  disposing happen when somebody with the grant does them; they are audited,
+  not routed. What IS routed is an employee's REQUEST for equipment — see §14a
+  — and the two are different things: the chain agrees that somebody should
+  have a laptop, and issuing one is still an act by whoever holds the register.
 - **No depreciation schedule.** There is a purchase price and a current value,
   and the current value is a number somebody sets. Nothing calculates it.
 - **No barcode or QR scanning.** The asset tag is typed or searched for.
@@ -586,3 +712,4 @@ not exist:
 - [Admin manual §17](HRMS-ADMIN-MANUAL.md#17-assets) — the operator's walkthrough
 - [Employee guide](HRMS-EMPLOYEE-GUIDE.md#your-assets) — what staff see
 - [Feature matrix](HRMS-FEATURE-MATRIX.md#assets) — implementation status, line by line
+- [Organisation hierarchy guide](HRMS-ORG-HIERARCHY-GUIDE.md) — the chain an equipment request climbs, and who fills each rung

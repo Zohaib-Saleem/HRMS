@@ -4,6 +4,7 @@ import {
   Building2,
   Clock,
   Fingerprint,
+  GitBranch,
   HandCoins,
   FolderTree,
   HeartPulse,
@@ -99,6 +100,17 @@ export const TABS: SettingsTab[] = [
     label: 'Asset management',
     icon: Boxes,
     permission: PERMISSIONS.ASSET_CATEGORY_MANAGE,
+  },
+  {
+    // The approval hierarchy. Gated on `approval.workflow.read`, which HR and
+    // every manager holds - the screen is read-only without
+    // `approval.workflow.manage`, which is Super Admin's alone, and the
+    // endpoint is the real gate either way. The same line the loan and medical
+    // policies already draw.
+    to: '/settings/approval-hierarchy',
+    label: 'Approval hierarchy',
+    icon: GitBranch,
+    permission: PERMISSIONS.APPROVAL_WORKFLOW_READ,
   },
   { to: '/settings/users', label: 'Users', icon: UsersRound, permission: PERMISSIONS.USER_READ },
   { to: '/settings/roles', label: 'Roles and permissions', icon: KeyRound, permission: PERMISSIONS.ROLE_READ },

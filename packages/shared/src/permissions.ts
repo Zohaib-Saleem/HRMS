@@ -15,7 +15,37 @@ export const PERMISSIONS = {
   DEPARTMENT_READ: 'department.read',
   DEPARTMENT_MANAGE: 'department.manage',
   TEAM_READ: 'team.read',
+  /// Maintain teams AND the roster of who manages them. One grant rather than
+  /// two because they are one decision: whoever may create the Development
+  /// team is whoever may say that Manager A and Manager B run it, and splitting
+  /// them would produce an administrator who can make a team nobody can be put
+  /// in charge of.
   TEAM_MANAGE: 'team.manage',
+  /**
+   * See the people on the teams you MANAGE, across the screens where a team
+   * manager has a reason to look: the directory, attendance, leave, approvals,
+   * timesheets and the kit their people are holding.
+   *
+   * A PERMISSION RATHER THAN A DATA SCOPE, and the reasoning is the same one
+   * written on `IT_ASSET_MANAGER` below - only sharper, because this grant is
+   * held by people who also hold `payslip.read` and `loan.read` for their own
+   * pay. Data scopes UNION across a user's roles and the widest wins, so a
+   * TEAM scope added to the enum would have been handed to anybody holding a
+   * team-manager role beside the Employee role, and every module that consults
+   * the scope - payroll, payslips, loans, contracts, salary revisions - would
+   * have widened with it. A manager would have opened their team's payslips.
+   *
+   * So the widening is not in the scope at all. It is this grant, and it is
+   * read by ONE function (`teamScopeFilter`), which is called by the modules
+   * named above and by no other. `employeeScopeFilter` - which payroll, loans
+   * and medical use - never consults it, so those modules cannot widen even by
+   * accident. See `apps/api/src/auth/scope.ts`.
+   *
+   * It is also inert on its own: it reaches the teams the holder has an ACTIVE
+   * `team_managers` row for, so an employee holding it who manages nothing sees
+   * exactly what they saw before.
+   */
+  TEAM_DATA_READ: 'team.data.read',
   DESIGNATION_READ: 'designation.read',
   DESIGNATION_MANAGE: 'designation.manage',
   LOCATION_READ: 'location.read',
@@ -57,6 +87,19 @@ export const PERMISSIONS = {
   APPROVAL_ACT: 'approval.act',
   /// Administrative override: see and act on any request in the company.
   APPROVAL_MANAGE: 'approval.manage',
+  /// See the approval hierarchy: which stages a request passes through, and
+  /// who fills the company-wide ones. Read-only, and worth holding on its own -
+  /// "who has to sign this" is a fair question for anybody raising a request.
+  APPROVAL_WORKFLOW_READ: 'approval.workflow.read',
+  /**
+   * Change the approval hierarchy: the stages of a chain, whether a stage needs
+   * one approver or all of them, and WHO fills the HR Manager and CEO stages.
+   *
+   * The narrowest governance grant in the product and deliberately so: it does
+   * not decide a single request, and it decides who decides every future one.
+   * Held by Super Admin alone unless a company grants it on purpose.
+   */
+  APPROVAL_WORKFLOW_MANAGE: 'approval.workflow.manage',
 
   // --- Time ---
   ATTENDANCE_READ: 'attendance.read',
@@ -376,6 +419,34 @@ export const PERMISSIONS = {
   /// Run the asset reports.
   ASSET_REPORT: 'asset.report',
 
+  // --- Asset requests (asking for kit, as opposed to being given it) ---
+  /// Ask the company for equipment, and withdraw a request nobody has decided
+  /// yet. Held by every member of staff; the endpoint carries no employee id,
+  /// so it can only ever produce the holder's own request.
+  ASSET_REQUEST_CREATE: 'asset.request.create',
+  /// See asset requests your scope reaches - always your own, and your team's
+  /// if you manage one and hold `team.data.read`.
+  ASSET_REQUEST_READ: 'asset.request.read',
+  /// Every asset request in the company. The fulfilment queue, and the grant
+  /// the asset manager's screen is built for.
+  ASSET_REQUEST_READ_ALL: 'asset.request.read.all',
+  /**
+   * Issue kit against an APPROVED request, or decline a line of one with a
+   * reason.
+   *
+   * THIS IS NOT AN APPROVAL GRANT, and the distinction is the point of the
+   * whole feature. The person who looks after the laptops does not become an
+   * approver by looking after the laptops: they cannot advance a request
+   * through a single stage, and holding this grant while the chain is still
+   * running buys them nothing but the ability to watch. What it buys once the
+   * chain has finished is the ability to carry the decision out - which is a
+   * different act, done by a different person, recorded separately.
+   *
+   * Issuing also writes an assignment, so the holder needs `asset.assign` as
+   * well. The route requires both.
+   */
+  ASSET_REQUEST_FULFIL: 'asset.request.fulfil',
+
   // --- Governance ---
   AUDIT_READ: 'audit.read',
   SETTINGS_MANAGE: 'settings.manage',
@@ -399,8 +470,18 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.COMPANY_MANAGE, label: 'Manage company', description: 'Edit company profile and settings.' },
       { value: PERMISSIONS.DEPARTMENT_READ, label: 'View departments', description: 'See the department list.' },
       { value: PERMISSIONS.DEPARTMENT_MANAGE, label: 'Manage departments', description: 'Create, edit and remove departments.' },
-      { value: PERMISSIONS.TEAM_READ, label: 'View teams', description: 'See the team list.' },
-      { value: PERMISSIONS.TEAM_MANAGE, label: 'Manage teams', description: 'Create, edit and remove teams.' },
+      { value: PERMISSIONS.TEAM_READ, label: 'View teams', description: 'See the team list and who manages each team.' },
+      {
+        value: PERMISSIONS.TEAM_MANAGE,
+        label: 'Manage teams',
+        description: 'Create, edit and remove teams, and appoint or replace their managers.',
+      },
+      {
+        value: PERMISSIONS.TEAM_DATA_READ,
+        label: 'See your team as a manager',
+        description:
+          "Reaches the people on the teams you actually manage - their attendance, leave, approvals and kit. Nothing outside those teams, and no payroll, loans or medical whatever the team.",
+      },
       { value: PERMISSIONS.DESIGNATION_READ, label: 'View designations', description: 'See the job title list.' },
       { value: PERMISSIONS.DESIGNATION_MANAGE, label: 'Manage designations', description: 'Create, edit and remove job titles.' },
       { value: PERMISSIONS.LOCATION_READ, label: 'View locations', description: 'See the work location list.' },
@@ -444,6 +525,17 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.APPROVAL_READ, label: 'View approvals', description: 'See requests within your data scope.' },
       { value: PERMISSIONS.APPROVAL_ACT, label: 'Decide approvals', description: 'Approve or reject requests assigned to you.' },
       { value: PERMISSIONS.APPROVAL_MANAGE, label: 'Administer approvals', description: 'See and decide any request in the company.' },
+      {
+        value: PERMISSIONS.APPROVAL_WORKFLOW_READ,
+        label: 'View the approval hierarchy',
+        description: 'See which stages a request passes through and who fills them.',
+      },
+      {
+        value: PERMISSIONS.APPROVAL_WORKFLOW_MANAGE,
+        label: 'Configure the approval hierarchy',
+        description:
+          'Change the stages of a chain and name the people who fill the HR Manager and CEO stages. Decides who decides every future request.',
+      },
     ],
   },
   {
@@ -794,6 +886,27 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
         label: 'Run asset reports',
         description: 'Read the asset reports and export them.',
       },
+      {
+        value: PERMISSIONS.ASSET_REQUEST_CREATE,
+        label: 'Request equipment',
+        description: 'Ask the company for kit, and withdraw a request nobody has decided yet.',
+      },
+      {
+        value: PERMISSIONS.ASSET_REQUEST_READ,
+        label: 'View asset requests',
+        description: 'See equipment requests within your scope - always your own.',
+      },
+      {
+        value: PERMISSIONS.ASSET_REQUEST_READ_ALL,
+        label: 'View every asset request',
+        description: 'See every equipment request in the company, whoever raised it.',
+      },
+      {
+        value: PERMISSIONS.ASSET_REQUEST_FULFIL,
+        label: 'Fulfil approved requests',
+        description:
+          'Issue kit against a request the chain has already approved, or decline a line with a reason. Not an approval grant: it decides nothing.',
+      },
     ],
   },
   {
@@ -869,6 +982,52 @@ export const SYSTEM_ROLES = {
    * installations and on no existing one.
    */
   INTERVIEWER: 'INTERVIEWER',
+  /*
+   * The person who looks after the company's equipment, and nothing else.
+   *
+   * A job rather than a rank, like the office boy and the interviewer - and
+   * like them it exists because roles are seeded and nothing in the API creates
+   * one, so a company that hires somebody to run the asset register should find
+   * the role already there rather than having to assemble it by hand.
+   *
+   * It is the office boy's shape applied to a different job: everything an
+   * ordinary member of staff holds for THEMSELVES, plus the operational grants
+   * for the register, and not one HR grant. Specifically NO `employee.read`,
+   * which is the grant that opens the People screen, Team attendance,
+   * Attendance reports and the Employee Master Report - an asset manager picks
+   * a person to hand a laptop to, which is a lookup, not a directory. That
+   * lookup is `GET /assets/employee-lookup` and it returns six fields.
+   *
+   * The scope is OWN and it costs the role nothing: `asset.read.all`
+   * short-circuits `assetScopeFilter`, so the whole register is visible at the
+   * narrowest scope in the system. See DEFAULT_ROLE_SCOPES.
+   */
+  IT_ASSET_MANAGER: 'IT_ASSET_MANAGER',
+  /*
+   * Somebody who runs a team.
+   *
+   * A RANK rather than a job, unlike the three roles above it - and the first
+   * one in this product whose reach is decided by a row in another table. The
+   * role grants `team.data.read`; the TEAMS it reaches come from
+   * `team_managers`, which an administrator writes on the Teams screen. Hold
+   * the role and manage nothing and you see exactly what an employee sees.
+   *
+   * It exists rather than being folded into `MANAGER` because the two answer
+   * different questions. `MANAGER` is scoped REPORTS_AND_OWN: it reaches the
+   * people whose `managerId` column names you, which is a REPORTING LINE. This
+   * one reaches the people on a TEAM you were put in charge of, which is not
+   * the same set and in most companies is not even the same shape - three
+   * managers share one team of eight, and no `managerId` can say that.
+   *
+   * Its scope is OWN, and that line is load-bearing for the same reason it is
+   * on IT_ASSET_MANAGER: scopes union across a user's roles and the widest
+   * wins, so a role scoped wider than OWN sitting beside the Employee role
+   * would widen `payslip.read` and `loan.read` - which every member of staff
+   * holds for their own pay - to everybody the scope reached. A team manager
+   * must not open their team's payslips. So the widening is a permission the
+   * people-facing modules consult, and pay is not one of them.
+   */
+  TEAM_MANAGER: 'TEAM_MANAGER',
 } as const;
 
 export type SystemRoleKey = (typeof SYSTEM_ROLES)[keyof typeof SYSTEM_ROLES];
@@ -916,6 +1075,18 @@ export const SYSTEM_ROLE_META: Record<
     name: 'Interviewer',
     description:
       'Sits on interview panels: sees the interviews assigned to them and files their own feedback. Reads no candidate salary, no HR notes and no part of the recruitment pipeline.',
+    isProtected: false,
+  },
+  TEAM_MANAGER: {
+    name: 'Team Manager',
+    description:
+      'Runs one or more teams: sees their people, attendance, leave, timesheets and kit, and decides the requests their teams raise. Reaches no other team, no payroll, no loans and no medical information.',
+    isProtected: false,
+  },
+  IT_ASSET_MANAGER: {
+    name: 'IT Asset Manager',
+    description:
+      'Runs the company asset register: adds equipment, hands it out, takes it back, sends it for repair and retires it. For their own attendance, leave and payslips they are an ordinary member of staff - no employee directory, no team attendance, no HR reports, no payroll.',
     isProtected: false,
   },
 };
@@ -1063,6 +1234,24 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.ASSET_CATEGORY_MANAGE,
     PERMISSIONS.ASSET_REPORT,
     PERMISSIONS.ASSET_ACKNOWLEDGE,
+    /*
+     * Asset requests: the whole queue, and the ability to issue against one.
+     * HR already holds every operational grant in the register, so withholding
+     * fulfilment here would only mean HR could hand somebody a laptop but not
+     * record that it answered their request.
+     *
+     * `approval.workflow.read` and not `.manage`. HR runs the hierarchy day to
+     * day - appointing team managers is `team.manage`, which they hold - but
+     * changing the STAGES a request passes through decides who decides every
+     * future request, and that stays with Super Admin until a company hands it
+     * over on purpose. The same line the loan and medical policies already
+     * draw.
+     */
+    PERMISSIONS.ASSET_REQUEST_CREATE,
+    PERMISSIONS.ASSET_REQUEST_READ,
+    PERMISSIONS.ASSET_REQUEST_READ_ALL,
+    PERMISSIONS.ASSET_REQUEST_FULFIL,
+    PERMISSIONS.APPROVAL_WORKFLOW_READ,
   ],
   // Managers hold employee.read, but their DataScope narrows it to their own
   // reporting line - the permission says what, the scope says which.
@@ -1149,6 +1338,19 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     // They are issued a laptop like everybody else, and acknowledging it
     // reaches their own handover and nothing of their team's.
     PERMISSIONS.ASSET_ACKNOWLEDGE,
+    // Asking for kit, and seeing what their people have asked for - the latter
+    // through `team.data.read` below, which a line manager holds so that being
+    // put in charge of a team needs no second role change.
+    PERMISSIONS.ASSET_REQUEST_CREATE,
+    PERMISSIONS.ASSET_REQUEST_READ,
+    /*
+     * Inert until somebody is actually appointed. It reaches the teams the
+     * holder has an active `team_managers` row on, and a line manager who
+     * manages no team sees precisely what they saw before - their reports,
+     * through the REPORTS_AND_OWN scope.
+     */
+    PERMISSIONS.TEAM_DATA_READ,
+    PERMISSIONS.APPROVAL_WORKFLOW_READ,
   ],
   EMPLOYEE: [
     PERMISSIONS.COMPANY_READ,
@@ -1227,6 +1429,16 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
      */
     PERMISSIONS.ASSET_READ,
     PERMISSIONS.ASSET_ACKNOWLEDGE,
+    /*
+     * And asking for kit, which is the second write an employee is trusted
+     * with and is narrower than it sounds: the endpoint carries no employee id,
+     * so a request can only ever be the holder's own, and `asset.request.read`
+     * with an OWN scope returns the holder's own requests and nobody else's.
+     * Asking for a laptop is not being given one - fulfilment needs
+     * `asset.request.fulfil` AND `asset.assign`, and this role holds neither.
+     */
+    PERMISSIONS.ASSET_REQUEST_CREATE,
+    PERMISSIONS.ASSET_REQUEST_READ,
   ],
   /*
    * The office boy, and the list is short on purpose: this role is handed to
@@ -1286,6 +1498,177 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.INTERVIEW_READ,
     PERMISSIONS.INTERVIEW_EVALUATE,
   ],
+  /*
+   * The asset manager: an ordinary member of staff, plus the register.
+   *
+   * The list below is the EMPLOYEE list verbatim, followed by the operational
+   * asset grants. That is the whole design, and it is worth saying why it is
+   * a copy rather than a reference: a role is a list of grants, and a role
+   * defined as "Employee plus these" would silently acquire whatever the
+   * Employee role acquires next. Somebody deciding tomorrow that every employee
+   * may read the company directory must not thereby hand it to this role.
+   *
+   * WHAT IS ABSENT, and each absence is the answer to a question somebody will
+   * ask about this role:
+   *
+   *   - `employee.read`. The big one. It is the grant behind the People screen,
+   *     Team attendance, Attendance reports and the Employee Master Report, and
+   *     it is also half the gate on `/company/stats`. An asset manager needs to
+   *     PICK a person to hand a laptop to, which is a lookup rather than a
+   *     directory, and `GET /assets/employee-lookup` is that lookup: name,
+   *     number, department, team, employment status, work email, and nothing
+   *     else. No CNIC, no bank account, no salary, no date of birth, no
+   *     address, no personal email.
+   *   - `attendance.manage`, `leave.manage`, `payroll.*`, `loan.manage`,
+   *     `medical.manage`. Everything this role holds in those modules is the
+   *     employee's own, narrowed by the OWN data scope below and by the routes
+   *     themselves, exactly as it is for any other member of staff.
+   *   - `asset.dispose`. Retiring an asset takes it out of service and it is
+   *     still the company's; disposal writes it off for good and nothing comes
+   *     back from it. The module already treats that as the narrowest grant it
+   *     has, and it stays with HR Admin and Super Admin.
+   *
+   * `asset.transfer` IS here, although moving an asset straight from one desk
+   * to another is not on the face of it more than assigning and returning. It
+   * is here because those two ARE the alternative: without it, an IT manager
+   * handing a laptop from one person to the next has to record a return to
+   * stock that never happened, and the register's history - the thing somebody
+   * reads six months later - would say the machine came back when it did not.
+   *
+   * `asset.category.manage` is here for the narrower reason that
+   * `assetCreateSchema` requires a `categoryId` and the catalogue is the only
+   * source of one. A role that may add equipment to the register and may not
+   * name a kind of equipment is a role that stops working the first time
+   * somebody buys a type of thing the company has not bought before.
+   */
+  /*
+   * The team manager.
+   *
+   * Read this list for what is ABSENT as much as for what is here. There is no
+   * `payroll.read`, no `loan.manage`, no `medical.manage`, no
+   * `employee.sensitive.read`, no `employee.manage` and no `asset.read.all`.
+   * The four grants that do touch money or health - `payslip.read`,
+   * `loan.read`, `medical.read`, `medical.claim.request` - are here because
+   * this person has their own pay and their own benefit like everybody else,
+   * and they reach exactly that: the role is scoped OWN and the modules behind
+   * those grants consult the SCOPE, never `team.data.read`.
+   *
+   * What the role does buy is the team: the directory, attendance, leave,
+   * timesheets, approvals and the kit their people are holding, for the teams
+   * they have an active `team_managers` row on and for no others.
+   */
+  TEAM_MANAGER: [
+    // ---- Everything an ordinary member of staff holds. ----
+    PERMISSIONS.COMPANY_READ,
+    PERMISSIONS.DEPARTMENT_READ,
+    PERMISSIONS.TEAM_READ,
+    PERMISSIONS.DESIGNATION_READ,
+    PERMISSIONS.LOCATION_READ,
+    PERMISSIONS.ATTENDANCE_READ,
+    PERMISSIONS.SHIFT_READ,
+    PERMISSIONS.TIMESHEET_READ,
+    PERMISSIONS.TIMESHEET_MANAGE,
+    PERMISSIONS.LEAVE_READ,
+    PERMISSIONS.LEAVE_REQUEST,
+    PERMISSIONS.HOLIDAY_READ,
+    PERMISSIONS.PAYSLIP_READ,
+    PERMISSIONS.CONTRACT_READ,
+    PERMISSIONS.POLICY_READ,
+    PERMISSIONS.LOAN_READ,
+    PERMISSIONS.LOAN_REQUEST,
+    PERMISSIONS.MEDICAL_READ,
+    PERMISSIONS.MEDICAL_CLAIM_REQUEST,
+    PERMISSIONS.CASE_READ_OWN,
+    PERMISSIONS.CASE_CREATE,
+    PERMISSIONS.CASE_REPLY_OWN,
+    PERMISSIONS.CASE_REOPEN_OWN,
+    PERMISSIONS.LUNCH_ORDER_CREATE,
+    PERMISSIONS.LUNCH_ORDER_READ_OWN,
+    PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+    PERMISSIONS.ASSET_READ,
+    PERMISSIONS.ASSET_ACKNOWLEDGE,
+    PERMISSIONS.ASSET_REQUEST_CREATE,
+    PERMISSIONS.ASSET_REQUEST_READ,
+
+    // ---- And the team, which is the rank. ----
+    /*
+     * The directory grant. On its own with an OWN scope it reaches the holder
+     * and nobody else; beside `team.data.read` and an active appointment it
+     * reaches the team. It is also the grant `attendancePeopleFilter` requires
+     * before it will serve ANOTHER person's attendance, which is why a team
+     * manager can open their team's attendance and the office boy cannot.
+     */
+    PERMISSIONS.EMPLOYEE_READ,
+    PERMISSIONS.TEAM_DATA_READ,
+    /*
+     * The approval grants are the other half of the job. `approval.act` decides
+     * only the steps this person is actually named on - the engine checks the
+     * approver set, not the permission - so it is the ability to sign for the
+     * team and nothing wider. No `approval.manage`: the administrative override
+     * reaches every request in the company.
+     */
+    PERMISSIONS.APPROVAL_READ,
+    PERMISSIONS.APPROVAL_ACT,
+    /// So they can see what they are part of. Reading the chain is not
+    /// configuring it.
+    PERMISSIONS.APPROVAL_WORKFLOW_READ,
+  ],
+  IT_ASSET_MANAGER: [
+    // ---- Everything an ordinary member of staff holds, and no more. ----
+    PERMISSIONS.COMPANY_READ,
+    PERMISSIONS.DEPARTMENT_READ,
+    PERMISSIONS.TEAM_READ,
+    PERMISSIONS.DESIGNATION_READ,
+    PERMISSIONS.LOCATION_READ,
+    PERMISSIONS.APPROVAL_READ,
+    PERMISSIONS.ATTENDANCE_READ,
+    PERMISSIONS.SHIFT_READ,
+    PERMISSIONS.TIMESHEET_READ,
+    PERMISSIONS.TIMESHEET_MANAGE,
+    PERMISSIONS.LEAVE_READ,
+    PERMISSIONS.LEAVE_REQUEST,
+    PERMISSIONS.HOLIDAY_READ,
+    PERMISSIONS.PAYSLIP_READ,
+    PERMISSIONS.CONTRACT_READ,
+    PERMISSIONS.POLICY_READ,
+    PERMISSIONS.LOAN_READ,
+    PERMISSIONS.LOAN_REQUEST,
+    PERMISSIONS.MEDICAL_READ,
+    PERMISSIONS.MEDICAL_CLAIM_REQUEST,
+    PERMISSIONS.CASE_READ_OWN,
+    PERMISSIONS.CASE_CREATE,
+    PERMISSIONS.CASE_REPLY_OWN,
+    PERMISSIONS.CASE_REOPEN_OWN,
+    PERMISSIONS.LUNCH_ORDER_CREATE,
+    PERMISSIONS.LUNCH_ORDER_READ_OWN,
+    PERMISSIONS.LUNCH_ORDER_CANCEL_OWN,
+
+    // ---- And the register, which is the job. ----
+    PERMISSIONS.ASSET_READ,
+    PERMISSIONS.ASSET_READ_ALL,
+    PERMISSIONS.ASSET_CREATE,
+    PERMISSIONS.ASSET_UPDATE,
+    PERMISSIONS.ASSET_ASSIGN,
+    PERMISSIONS.ASSET_TRANSFER,
+    PERMISSIONS.ASSET_RETURN,
+    PERMISSIONS.ASSET_REPAIR,
+    PERMISSIONS.ASSET_RETIRE,
+    PERMISSIONS.ASSET_CATEGORY_MANAGE,
+    PERMISSIONS.ASSET_REPORT,
+    // They are issued a laptop like everybody else.
+    PERMISSIONS.ASSET_ACKNOWLEDGE,
+    /*
+     * Asset requests, from the FULFILMENT side - and note which grant is not
+     * here. The queue (`read.all`) and the ability to carry out a decision
+     * somebody else made (`fulfil`), but no `approval.act`: the person who
+     * looks after the laptops does not approve the request for one. They
+     * receive it already approved and hand the machine over.
+     */
+    PERMISSIONS.ASSET_REQUEST_CREATE,
+    PERMISSIONS.ASSET_REQUEST_READ,
+    PERMISSIONS.ASSET_REQUEST_READ_ALL,
+    PERMISSIONS.ASSET_REQUEST_FULFIL,
+  ],
 };
 
 /** Default data scope per system role, applied when Phase 2 seeds roles. */
@@ -1310,4 +1693,41 @@ export const DEFAULT_ROLE_SCOPES: Record<SystemRoleKey, DataScope> = {
    * reaches their own record and stops.
    */
   INTERVIEWER: DATA_SCOPES.OWN,
+  /*
+   * OWN, and this is the single most important line in the role.
+   *
+   * Scope is what decides WHICH PEOPLE a grant reaches, and `attendance.read` -
+   * which this role holds, because the holder has their own attendance like
+   * anybody else - reaches every employee the scope reaches. A role built for
+   * this job with an ALL scope is handed the whole company's attendance through
+   * `/attendance/team` without holding a single HR permission, which is exactly
+   * how the hand-made `IT_MANAGER` role this one replaces came to be showing
+   * one person the company's present/absent/late figures. The same is true of
+   * leave, loans, timesheets and payslips.
+   *
+   * And it costs the register nothing. `asset.read.all` short-circuits
+   * `assetScopeFilter` before it ever consults the data scope, so this role
+   * sees every asset the company owns from the narrowest scope in the system.
+   * The asset lookup, assign, return, repair and retire routes resolve their
+   * employee by id against the COMPANY rather than against the scope, so they
+   * work unchanged.
+   *
+   * Note for whoever assigns this role: scopes UNION across a user's roles and
+   * the widest wins (`widestScope`, auth/scope.ts). Giving somebody this role
+   * ALONGSIDE a role scoped ALL leaves them at ALL. It is meant to sit beside
+   * Employee, which is OWN.
+   */
+  IT_ASSET_MANAGER: DATA_SCOPES.OWN,
+  /*
+   * OWN, and it is the same decision as the two above for a sharper reason.
+   *
+   * A team manager's reach is not a scope at all: it is `team.data.read`
+   * crossed with the teams they have an ACTIVE appointment on, read by
+   * `teamScopeFilter` and by nothing in payroll, loans, contracts or medical.
+   * Giving the role a wider scope would not widen the team - the appointment
+   * already does that - it would only widen the modules that were deliberately
+   * left out, starting with their team's payslips. So the scope stays at the
+   * narrowest value in the system and the appointment does the work.
+   */
+  TEAM_MANAGER: DATA_SCOPES.OWN,
 };

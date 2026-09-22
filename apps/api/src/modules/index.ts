@@ -9,11 +9,14 @@ import { auditRoutes } from './audit/audit.routes.js';
 import { docsRoutes } from './docs/docs.routes.js';
 import { departmentRoutes } from './organisation/departments.routes.js';
 import { teamRoutes } from './organisation/teams.routes.js';
+import { teamManagerRoutes } from './organisation/team-managers.routes.js';
+import { orgHierarchyRoutes } from './organisation/org-hierarchy.routes.js';
 import { designationRoutes } from './organisation/designations.routes.js';
 import { locationRoutes } from './organisation/locations.routes.js';
 import { employeeRoutes } from './employees/employees.routes.js';
 import { employeePhotoRoutes } from './employees/employee-photo.routes.js';
 import { approvalRoutes } from './approvals/approvals.routes.js';
+import { approvalWorkflowRoutes } from './approvals/approval-workflows.routes.js';
 import { notificationRoutes } from './notifications/notifications.routes.js';
 import {
   attendanceDeviceRoutes,
@@ -73,6 +76,8 @@ import { assetLifecycleRoutes } from './assets/asset-lifecycle.routes.js';
 import { assetSelfRoutes } from './assets/asset-self.routes.js';
 import { assetDocumentRoutes } from './assets/asset-documents.routes.js';
 import { assetEmployeeRoutes } from './assets/asset-employees.routes.js';
+import { assetEmployeeLookupRoutes } from './assets/asset-employee-lookup.routes.js';
+import { assetRequestRoutes } from './assets/asset-requests.routes.js';
 import { assetDashboardRoutes } from './assets/asset-dashboard.routes.js';
 import { assetReportRoutes } from './assets/asset-reports.routes.js';
 import {
@@ -106,6 +111,11 @@ export const modules: ModuleDefinition[] = [
   // --- phase 2: organisation and people ---------------------------------
   { prefix: '/departments', plugin: departmentRoutes },
   { prefix: '/teams', plugin: teamRoutes },
+  // A separate plugin on the same prefix, for the reason the employee photo
+  // routes are: the roster's GET needs `team.read` and its writes need
+  // `team.manage`, which is a different gate from the one `teamRoutes` sets.
+  { prefix: '/teams', plugin: teamManagerRoutes },
+  { prefix: '/organisation', plugin: orgHierarchyRoutes },
   { prefix: '/designations', plugin: designationRoutes },
   { prefix: '/locations', plugin: locationRoutes },
   { prefix: '/employees', plugin: employeeRoutes },
@@ -115,6 +125,9 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/employees', plugin: employeePhotoRoutes },
 
   // --- phase 3: approvals, notifications and the time foundation ---------
+  // Registered BEFORE `/approvals`, because `/approvals/hierarchy` is a static
+  // segment that must not be swallowed by `/approvals/:id`.
+  { prefix: '/approvals/hierarchy', plugin: approvalWorkflowRoutes },
   { prefix: '/approvals', plugin: approvalRoutes },
   { prefix: '/notifications', plugin: notificationRoutes },
   { prefix: '/attendance', plugin: attendanceRoutes },
@@ -289,10 +302,20 @@ export const modules: ModuleDefinition[] = [
   //     grant is permission to EXPORT what you can already see, never
   //     permission to see more.
   //
-  // `/assets/my`, `/assets/assignments/...`, `/assets/dashboard` and
-  // `/assets/reports/...` are static segments and are matched ahead of
-  // `/assets/:id` regardless of registration order.
+  //   - the EMPLOYEE LOOKUP plugin needs any one of `asset.assign`,
+  //     `asset.transfer` or `asset.dispose`, and deliberately NOT
+  //     `employee.read`. It is the six fields it takes to pick the person you
+  //     are handing a laptop to, and it exists so that running the register
+  //     does not require the grant that opens the HR screens. See the file.
+  //
+  // `/assets/my`, `/assets/assignments/...`, `/assets/dashboard`,
+  // `/assets/employee-lookup` and `/assets/reports/...` are static segments and
+  // are matched ahead of `/assets/:id` regardless of registration order.
   { prefix: '/assets/categories', plugin: assetCategoryRoutes },
+  { prefix: '/assets', plugin: assetEmployeeLookupRoutes },
+  // Its own prefix rather than a route under `/assets`: an asset request is
+  // not an asset, and nothing in this plugin reads the register's gates.
+  { prefix: '/asset-requests', plugin: assetRequestRoutes },
   { prefix: '/assets', plugin: assetDashboardRoutes },
   { prefix: '/assets', plugin: assetReportRoutes },
   { prefix: '/assets', plugin: assetSelfRoutes },

@@ -32,7 +32,15 @@ vi.mock('../../core/db.js', () => ({ prisma: db }));
 const { attendanceAnalyticsRoutes } = await import('./attendance-analytics.routes.js');
 const { registerErrorHandler } = await import('../../core/error-handler.js');
 
-const VIEWER: Permission[] = [PERMISSIONS.ATTENDANCE_READ];
+/*
+ * The caller these tests model is somebody reading OTHER PEOPLE'S attendance -
+ * a manager or an HR administrator - and since `attendancePeopleFilter` landed
+ * that takes `employee.read` alongside `attendance.read`. Both real roles hold
+ * both grants; a caller with only `attendance.read` is now narrowed to their
+ * own record however wide their data scope is, which is asserted on its own in
+ * attendance-self-only.test.ts rather than here.
+ */
+const VIEWER: Permission[] = [PERMISSIONS.ATTENDANCE_READ, PERMISSIONS.EMPLOYEE_READ];
 const OUTSIDER: Permission[] = [PERMISSIONS.EMPLOYEE_READ];
 
 async function appAs(

@@ -15,7 +15,7 @@ import {
 import { prisma } from '../../core/db.js';
 import { NotFoundError, ValidationError } from '../../core/errors.js';
 import { isValidTimeZone, todayInZone } from '../../core/zoned-time.js';
-import { employeeScopeFilter } from '../../auth/scope.js';
+import { teamScopeFilter } from '../../auth/scope.js';
 import type { AuthContext } from '../../auth/session.js';
 
 /**
@@ -68,7 +68,7 @@ export function resolveAssetActor(auth: AuthContext): AssetActor {
  * The WHERE fragment narrowing assets to what this caller may read.
  *
  * Returns `null` for "no rows", which callers must treat as no rows rather than
- * as no filter - the same contract `employeeScopeFilter` keeps, and the same
+ * as no filter - the same contract `teamScopeFilter` keeps, and the same
  * expensive mistake to make silently. Here the expensive version hands the whole
  * asset register to somebody who should see one laptop.
  *
@@ -83,7 +83,7 @@ export async function assetScopeFilter(
 ): Promise<Prisma.AssetWhereInput | null> {
   if (actor.canReadAll) return {};
 
-  const people = await employeeScopeFilter(actor.auth);
+  const people = await teamScopeFilter(actor.auth);
   if (people === null) return null;
 
   return { assignments: { some: { status: 'ACTIVE', employee: people } } };

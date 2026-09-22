@@ -399,6 +399,13 @@ model Company {
   assetIncidents   AssetIncident[]
   assetDocuments   AssetDocument[]
 
+  // --- organisation hierarchy and multi-level approvals ---
+  teamManagers           TeamManager[]
+  approvalWorkflows      ApprovalWorkflow[]
+  approvalStageAssignees ApprovalStageAssignee[]
+  assetRequests          AssetRequest[]
+  assetRequestItems      AssetRequestItem[]
+
   @@map("companies")
 }
 
@@ -526,6 +533,17 @@ model Team {
   description  String?
   isActive     Boolean @default(true)
 
+  /**
+   * SUPERSEDED by `TeamManager`, and left in place only so that rolling this
+   * release back does not lose what it held.
+   * It could never be the manager relationship this product needs: it is ONE
+   * employee, and it is `@unique`, so a team could have a single lead and a
+   * lead could hold a single team. A team has one to three managers and a
+   * manager may run more than one team, which is two facts this column cannot
+   * represent. The migration that introduced `team_managers` copied every lead
+   * into it as an active manager, and nothing reads or writes this column any
+   * more - the roster is the single source of truth for who runs a team.
+   */
   leadEmployeeId String?   @unique
   leadEmployee   Employee? @relation("TeamLead", fields: [leadEmployeeId], references: [id], onDelete: SetNull)
 
@@ -539,9 +557,76 @@ model Team {
   /// Which team the vacancy is for, where the department alone is too coarse.
   jobOpenings JobOpening[]
 
+  /// Who runs this team. One to three active rows; see `TeamManager`.
+  managers TeamManager[]
+
   @@unique([departmentId, name])
   @@index([companyId, isActive])
   @@map("teams")
+}
+
+/**
+ * Who runs a team.
+ * AN EXPLICIT ROW, and that is the entire point of the model. Nothing in this
+ * product decides that somebody manages a team because their job title says
+ * Manager, because they head the department the team sits in, because their
+ * role is called MANAGER, or because their name appears above other names on
+ * an org chart. A person manages a team when a row exists here saying so, and
+ * an administrator put it there.
+ * ONE TO THREE ACTIVE MANAGERS. The floor is advisory - a team whose only
+ * manager resigns must be allowed to exist for the hour it takes HR to name a
+ * replacement, and refusing the removal would leave the leaver in charge. The
+ * CEILING IS ENFORCED, in the service layer, inside the transaction that
+ * writes the row: a count of active rows for the team is taken and the insert
+ * is refused at three. A partial unique index cannot express "at most three",
+ * and Prisma cannot describe one in any case.
+ * ACTIVE, NOT DELETED. Replacing a manager ends their row - `isActive` false,
+ * `endedAt`, who ended it and why - and inserts the successor's. The history of
+ * who ran a team is a thing companies are asked about, and a DELETE answers it
+ * with silence. The same row also keeps an in-flight approval honest: a step
+ * already routed to a departed manager still says who it was routed to.
+ * AN INACTIVE EMPLOYEE CANNOT HOLD AN ACTIVE ROW. Enforced in the service
+ * layer on the way in, and again by the resolver on the way out: an approval
+ * stage never resolves to an employee whose status is not ACTIVE, whatever
+ * this table says, so a manager who is terminated tonight cannot silently
+ * become the reason nobody's leave can be approved tomorrow.
+ */
+model TeamManager {
+  id         String @id @default(cuid())
+  companyId  String
+  teamId     String
+  employeeId String
+
+  isActive Boolean @default(true)
+
+  assignedAt       DateTime  @default(now())
+  assignedByUserId String?
+  endedAt          DateTime?
+  endedByUserId    String?
+  /// Why the row was ended - "left the company", "moved to Design". Free text,
+  /// because the reasons are not a closed set and a wrong enum value is worse
+  /// than a sentence somebody wrote.
+  endReason        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  employee Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  endedBy  Employee? @relation("TeamManagerEndedBy", fields: [endedByEmployeeId], references: [id], onDelete: SetNull)
+
+  /// Who ended the appointment, as an employee rather than a user, so the name
+  /// survives the account being deleted.
+  endedByEmployeeId String?
+
+  /// One row per person per team. Re-appointing somebody reactivates the row
+  /// they already have rather than writing a second one, so the pair stays
+  /// unique and the history stays on one row.
+  @@unique([teamId, employeeId])
+  @@index([companyId, employeeId, isActive])
+  @@index([teamId, isActive])
+  @@map("team_managers")
 }
 
 model Employee {
@@ -784,6 +869,20 @@ model Employee {
   assetIncidents   AssetIncident[]   @relation("AssetIncidentEmployee")
   /// Disposals this person signed off.
   assetDisposals   Asset[]           @relation("AssetDisposalApprover")
+
+  // --- organisation hierarchy and multi-level approvals ---
+  /// The teams this person manages, past and present. See `TeamManager`.
+  teamManagerships   TeamManager[]
+  /// Company-wide approval seats held by this person - HR Manager, CEO.
+  approvalStageSeats ApprovalStageAssignee[]
+  /// Every approval step this person is one of the named approvers on. The
+  /// step's `approverEmployeeId` is a display convenience; THIS is authority.
+  approvalStepSeats  ApprovalStepApprover[]
+  /// Equipment this person has asked for.
+  assetRequests      AssetRequest[]
+  /// Team-manager rows this person ended, and asset requests they decided on
+  /// behalf of the register. Both nullable on the other side.
+  teamManagersEnded  TeamManager[]           @relation("TeamManagerEndedBy")
 
   @@unique([companyId, employeeNumber])
   @@index([companyId, status])
@@ -1064,6 +1163,43 @@ enum ApprovalSubjectType {
   /// An employee asking for a salary advance or loan. Same engine as every
   /// other request; the loan record is the subject.
   LOAN_REQUEST
+  /// An employee asking for equipment - a laptop, a monitor, a headset. The
+  /// chain agrees to the request; ISSUING the kit is a separate act by the
+  /// asset manager, and the engine has nothing to do with it.
+  ASSET_REQUEST
+}
+
+/**
+ * Which rung of the organisation fills an approval stage.
+ * A stage is a JOB, not a person. `TEAM_MANAGER` resolves, at submission time,
+ * to the active managers of the requester's own team; `HR_MANAGER` and `CEO`
+ * resolve to the people a company has explicitly named in
+ * `ApprovalStageAssignee`. Neither is ever inferred from a job title, a
+ * designation, a department name or a role name - inference is exactly how an
+ * approval chain comes to route a request to somebody who happens to be called
+ * "Manager, Facilities".
+ * `LINE_MANAGER` and `DEPARTMENT_HEAD` are the chain this product had before
+ * stages existed - the requester's own `managerId`, then their department head.
+ * They are kept because attendance corrections, shift changes, timesheets and
+ * loans still use them, and because they are the fallback when a company has
+ * configured no hierarchy at all.
+ */
+enum ApprovalStage {
+  TEAM_MANAGER
+  HR_MANAGER
+  CEO
+  LINE_MANAGER
+  DEPARTMENT_HEAD
+}
+
+/// How many of a stage's approvers have to agree before the stage is done.
+enum ApprovalStageMode {
+  /// The first decision carries the stage. The default, and what a team with
+  /// three managers wants: any one of them may sign, and once one has, the
+  /// other two see a completed stage rather than a second button.
+  ANY_ONE
+  /// Every named approver must approve. One rejection still ends the request.
+  ALL
 }
 
 enum NotificationType {
@@ -1237,9 +1373,28 @@ model ApprovalStep {
   approvalRequestId String
   stepOrder         Int
 
-  /// Either a named employee, or a role key resolved at decision time.
+  /**
+   * The step's named owner, for display and for the chains that predate
+   * stages. AUTHORITY LIVES IN `approvers`, never here: a stage filled by three
+   * team managers has three rows there and, having no single owner, null here.
+   * A step that resolves to exactly one person carries that person in both,
+   * which is what lets every row written before `approval_step_approvers`
+   * existed keep working - the migration copied each one across.
+   */
   approverEmployeeId String?
   approverRoleKey    String?
+
+  /**
+   * Which rung of the organisation this step was filled from, recorded at
+   * submission time. Null on the chains raised before stages existed.
+   * Written down rather than recomputed because it is the question asked six
+   * months later - "who approved this, and as what?" - and the answer must not
+   * change when somebody is moved to another team.
+   */
+  stage ApprovalStage?
+  /// ANY_ONE or ALL, copied from the workflow at submission time for the same
+  /// reason: re-reading the workflow later would re-decide settled history.
+  mode  ApprovalStageMode @default(ANY_ONE)
 
   status          ApprovalStatus @default(PENDING)
   decidedByUserId String?
@@ -1249,8 +1404,9 @@ model ApprovalStep {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  approvalRequest  ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
-  approverEmployee Employee?       @relation("ApprovalApprover", fields: [approverEmployeeId], references: [id], onDelete: SetNull)
+  approvalRequest  ApprovalRequest        @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+  approverEmployee Employee?              @relation("ApprovalApprover", fields: [approverEmployeeId], references: [id], onDelete: SetNull)
+  approvers        ApprovalStepApprover[]
 
   @@unique([approvalRequestId, stepOrder])
   @@index([approverEmployeeId, status])
@@ -1275,6 +1431,113 @@ model ApprovalEvent {
 
   @@index([approvalRequestId, createdAt])
   @@map("approval_events")
+}
+
+/**
+ * One named approver on one step.
+ * This table is what makes "any one of the three managers" expressible. The
+ * step holds the stage and the mode; this holds the candidates and, once
+ * somebody decides, WHICH of them decided and what they said. A stage in
+ * ANY_ONE mode completes on the first APPROVED row here; a stage in ALL mode
+ * completes when no PENDING row is left. Either way one REJECTED row ends the
+ * whole request.
+ * Rows are never deleted when the roster changes. A manager who left the
+ * company keeps their seat on the requests that were already in flight, so the
+ * history says who was asked - and an administrator with `approval.manage`
+ * overrides the step if nobody remaining can sign it.
+ */
+model ApprovalStepApprover {
+  id             String @id @default(cuid())
+  approvalStepId String
+  employeeId     String
+
+  status          ApprovalStatus @default(PENDING)
+  decidedByUserId String?
+  decidedAt       DateTime?
+  comment         String?
+
+  createdAt DateTime @default(now())
+
+  approvalStep ApprovalStep @relation(fields: [approvalStepId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([approvalStepId, employeeId])
+  @@index([employeeId, status])
+  @@map("approval_step_approvers")
+}
+
+/**
+ * The approval chain a company uses for one kind of request.
+ * Configuration, not code: the default chain lives in the shared package
+ * (`DEFAULT_APPROVAL_STAGES`) and is used when a company has stored no
+ * workflow, so a fresh installation routes leave through Team Manager, HR
+ * Manager and CEO without anybody configuring anything. A row here overrides
+ * that for one subject type, and only for the company that owns it.
+ */
+model ApprovalWorkflow {
+  id          String              @id @default(cuid())
+  companyId   String
+  subjectType ApprovalSubjectType
+  name        String
+  isActive    Boolean             @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  stages  ApprovalWorkflowStage[]
+
+  @@unique([companyId, subjectType])
+  @@map("approval_workflows")
+}
+
+/// One rung of a configured chain. Sequential: stageOrder 1 decides first.
+model ApprovalWorkflowStage {
+  id         String            @id @default(cuid())
+  workflowId String
+  stageOrder Int
+  stage      ApprovalStage
+  mode       ApprovalStageMode @default(ANY_ONE)
+  isActive   Boolean           @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workflow ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, stageOrder])
+  @@map("approval_workflow_stages")
+}
+
+/**
+ * Who fills a company-wide approval stage.
+ * `TEAM_MANAGER` is not configured here - it is answered by the team roster,
+ * which is the whole point of `TeamManager`. `HR_MANAGER` and `CEO` have no
+ * such roster, and the alternative to naming them is guessing from a
+ * designation called "Chief Executive Officer", which is precisely the
+ * inference this feature exists to remove.
+ * Several people may hold one seat: two HR managers, an acting CEO. The
+ * stage's mode decides whether one of them is enough.
+ */
+model ApprovalStageAssignee {
+  id         String        @id @default(cuid())
+  companyId  String
+  stage      ApprovalStage
+  employeeId String
+  isActive   Boolean       @default(true)
+
+  assignedAt       DateTime @default(now())
+  assignedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, stage, employeeId])
+  @@index([companyId, stage, isActive])
+  @@map("approval_stage_assignees")
 }
 
 // -------------------------------------------------------------- notifications
@@ -5101,6 +5364,11 @@ model AssetCategory {
   /// TYPES (which always have a parent) and cannot constrain groups, whose
   /// parent is null. Duplicate group names are refused in the route instead -
   /// the database cannot express the rule and pretending otherwise is worse
+  /// The request lines asking for something of this kind. Restrict on the
+  /// other side: a category somebody has asked for cannot be deleted out from
+  /// under the request.
+  requestItems AssetRequestItem[]
+
   /// than stating where it lives.
   @@unique([companyId, parentCategoryId, name])
   /// The catalogue endpoint's query: this company's live categories, in order.
@@ -5336,12 +5604,24 @@ model AssetAssignment {
 
   incidents AssetIncident[]
 
+  /**
+   * The approved request line this handover FULFILS, where there was one.
+   * Nullable and always will be: most kit is issued because somebody asked for
+   * it in person, and an assignment made that way is not less of an
+   * assignment. What the column buys is the other direction - an approved
+   * request can say how much of it has actually been delivered without a
+   * second bookkeeping table, because the assignments ARE the delivery.
+   */
+  assetRequestItemId String?
+  assetRequestItem   AssetRequestItem? @relation(fields: [assetRequestItemId], references: [id], onDelete: SetNull)
+
   /// "Who has this now" and "what has this person got", both as index lookups
   /// rather than scans. The first is read on every row of the register.
   @@index([assetId, status])
   @@index([companyId, employeeId, status])
   @@index([companyId, status])
   @@index([assetId, assignedAt])
+  @@index([assetRequestItemId])
   @@map("asset_assignments")
 }
 
@@ -5508,4 +5788,112 @@ model AssetDocument {
   @@index([assetId, createdAt])
   @@index([repairId])
   @@map("asset_documents")
+}
+
+// ----------------------------------------------------------- asset requests
+
+/**
+ * Where an asset request has got to.
+ * PENDING, APPROVED, REJECTED and CANCELLED are the approval engine's own
+ * statuses, mirrored here so the request list reads without joining the
+ * approval tables - exactly as `LeaveRequest.status` already does.
+ * FULFILLED is the one that is NOT the engine's, and it is the distinction
+ * section 7 is built around: APPROVED means the company has agreed to give
+ * somebody a laptop, and FULFILLED means the asset manager has actually handed
+ * one over. A request sits in APPROVED for as long as it takes, and an asset
+ * manager cannot move it out of that state by approving anything - only by
+ * issuing the kit.
+ */
+enum AssetRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  FULFILLED
+}
+
+/**
+ * An employee asking the company for equipment.
+ * The request is a LIST - a laptop, two monitors, a headset - because that is
+ * how people ask, and because splitting it into three requests would send the
+ * same chain the same question three times.
+ * It carries no asset. An asset is a specific machine with a tag on it, and
+ * choosing which one is the asset manager's job at fulfilment time, after the
+ * chain has agreed. A request that named an asset up front would be a
+ * reservation, which is a different feature and one nobody asked for.
+ */
+model AssetRequest {
+  id         String @id @default(cuid())
+  companyId  String
+  employeeId String
+
+  status AssetRequestStatus @default(PENDING)
+
+  /// Why they need it. Compulsory on the form - a chain of three people cannot
+  /// decide "laptop" - and the summary the approvers are shown.
+  justification String
+  /// When they need it by, where that matters. Optional.
+  neededBy      DateTime? @db.Date
+
+  /// The chain deciding this request. One-to-one, and the same shape
+  /// `LeaveRequest` uses.
+  approvalRequestId String? @unique
+
+  decidedAt   DateTime?
+  cancelledAt DateTime?
+
+  /// When the LAST outstanding line was issued or declined. Written by the
+  /// fulfilment path only, never by an approval.
+  fulfilledAt       DateTime?
+  fulfilledByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  items    AssetRequestItem[]
+
+  @@index([companyId, status])
+  @@index([companyId, employeeId, status])
+  @@map("asset_requests")
+}
+
+/**
+ * One line of a request: a category and how many.
+ * A CATEGORY, not an asset - "a laptop", not "GE-LAP-014". The category
+ * catalogue already exists and is what the register is organised by, so the
+ * request speaks the register's own language and the asset manager filtering
+ * for something to issue is filtering by the thing that was asked for.
+ * Delivery is counted from `assignments`, which are ordinary asset
+ * assignments carrying this line's id. A line is satisfied when it has as many
+ * as were asked for, or when the asset manager declines it with a reason -
+ * "we have no spare monitors until April" is an answer, and leaving the line
+ * open forever is not.
+ */
+model AssetRequestItem {
+  id             String @id @default(cuid())
+  companyId      String
+  assetRequestId String
+  categoryId     String
+
+  quantity Int     @default(1)
+  notes    String?
+
+  declinedAt       DateTime?
+  declinedByUserId String?
+  declineReason    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  assetRequest AssetRequest      @relation(fields: [assetRequestId], references: [id], onDelete: Cascade)
+  category     AssetCategory     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  /// The handovers that fulfil this line. Ordinary assignments, pointed at.
+  assignments  AssetAssignment[]
+
+  @@index([assetRequestId])
+  @@index([companyId, categoryId])
+  @@map("asset_request_items")
 }
