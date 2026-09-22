@@ -654,6 +654,7 @@ export async function computePayroll(input: {
         hireDate: e.hireDate,
         terminationDate: e.terminationDate,
         resignationDate: e.resignationDate,
+        excludedFromAttendance: e.excludedFromAttendance,
       })),
       from,
       to,

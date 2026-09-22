@@ -46,6 +46,7 @@ export const EMPLOYMENT_WINDOW_SELECT = {
   hireDate: true,
   terminationDate: true,
   resignationDate: true,
+  excludedFromAttendance: true,
 } satisfies Prisma.EmployeeSelect;
 
 /**
@@ -60,6 +61,13 @@ export interface EmploymentWindowFields {
   hireDate: Date | null;
   terminationDate: Date | null;
   resignationDate: Date | null;
+  /**
+   * Set for somebody who never punches - a partner, a director. Not an
+   * employment fact, which is why it sits beside the lifecycle dates rather
+   * than among them, but it is read by the same two predicates: being outside
+   * attendance and having left both end in the same place, "no row here".
+   */
+  excludedFromAttendance: boolean;
 }
 
 /**
@@ -121,6 +129,8 @@ export function isEmployeeInAttendancePopulation(
   employee: EmploymentWindowFields,
   attendanceDate: Date,
 ): boolean {
+  if (employee.excludedFromAttendance) return false;
+
   const day = dateColumnToDayKey(attendanceDate);
 
   if (employee.hireDate && dateColumnToDayKey(employee.hireDate) > day) return false;
@@ -147,6 +157,8 @@ export function isEmployedDuringRange(
   from: Date,
   to: Date,
 ): boolean {
+  if (employee.excludedFromAttendance) return false;
+
   const fromKey = dateColumnToDayKey(from);
   const toKey = dateColumnToDayKey(to);
 
@@ -171,12 +183,18 @@ export function isEmployedDuringRange(
  * Every branch here mirrors a branch of `isEmployedDuringRange`, in the same
  * order, and both are covered by the same tests. Read together:
  *
- *   hireDate  IS NULL OR hireDate <= to
+ *   excludedFromAttendance = false
+ *   AND hireDate  IS NULL OR hireDate <= to
  *   AND ( terminationDate >= from
  *         OR ( terminationDate IS NULL
  *              AND ( status NOT IN (exit statuses)   -- notice served, no last day
  *                    OR resignationDate IS NULL      -- left, no date recorded
  *                    OR resignationDate >= from ) ) )
+ *
+ * The first clause is not a lifecycle test and has no mirror in
+ * `isEmployedDuringRange`: somebody who never punches is outside the attendance
+ * question entirely, rather than employed-but-absent. It lives here because
+ * here is the one place every attendance screen already agrees on.
  *
  * This can only ever remove rows, so it composes with the scope filter exactly
  * as the department and team clauses do.
@@ -184,6 +202,7 @@ export function isEmployedDuringRange(
 export function attendancePopulationWhere(from: Date, to: Date): Prisma.EmployeeWhereInput {
   return {
     AND: [
+      { excludedFromAttendance: false },
       { OR: [{ hireDate: null }, { hireDate: { lte: to } }] },
       {
         OR: [

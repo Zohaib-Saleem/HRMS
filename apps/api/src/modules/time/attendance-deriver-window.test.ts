@@ -85,6 +85,7 @@ const HIRA = {
   hireDate: day('2023-04-03'),
   terminationDate: day('2026-09-10'),
   resignationDate: null,
+  excludedFromAttendance: false,
 };
 
 /**

@@ -30,6 +30,7 @@ const employee = (over: Partial<EmploymentWindowFields>): EmploymentWindowFields
   hireDate: day('2024-01-01'),
   terminationDate: null,
   resignationDate: null,
+  excludedFromAttendance: false,
   ...over,
 });
 
@@ -247,6 +248,38 @@ function matches(person: EmploymentWindowFields, clause: Clause): boolean {
   });
 }
 
+describe('somebody excluded from attendance is outside the question', () => {
+  /*
+   * The partner case. Not a leaver and not a new joiner - somebody who is
+   * ACTIVE, has worked here for years, and simply never punches. Before the
+   * flag existed the nightly job wrote them an ABSENT row for every working
+   * day, which is a statement about their attendance rather than the absence
+   * of one.
+   */
+  const PARTNER = employee({ excludedFromAttendance: true });
+
+  it('is in no day of the population, however ordinary the day', () => {
+    expect(isEmployeeInAttendancePopulation(PARTNER, day('2026-09-15'))).toBe(false);
+    expect(isEmployeeInAttendancePopulation(PARTNER, day('2024-06-01'))).toBe(false);
+  });
+
+  it('is worth no row in a range either', () => {
+    expect(isEmployedDuringRange(PARTNER, day('2026-09-01'), day('2026-09-30'))).toBe(false);
+  });
+
+  it('leaves everybody else exactly where they were', () => {
+    const colleague = employee({});
+    expect(isEmployeeInAttendancePopulation(colleague, day('2026-09-15'))).toBe(true);
+    expect(isEmployedDuringRange(colleague, day('2026-09-01'), day('2026-09-30'))).toBe(true);
+  });
+
+  it('is excluded by the SQL clause too, or the row count and the days disagree', () => {
+    const clause = attendancePopulationWhere(day('2026-09-01'), day('2026-09-30')) as Clause;
+    expect(matches(PARTNER, clause)).toBe(false);
+    expect(matches(employee({}), clause)).toBe(true);
+  });
+});
+
 describe('attendancePopulationWhere says the same thing in SQL', () => {
   const people: EmploymentWindowFields[] = [
     employee({}),
@@ -266,6 +299,9 @@ describe('attendancePopulationWhere says the same thing in SQL', () => {
     employee({ status: 'ACTIVE', terminationDate: day('2026-09-30') }),
     employee({ status: 'ON_LEAVE' }),
     employee({ status: 'SUSPENDED' }),
+    employee({ excludedFromAttendance: true }),
+    employee({ excludedFromAttendance: true, hireDate: null }),
+    employee({ status: 'TERMINATED', terminationDate: day('2026-12-31'), excludedFromAttendance: true }),
     employee({ status: 'INACTIVE' }),
   ];
 

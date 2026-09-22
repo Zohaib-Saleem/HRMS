@@ -305,10 +305,12 @@ describe('attendance analytics endpoint', () => {
     it('selects only the columns the deriver needs, never the whole employee row', async () => {
       await get('/attendance/analytics/daily?month=2026-09');
 
-      // Six columns, and every one of them is read. `locationId` picks the
+      // Seven columns, and every one of them is read. `locationId` picks the
       // holiday calendar; the four lifecycle columns decide which days of the
       // month the person was employed for, which is the difference between a
-      // leaver's last fortnight being blank and being thirty absences.
+      // leaver's last fortnight being blank and being thirty absences; and
+      // `excludedFromAttendance` drops somebody who never punches before any
+      // of that is asked.
       expect(db.employee.findMany.mock.calls[0]![0].select).toEqual({
         id: true,
         locationId: true,
@@ -316,6 +318,7 @@ describe('attendance analytics endpoint', () => {
         hireDate: true,
         terminationDate: true,
         resignationDate: true,
+        excludedFromAttendance: true,
       });
     });
   });

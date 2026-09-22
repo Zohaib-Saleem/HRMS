@@ -685,8 +685,8 @@ model Employee {
   /// Dual reporting - a second manager for matrix organisations.
   secondaryManagerId String?
 
-  employmentType        EmploymentType    @default(FULL_TIME)
-  status                EmployeeStatus    @default(ACTIVE)
+  employmentType         EmploymentType    @default(FULL_TIME)
+  status                 EmployeeStatus    @default(ACTIVE)
   /**
    * The employment stage: probation, permanent, or an internship.
    * The canonical field, and the ONLY one. Loans and medical both read this
@@ -699,24 +699,37 @@ model Employee {
    * having no answer.
    * Renamed from `confirmationStatus`, which held the roster's own wording.
    */
-  employmentStatus      EmploymentStatus?
-  hireDate              DateTime?         @db.Date
+  employmentStatus       EmploymentStatus?
+  hireDate               DateTime?         @db.Date
   /// The day a probationer was confirmed. Set alongside employmentStatus when
   /// it moves to PERMANENT; the two are written together and never apart.
-  confirmationDate      DateTime?         @db.Date
-  terminationDate       DateTime?         @db.Date
+  confirmationDate       DateTime?         @db.Date
+  terminationDate        DateTime?         @db.Date
   /// The day the employee handed in their resignation. Set when the status is
   /// RESIGNED. Deliberately separate from terminationDate, which is the last
   /// day worked - the two are rarely the same and payroll reads the latter.
-  resignationDate       DateTime?         @db.Date
-  sourceOfHire          String?
-  linkedinUrl           String?
+  resignationDate        DateTime?         @db.Date
+  sourceOfHire           String?
+  linkedinUrl            String?
   /// When the next salary increment falls due, as the payroll roster tracks it.
   /// Forward-looking, which is what keeps it off SalaryRevision: that model
   /// records increments that happened, this records one that is owed.
-  nextIncrementDueDate  DateTime?         @db.Date
+  nextIncrementDueDate   DateTime?         @db.Date
   /// Prior experience in whole months, kept as a number so it can be summed.
-  priorExperienceMonths Int?
+  priorExperienceMonths  Int?
+  /**
+   * Whether this person is counted by attendance at all.
+   * A partner or director who never punches is not "absent" on a day they did
+   * not punch - they are outside the question. Without this, the nightly
+   * absence job records an ABSENT row for them every working day, and the
+   * attendance sheet, reports and analytics all carry a person whose row can
+   * only ever be wrong.
+   * Deliberately NOT a status: they are an ACTIVE employee for every other
+   * purpose - the org chart, approvals, assets, leave. This excludes them from
+   * one subsystem, so it is read by `attendancePopulationWhere` and nowhere
+   * else.
+   */
+  excludedFromAttendance Boolean           @default(false)
 
   // --- personal -------------------------------------------------------------
   dateOfBirth   DateTime?      @db.Date
@@ -890,6 +903,7 @@ model Employee {
   @@index([companyId, departmentId])
   @@index([companyId, designationId])
   @@index([companyId, locationId])
+  @@index([companyId, excludedFromAttendance])
   @@index([managerId])
   @@index([lastName, firstName])
   @@map("employees")
