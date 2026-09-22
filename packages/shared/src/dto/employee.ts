@@ -406,7 +406,14 @@ export const employeeQuerySchema = paginationQuerySchema.extend({
   teamId: z.string().trim().max(64).optional(),
   designationId: z.string().trim().max(64).optional(),
   locationId: z.string().trim().max(64).optional(),
+  /** The reporting line: whose `managerId` points at this person. */
   managerId: z.string().trim().max(64).optional(),
+  /**
+   * "Everybody whose TEAM this person runs" - resolved through the team
+   * roster, not through the reporting line and not through the department.
+   * A different question from `managerId`, and frequently a different answer.
+   */
+  teamManagerId: z.string().trim().max(64).optional(),
 });
 
 export type EmployeeQuery = z.infer<typeof employeeQuerySchema>;
@@ -537,6 +544,15 @@ export interface EmployeeDetail extends EmployeeListItem {
   personalEmail: string | null;
   personalPhone: string | null;
   secondaryManager: { id: string; fullName: string } | null;
+  /**
+   * The ACTIVE managers of this person's team, in appointment order.
+   *
+   * A property of the TEAM, read from its roster - not of the department, and
+   * not the same people as `manager`/`secondaryManager`, which are the
+   * reporting line. These are who the approval chain actually asks. Empty when
+   * the person is on no team, or on a team nobody runs yet.
+   */
+  teamManagers: Array<{ id: string; fullName: string }>;
   confirmationDate: string | null;
   nextIncrementDueDate: string | null;
   terminationDate: string | null;

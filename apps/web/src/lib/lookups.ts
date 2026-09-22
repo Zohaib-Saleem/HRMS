@@ -4,10 +4,16 @@ import { api } from './api';
 
 export interface OrganisationLookups {
   departments: LookupOption[];
-  teams: Array<LookupOption & { departmentId: string }>;
+  /*
+   * NO `departmentId` on a team. Teams are not sub-departments, so no form
+   * narrows its team list by the department chosen beside it.
+   */
+  teams: LookupOption[];
   designations: LookupOption[];
   locations: LookupOption[];
   managers: LookupOption[];
+  /** Only the people who actively run a team. See the API's `organisationLookups`. */
+  teamManagers: LookupOption[];
 }
 
 const EMPTY: OrganisationLookups = {
@@ -16,6 +22,7 @@ const EMPTY: OrganisationLookups = {
   designations: [],
   locations: [],
   managers: [],
+  teamManagers: [],
 };
 
 /**

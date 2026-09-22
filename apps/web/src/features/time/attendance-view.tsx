@@ -219,9 +219,9 @@ export function AttendanceControlBar({
 }: ControlBarProps) {
   const { lookups } = useLookups();
 
-  const teamOptions = filters.departmentId
-    ? lookups.teams.filter((t) => t.departmentId === filters.departmentId)
-    : lookups.teams;
+  // Every team, whatever department is chosen: the two filters are separate
+  // dimensions and combine as AND, not as parent-and-child.
+  const teamOptions = lookups.teams;
 
   const isCurrentMonth = monthKey(month) === monthKey(currentMonth());
 

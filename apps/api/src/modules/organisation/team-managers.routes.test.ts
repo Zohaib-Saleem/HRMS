@@ -43,7 +43,6 @@ const TEAM = {
   id: 'team-dev',
   companyId: COMPANY,
   name: 'Development',
-  department: { name: 'Engineering' },
   _count: { employees: 8 },
 };
 

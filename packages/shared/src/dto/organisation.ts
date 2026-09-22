@@ -37,12 +37,20 @@ export const departmentQuerySchema = paginationQuerySchema.extend({
 
 // --------------------------------------------------------------------- teams
 
+/**
+ * A team is a NAME, and nothing else structural.
+ *
+ * NOTE THE ABSENCE OF `departmentId`. Teams are not sub-departments: an
+ * employee belongs to a department AND to a team, and the two are set
+ * independently on the employee. Requiring a department here forced whoever
+ * created a team to file it under one, and a team that genuinely belonged
+ * under none could only be created by inventing a department for it.
+ */
 export const teamInputSchema = z.object({
   name: z.string().trim().min(2, 'Team name is required.').max(120),
-  departmentId: z.string().trim().min(1, 'Choose a department.'),
   description: optionalText(500),
   /*
-   * NOTE THE ABSENCE OF `leadEmployeeId`.
+   * NOTE ALSO THE ABSENCE OF `leadEmployeeId`.
    *
    * A team has one to three MANAGERS, and they are appointed on their own
    * endpoint (`/teams/:id/managers`) because appointing one is not the same
@@ -60,7 +68,6 @@ export const teamInputSchema = z.object({
 export type TeamInput = z.infer<typeof teamInputSchema>;
 
 export const teamQuerySchema = paginationQuerySchema.extend({
-  departmentId: z.string().trim().max(64).optional(),
   isActive: z.enum(['true', 'false']).optional(),
 });
 
@@ -124,7 +131,6 @@ export interface DepartmentRecord {
   headEmployeeId: string | null;
   headEmployeeName: string | null;
   employeeCount: number;
-  teamCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -134,8 +140,6 @@ export interface TeamRecord {
   name: string;
   description: string | null;
   isActive: boolean;
-  departmentId: string;
-  departmentName: string;
   /** How many active managers this team has, and who they are. */
   managerCount: number;
   managerNames: string[];

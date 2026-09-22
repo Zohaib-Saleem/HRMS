@@ -404,6 +404,10 @@ function OverviewTab({
   employee: EmployeeDetail;
   summary: EmployeeProfileSummary | undefined;
 }) {
+  // `?? []` because a response cached before this field existed has no key at
+  // all, and a profile that throws is a worse answer than one missing a line.
+  const teamManagers = employee.teamManagers ?? [];
+
   return (
     <div className="grid gap-5 lg:grid-cols-2">
       <Card>
@@ -485,6 +489,25 @@ function OverviewTab({
           <dl className="grid gap-4 sm:grid-cols-2">
             <Field label="Department" value={employee.department?.name} />
             <Field label="Team" value={employee.team?.name} />
+            {/*
+              Three separate facts, in this order. The team manager comes from
+              the TEAM's roster - it is not the department head and not the
+              reporting line below, and it is who this person's requests go to.
+            */}
+            <Field
+              label={teamManagers.length === 1 ? 'Team manager' : 'Team managers'}
+              value={
+                teamManagers.length > 0 ? (
+                  <span className="flex flex-col gap-0.5">
+                    {teamManagers.map((m) => (
+                      <Link key={m.id} to={`/people/${m.id}`} className="text-primary hover:underline">
+                        {m.fullName}
+                      </Link>
+                    ))}
+                  </span>
+                ) : null
+              }
+            />
             <Field
               label="Location"
               value={

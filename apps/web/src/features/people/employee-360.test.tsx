@@ -109,6 +109,7 @@ const EMPLOYEE = {
   personalEmail: null,
   personalPhone: null,
   secondaryManager: null,
+  teamManagers: [{ id: 'tm1', fullName: 'Abdul Aziz' }],
   confirmationDate: '2021-06-01',
   nextIncrementDueDate: '2026-12-01',
   terminationDate: null,

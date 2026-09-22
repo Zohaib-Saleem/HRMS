@@ -74,18 +74,16 @@ function AttendancePageInner() {
     setSelectedDate(null);
   }, []);
 
-  const updateFilters = React.useCallback((patch: Partial<AttendanceFilters>) => {
-    setFilters((prev) => {
-      const next = { ...prev, ...patch };
-      // A team belongs to a department. Changing the department strands the
-      // team filter on a team that is no longer offered, which silently
-      // narrows every view to nothing.
-      if (patch.departmentId !== undefined && patch.departmentId !== prev.departmentId) {
-        next.teamId = '';
-      }
-      return next;
-    });
-  }, []);
+  /*
+   * Changing the department does NOT clear the team. It used to, back when a
+   * team sat inside a department and the team list was narrowed by it; the two
+   * are independent filters now and combine as AND, so "Development AND Team
+   * Alpha" is a question somebody may genuinely be asking.
+   */
+  const updateFilters = React.useCallback(
+    (patch: Partial<AttendanceFilters>) => setFilters((prev) => ({ ...prev, ...patch })),
+    [],
+  );
 
   const toggleDate = React.useCallback(
     (date: string) => setSelectedDate((prev) => (prev === date ? null : date)),

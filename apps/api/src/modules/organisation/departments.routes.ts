@@ -23,14 +23,17 @@ type DepartmentWithCounts = Prisma.DepartmentGetPayload<{
   include: {
     parentDepartment: { select: { id: true; name: true } };
     headEmployee: { select: { id: true; firstName: true; lastName: true } };
-    _count: { select: { employees: true; teams: true } };
+    _count: { select: { employees: true } };
   };
 }>;
 
 const INCLUDE = {
   parentDepartment: { select: { id: true, name: true } },
   headEmployee: { select: { id: true, firstName: true, lastName: true } },
-  _count: { select: { employees: true, teams: true } },
+  // NO team count. Teams are not children of departments - see the `Team`
+  // model - so "how many teams does Development have?" is not a question this
+  // record can answer, and a number here would invite the old reading back.
+  _count: { select: { employees: true } },
 } satisfies Prisma.DepartmentInclude;
 
 function toRecord(row: DepartmentWithCounts): DepartmentRecord {
@@ -47,7 +50,6 @@ function toRecord(row: DepartmentWithCounts): DepartmentRecord {
       ? `${row.headEmployee.firstName} ${row.headEmployee.lastName}`.trim()
       : null,
     employeeCount: row._count.employees,
-    teamCount: row._count.teams,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -296,7 +298,7 @@ export const departmentRoutes: FastifyPluginAsync = async (app) => {
 
       const existing = await prisma.department.findFirst({
         where: { id, companyId: auth.companyId },
-        include: { _count: { select: { employees: true, teams: true, childDepartments: true } } },
+        include: { _count: { select: { employees: true, childDepartments: true } } },
       });
       if (!existing) throw new NotFoundError('Department');
 
@@ -304,7 +306,9 @@ export const departmentRoutes: FastifyPluginAsync = async (app) => {
       // the caller probably did not intend to touch.
       const blockers: string[] = [];
       if (existing._count.employees > 0) blockers.push(`${existing._count.employees} employee(s)`);
-      if (existing._count.teams > 0) blockers.push(`${existing._count.teams} team(s)`);
+      // Teams are NOT a blocker any more. A team no longer belongs to this
+      // department, so deleting it cannot orphan one; the legacy pointer is
+      // simply cleared by the FK's ON DELETE SET NULL.
       if (existing._count.childDepartments > 0) {
         blockers.push(`${existing._count.childDepartments} sub-department(s)`);
       }

@@ -11,13 +11,12 @@ import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { buildMeta, buildOrderBy, toSkipTake } from '../../core/pagination.js';
 import { diff, recordAudit } from '../../core/audit.js';
-import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
+import { ConflictError, NotFoundError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 
 const SORTABLE = ['name', 'createdAt', 'updatedAt'] as const;
 
 const INCLUDE = {
-  department: { select: { id: true, name: true } },
   /*
    * The ACTIVE roster, in appointment order. Not `leadEmployee`, which this
    * supersedes: a team has one to three managers, and the single lead column
@@ -41,8 +40,6 @@ function toRecord(row: TeamWithRelations): TeamRecord {
     name: row.name,
     description: row.description,
     isActive: row.isActive,
-    departmentId: row.departmentId,
-    departmentName: row.department.name,
     managerCount: row.managers.length,
     managerNames: row.managers.map(
       (m) => m.employee.displayName ?? `${m.employee.firstName} ${m.employee.lastName}`.trim(),
@@ -53,17 +50,6 @@ function toRecord(row: TeamWithRelations): TeamRecord {
   };
 }
 
-/** A team's department must belong to the caller's company. */
-async function assertDepartment(companyId: string, departmentId: string): Promise<void> {
-  const department = await prisma.department.findFirst({
-    where: { id: departmentId, companyId },
-    select: { id: true },
-  });
-  if (!department) {
-    throw new ValidationError({ departmentId: ['That department does not exist.'] });
-  }
-}
-
 export const teamRoutes: FastifyPluginAsync = async (app) => {
   app.get('/', { preHandler: requirePermission(PERMISSIONS.TEAM_READ) }, async (request, reply) => {
     const auth = requireAuthContext(request);
@@ -71,14 +57,12 @@ export const teamRoutes: FastifyPluginAsync = async (app) => {
 
     const where: Prisma.TeamWhereInput = {
       companyId: auth.companyId,
-      ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.isActive ? { isActive: query.isActive === 'true' } : {}),
       ...(query.q
         ? {
             OR: [
               { name: { contains: query.q, mode: 'insensitive' } },
               { description: { contains: query.q, mode: 'insensitive' } },
-              { department: { name: { contains: query.q, mode: 'insensitive' } } },
             ],
           }
         : {}),
@@ -119,8 +103,6 @@ export const teamRoutes: FastifyPluginAsync = async (app) => {
     const auth = requireAuthContext(request);
     const input = parseOrThrow(teamInputSchema, request.body);
 
-    await assertDepartment(auth.companyId, input.departmentId);
-
     const created = await prisma.team.create({
       data: { ...input, companyId: auth.companyId },
       include: INCLUDE,
@@ -132,7 +114,7 @@ export const teamRoutes: FastifyPluginAsync = async (app) => {
       action: 'team.create',
       entityType: 'Team',
       entityId: created.id,
-      summary: `Created team ${created.name} in ${created.department.name}`,
+      summary: `Created team ${created.name}`,
       after: input as unknown as Record<string, unknown>,
       request,
     });
@@ -150,8 +132,6 @@ export const teamRoutes: FastifyPluginAsync = async (app) => {
 
       const before = await prisma.team.findFirst({ where: { id, companyId: auth.companyId } });
       if (!before) throw new NotFoundError('Team');
-
-      await assertDepartment(auth.companyId, input.departmentId);
 
       const updated = await prisma.team.update({
         where: { id },

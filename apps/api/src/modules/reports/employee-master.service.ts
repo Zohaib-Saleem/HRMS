@@ -63,7 +63,21 @@ export function allowedColumns(auth: AuthContext): string[] {
 
 const EMPLOYEE_INCLUDE = {
   department: { select: { name: true } },
-  team: { select: { name: true } },
+  /*
+   * The team AND who runs it. Department and team are independent columns on
+   * this report, and the team manager comes from the team's roster - not from
+   * the department, and not from `manager`, which is the reporting line.
+   */
+  team: {
+    select: {
+      name: true,
+      managers: {
+        where: { isActive: true },
+        orderBy: { assignedAt: 'asc' },
+        select: { employee: { select: { firstName: true, lastName: true, displayName: true } } },
+      },
+    },
+  },
   designation: { select: { name: true } },
   location: { select: { name: true } },
   manager: { select: { firstName: true, lastName: true, displayName: true } },
@@ -508,6 +522,9 @@ function toRow(
     confirmationDate: day(e.confirmationDate),
     departmentName: e.department?.name ?? null,
     teamName: e.team?.name ?? null,
+    teamManagerNames: e.team?.managers.length
+      ? e.team.managers.map((m) => nameOf(m.employee)).join(', ')
+      : null,
     designationName: e.designation?.name ?? null,
     jobTitle: e.jobTitle,
     locationName: e.location?.name ?? null,

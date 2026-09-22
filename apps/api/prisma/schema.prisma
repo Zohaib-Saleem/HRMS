@@ -559,12 +559,30 @@ model Location {
 }
 
 model Team {
-  id           String  @id @default(cuid())
-  companyId    String
-  departmentId String
-  name         String
-  description  String?
-  isActive     Boolean @default(true)
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  description String?
+  isActive    Boolean @default(true)
+
+  /**
+   * LEGACY, and no longer part of the organisation model.
+   *
+   * Teams used to be children of departments: this column was NOT NULL and the
+   * only way to create a team was to name a department for it. That is not the
+   * shape this company works in. Department and Team are two INDEPENDENT
+   * dimensions - a person is in Development AND on Team Alpha, and Team Alpha
+   * is not a sub-unit of Development. Somebody who wanted a team the old form
+   * could not place ended up inventing a department to hold it, which is how
+   * `T-A` and `Team Clan` came to be departments.
+   *
+   * The column is kept, nullable, holding exactly what it held, so that this
+   * release can be rolled back without losing the old association. NOTHING
+   * READS IT: the API does not select it, the forms do not offer it, and the
+   * team lookups no longer carry it. An employee's department comes from
+   * `Employee.departmentId` and from nowhere else.
+   */
+  departmentId String?
 
   /**
    * SUPERSEDED by `TeamManager`, and left in place only so that rolling this
@@ -583,9 +601,9 @@ model Team {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
-  employees  Employee[] @relation("EmployeeTeam")
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  employees  Employee[]  @relation("EmployeeTeam")
 
   /// Which team the vacancy is for, where the department alone is too coarse.
   jobOpenings JobOpening[]
@@ -593,8 +611,14 @@ model Team {
   /// Who runs this team. One to three active rows; see `TeamManager`.
   managers TeamManager[]
 
-  @@unique([departmentId, name])
+  /// Team names are unique per COMPANY now, not per department. They used to be
+  /// unique per department, which let two departments each hold a "Platform"
+  /// and made "which Platform?" a question the rest of the product could not
+  /// answer once the department stopped being part of a team's identity.
+  @@unique([companyId, name])
   @@index([companyId, isActive])
+  /// Only so the legacy FK's ON DELETE SET NULL stays cheap. Nothing queries it.
+  @@index([departmentId])
   @@map("teams")
 }
 

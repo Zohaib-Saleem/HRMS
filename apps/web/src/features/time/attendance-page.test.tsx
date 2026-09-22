@@ -69,7 +69,7 @@ function route(path: string, options?: { query?: Record<string, unknown> }): unk
   if (path === '/departments/lookups') {
     return {
       departments: [{ id: 'dep-1', label: 'Engineering' }],
-      teams: [{ id: 'team-1', label: 'Platform', departmentId: 'dep-1' }],
+      teams: [{ id: 'team-1', label: 'Platform' }],
       designations: [],
       locations: [],
       managers: [{ id: 'emp-1', label: 'Ada Lovelace' }],
@@ -227,7 +227,14 @@ describe('filters are the page’s, not each view’s', () => {
     });
   });
 
-  it('drops a stranded team when the department it belongs to changes', async () => {
+  /*
+   * Department and team are INDEPENDENT filters. This used to clear the team
+   * whenever the department changed, because a team sat inside a department
+   * and the cleared one was no longer offered. Neither is true now: the two
+   * combine as AND, and clearing somebody's team filter behind their back
+   * would answer a different question from the one they asked.
+   */
+  it('keeps the team when the department filter changes', async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -237,6 +244,19 @@ describe('filters are the page’s, not each view’s', () => {
     await waitFor(() => expect(lastAnalyticsQuery()?.teamId).toBe('team-1'));
 
     await user.selectOptions(screen.getByLabelText('Filter by department'), '');
-    await waitFor(() => expect(lastAnalyticsQuery()?.teamId).toBeUndefined());
+    await waitFor(() => expect(lastAnalyticsQuery()?.departmentId).toBeUndefined());
+    expect(lastAnalyticsQuery()?.teamId).toBe('team-1');
+  });
+
+  it('offers every team whatever department is chosen', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByRole('option', { name: 'Engineering' });
+    await user.selectOptions(screen.getByLabelText('Filter by department'), 'dep-1');
+
+    // 'Platform' is not filed under 'Engineering' any more - it is not filed
+    // under anything - and it is still on offer.
+    expect(screen.getByRole('option', { name: 'Platform' })).toBeInTheDocument();
   });
 });

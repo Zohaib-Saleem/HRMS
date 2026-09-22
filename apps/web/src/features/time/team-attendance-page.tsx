@@ -202,10 +202,10 @@ export function TeamAttendancePage() {
     filters.teamId !== '' ||
     !singleDay;
 
-  // Teams belong to departments, so choosing a department narrows the list.
-  const teamOptions = filters.departmentId
-    ? lookups.teams.filter((t) => t.departmentId === filters.departmentId)
-    : lookups.teams;
+  // Every team, whatever department is chosen. Department and team are
+  // independent dimensions; picking both means "in that department AND on that
+  // team", which only works while both lists stay full.
+  const teamOptions = lookups.teams;
 
   return (
     <>
@@ -272,8 +272,7 @@ export function TeamAttendancePage() {
             <>
               <NativeSelect
                 value={filters.departmentId}
-                // Changing department clears a team that no longer belongs to it.
-                onChange={(e) => update({ departmentId: e.target.value, teamId: '' })}
+                onChange={(e) => update({ departmentId: e.target.value })}
                 aria-label="Filter by department"
                 className="w-44"
               >

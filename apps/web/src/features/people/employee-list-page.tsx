@@ -40,6 +40,22 @@ const STATUS_TONE: Record<EmployeeStatus, 'success' | 'warning' | 'destructive' 
   TERMINATED: 'neutral',
 };
 
+/**
+ * `?teamId=` and `?departmentId=` land here already filtered.
+ *
+ * The Teams screen has no member list of its own - an employee's team is set
+ * on the employee, in one place - so "show me this team's people" is a link
+ * into this list rather than a second screen that writes the same column.
+ */
+function initialFilters(params: URLSearchParams) {
+  return {
+    ...INITIAL,
+    departmentId: params.get('departmentId') ?? '',
+    teamId: params.get('teamId') ?? '',
+    teamManagerId: params.get('teamManagerId') ?? '',
+  };
+}
+
 const INITIAL = {
   q: '',
   status: '',
@@ -47,6 +63,7 @@ const INITIAL = {
   employmentStatus: '',
   departmentId: '',
   teamId: '',
+  teamManagerId: '',
   designationId: '',
   locationId: '',
   page: 1,
@@ -60,7 +77,8 @@ export function EmployeeListPage() {
   const { has } = usePermissions();
   const { lookups } = useLookups();
 
-  const [filters, setFilters] = React.useState(INITIAL);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [filters, setFilters] = React.useState(() => initialFilters(searchParams));
   const [creating, setCreating] = React.useState(false);
   const debouncedQuery = useDebounced(filters.q, 350);
 
@@ -72,7 +90,6 @@ export function EmployeeListPage() {
    * removed as soon as it is read so the drawer does not reopen on a back
    * navigation, and it is ignored without the permission that draws the button.
    */
-  const [searchParams, setSearchParams] = useSearchParams();
   const wantsNew = searchParams.get('new') === '1';
   const canCreate = has(PERMISSIONS.EMPLOYEE_MANAGE);
   React.useEffect(() => {
@@ -109,6 +126,7 @@ export function EmployeeListPage() {
           employmentStatus: filters.employmentStatus || undefined,
           departmentId: filters.departmentId || undefined,
           teamId: filters.teamId || undefined,
+          teamManagerId: filters.teamManagerId || undefined,
           designationId: filters.designationId || undefined,
           locationId: filters.locationId || undefined,
         },
@@ -126,12 +144,9 @@ export function EmployeeListPage() {
     filters.employmentStatus !== '' ||
     filters.departmentId !== '' ||
     filters.teamId !== '' ||
+    filters.teamManagerId !== '' ||
     filters.designationId !== '' ||
     filters.locationId !== '';
-
-  const teamOptions = lookups.teams.filter(
-    (team) => !filters.departmentId || team.departmentId === filters.departmentId,
-  );
 
   const rows = query.data?.data ?? [];
   const canManage = has(PERMISSIONS.EMPLOYEE_MANAGE);
@@ -190,7 +205,7 @@ export function EmployeeListPage() {
 
               <NativeSelect
                 value={filters.departmentId}
-                onChange={(e) => update({ departmentId: e.target.value, teamId: '' })}
+                onChange={(e) => update({ departmentId: e.target.value })}
                 aria-label="Filter by department"
                 className="w-44"
               >
@@ -207,7 +222,25 @@ export function EmployeeListPage() {
                 className="w-40"
               >
                 <option value="">All teams</option>
-                {teamOptions.map((o) => (
+                {/*
+                  Every team, always. Department and team narrow the list
+                  INDEPENDENTLY - picking Development and Team Alpha together
+                  means "in Development AND on Team Alpha", which is only
+                  askable while both dropdowns stay full.
+                */}
+                {lookups.teams.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </NativeSelect>
+
+              <NativeSelect
+                value={filters.teamManagerId}
+                onChange={(e) => update({ teamManagerId: e.target.value })}
+                aria-label="Filter by team manager"
+                className="w-44"
+              >
+                <option value="">All team managers</option>
+                {lookups.teamManagers.map((o) => (
                   <option key={o.id} value={o.id}>{o.label}</option>
                 ))}
               </NativeSelect>

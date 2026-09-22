@@ -32,7 +32,7 @@ designation, location, hire date, and employment type.
 | Phone, personal phone | no | |
 | Job title | no | Free text, kept as a fallback for imports |
 | Designation | no | The structured job title |
-| Department, team, location | no | Department drives the approval fallback |
+| Department, team, location | no | Two separate fields: the **team** drives the Team Manager stage, the department only the fallback |
 | Manager, secondary manager | no | **Drives the approval chain** |
 | Employment type | defaulted | Full time, part time, contract, intern, temporary |
 | Status | defaulted | Active, On leave, Suspended, Terminated |

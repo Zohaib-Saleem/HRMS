@@ -84,7 +84,7 @@ export function DepartmentsPage() {
     const ok = await confirm({
       title: `Delete ${row.name}?`,
       description:
-        'This cannot be undone. Departments that still have employees, teams or sub-departments cannot be deleted.',
+        'This cannot be undone. Departments that still have employees or sub-departments cannot be deleted.',
       confirmLabel: 'Delete',
       tone: 'destructive',
     });
@@ -146,17 +146,16 @@ export function DepartmentsPage() {
                     <TH>Parent</TH>
                     <TH>Head</TH>
                     <TH className="w-24 text-right">People</TH>
-                    <TH className="w-24 text-right">Teams</TH>
                     <TH className="w-28">Status</TH>
                     {canManage ? <TH className="w-24 text-right">Actions</TH> : null}
                   </TR>
                 </THead>
                 <TBody>
                   {query.isLoading ? (
-                    <TableSkeleton rows={6} columns={canManage ? 8 : 7} />
+                    <TableSkeleton rows={6} columns={canManage ? 7 : 6} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={canManage ? 8 : 7} className="p-0">
+                      <TD colSpan={canManage ? 7 : 6} className="p-0">
                         <EmptyState
                           icon={Building2}
                           title={hasFilters ? 'No departments match your filters' : 'No departments yet'}
@@ -189,7 +188,6 @@ export function DepartmentsPage() {
                         <TD className="text-[13px]">{row.parentDepartmentName ?? '--'}</TD>
                         <TD className="text-[13px]">{row.headEmployeeName ?? '--'}</TD>
                         <TD className="tabular text-right text-[13px]">{row.employeeCount}</TD>
-                        <TD className="tabular text-right text-[13px]">{row.teamCount}</TD>
                         <TD>
                           <Badge variant={row.isActive ? 'success' : 'neutral'}>
                             {row.isActive ? 'Active' : 'Inactive'}

@@ -281,8 +281,11 @@ calculates from them.
 
 ### Step 5: Teams
 
-**Organisation → Teams.** A grouping within a department, with an optional
-lead. Used for filtering and for scoping attendance policies.
+**Organisation → Teams.** A grouping of the people who work together, with one
+to three managers. A team is **not** part of a department: an employee is in a
+department *and* on a team, set as two separate fields on their record. The
+team decides who approves their requests; the department does not. Teams are
+also used for filtering and for scoping attendance policies.
 
 ### Step 6: Reporting lines
 

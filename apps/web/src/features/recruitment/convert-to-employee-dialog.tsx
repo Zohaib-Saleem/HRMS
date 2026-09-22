@@ -167,10 +167,8 @@ export function ConvertToEmployeeDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, preview.dataUpdatedAt]);
 
-  const departmentId = form.watch('departmentId');
   const employmentStatus = form.watch('employmentStatus') as EmploymentStatus;
   const acknowledged = form.watch('acknowledgeDuplicates');
-  const teams = lookups.teams.filter((team) => !departmentId || team.departmentId === departmentId);
 
   const mutation = useMutation({
     mutationFn: (values: FormValues) =>
@@ -351,9 +349,10 @@ export function ConvertToEmployeeDialog({
                 </FormField>
 
                 <FormField label="Team" htmlFor="conv-team">
-                  <NativeSelect {...form.register('teamId')} disabled={!departmentId}>
+                  {/* Independent of the department beside it - see the Team model. */}
+                  <NativeSelect {...form.register('teamId')}>
                     <option value="">Not set</option>
-                    {teams.map((team) => (
+                    {lookups.teams.map((team) => (
                       <option key={team.id} value={team.id}>
                         {team.label}
                       </option>

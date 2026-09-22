@@ -135,7 +135,7 @@ const dayDetail = (): AttendanceDayDetail =>
 
 const LOOKUPS = {
   departments: [{ id: 'dep-1', label: 'Engineering' }],
-  teams: [{ id: 'team-1', label: 'Platform', departmentId: 'dep-1' }],
+  teams: [{ id: 'team-1', label: 'Platform' }],
   designations: [],
   locations: [],
   managers: [{ id: 'emp-1', label: 'Ada Lovelace' }],

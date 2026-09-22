@@ -100,7 +100,6 @@ export interface TeamManagerRecord {
 export interface TeamManagerRoster {
   teamId: string;
   teamName: string;
-  departmentName: string;
   employeeCount: number;
   managers: TeamManagerRecord[];
   /** Ended appointments, most recent first. History, not the roster. */
@@ -123,8 +122,6 @@ export interface OrgChartPerson {
 export interface OrgChartTeam {
   teamId: string;
   teamName: string;
-  departmentId: string;
-  departmentName: string;
   isActive: boolean;
   managers: OrgChartPerson[];
   members: OrgChartPerson[];

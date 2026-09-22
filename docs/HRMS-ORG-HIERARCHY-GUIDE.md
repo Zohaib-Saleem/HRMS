@@ -17,12 +17,44 @@ Everything here is verified against the source: `team_managers`,
                 HR Manager
                      │
         ┌────────────┼────────────┐
-     Development              Designing          (teams)
+     Team Alpha                Team Beta         (teams)
      ┌────┴────┐               ┌──┴──┐
   Manager A  Manager B      Manager C            (1 to 3 per team)
      │                         │
   Employee 1..3            Employee 4..5         (one primary team each)
 ```
+
+### Departments and teams are two separate dimensions
+
+**A team is not a sub-department.** The company is divided two ways at once,
+and a person sits in one of each:
+
+```
+COMPANY
+├── Departments                └── Teams
+│   ├── Development                ├── Team Alpha
+│   ├── Designing                  ├── Team Beta
+│   ├── HR                         └── Team Gamma
+│   └── ...
+```
+
+| | Department | Team |
+|---|---|---|
+| Set on | the employee record's **Department** field | the employee record's **Team** field |
+| Decides approvals | no (except the optional Department Head stage) | **yes** — the Team Manager stage |
+| Has managers | a single optional head | 1 to 3 appointed managers |
+| Contains the other | **no** | **no** |
+
+So Muhammad Ahmed is in **Development** *and* on **Team Alpha**, and Team Alpha
+may hold people from Development, Designing and QA at once. The two fields are
+edited separately and neither narrows the other: choosing a department on the
+employee form does not shorten the team list, and the People filters combine as
+*Department = Development AND Team = Team Alpha*.
+
+Teams used to be children of departments — the New Team form required one — and
+the two departments named `T-A` and `Team Clan` exist only because somebody
+needed a team the old form could not place. They are ordinary departments now
+and can be renamed or retired like any other; see §8.
 
 Two of those rows are **rosters you maintain**, and one is derived:
 
@@ -36,7 +68,9 @@ Two of those rows are **rosters you maintain**, and one is derived:
 
 An employee has **one primary team** — the `teamId` on their record. That is
 the first implementation and it is what the approval chain reads: the Team
-Manager stage resolves to the managers of that one team.
+Manager stage resolves to the managers of that one team. It resolves from the
+**team** and never from the department: a person's department has no say in who
+approves their leave.
 
 ---
 
@@ -333,5 +367,13 @@ data scope is **OWN** and that is deliberate — see §3.
   is not chased. The approver's inbox and the pending badge are what show it.
 - **No second team.** An employee has one primary team. The schema would take
   more, the resolver reads one.
+- **No department on a team.** A team has a name, a description and a status,
+  and that is all. `teams.departmentId` still exists in the database, nullable,
+  holding whatever it held before the two were separated, so that release can
+  be rolled back without losing it — but nothing reads it: not the API, not the
+  forms, not the lookups. The departments `T-A` and `Team Clan` are left as
+  they are rather than guessed at; whoever knows which department those two
+  people really belong to should set it on their employee records and then
+  retire the placeholder departments.
 - **No approval on hiring, on assigning an asset outside a request, or on
   payroll.** Payroll has its own approval with its own permission.

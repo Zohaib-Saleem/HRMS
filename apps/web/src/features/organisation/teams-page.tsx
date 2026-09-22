@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Link } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -6,7 +7,7 @@ import { toast } from 'sonner';
 import { Pencil, Plus, Trash2, UserCog, Users2 } from 'lucide-react';
 import { PERMISSIONS, type TeamInput, type TeamRecord, teamInputSchema } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
-import { LOOKUPS_QUERY_KEY, useLookups } from '@/lib/lookups';
+import { LOOKUPS_QUERY_KEY } from '@/lib/lookups';
 import { useDebounced } from '@/lib/use-debounced';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -32,7 +33,6 @@ import { TeamManagersDialog } from './team-managers-dialog';
 
 const INITIAL = {
   q: '',
-  departmentId: '',
   isActive: '',
   page: 1,
   limit: 20,
@@ -45,7 +45,6 @@ export function TeamsPage() {
   const canManage = has(PERMISSIONS.TEAM_MANAGE);
   const queryClient = useQueryClient();
   const confirm = useConfirm();
-  const { lookups } = useLookups();
 
   const [filters, setFilters] = React.useState(INITIAL);
   const [editing, setEditing] = React.useState<TeamRecord | null>(null);
@@ -69,7 +68,6 @@ export function TeamsPage() {
           sort: filters.sort,
           order: filters.order,
           q: debouncedQuery || undefined,
-          departmentId: filters.departmentId || undefined,
           isActive: filters.isActive || undefined,
         },
       }),
@@ -99,7 +97,7 @@ export function TeamsPage() {
   const handleSort = (field: string) =>
     update({ sort: field, order: filters.sort === field && filters.order === 'asc' ? 'desc' : 'asc' });
 
-  const hasFilters = filters.q !== '' || filters.departmentId !== '' || filters.isActive !== '';
+  const hasFilters = filters.q !== '' || filters.isActive !== '';
   const rows = query.data?.data ?? [];
 
   return (
@@ -113,19 +111,6 @@ export function TeamsPage() {
           onReset={() => setFilters(INITIAL)}
           filters={
             <>
-              <NativeSelect
-                value={filters.departmentId}
-                onChange={(event) => update({ departmentId: event.target.value })}
-                aria-label="Filter by department"
-                className="w-48"
-              >
-                <option value="">All departments</option>
-                {lookups.departments.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </NativeSelect>
               <NativeSelect
                 value={filters.isActive}
                 onChange={(event) => update({ isActive: event.target.value })}
@@ -159,7 +144,6 @@ export function TeamsPage() {
                     <SortableTH field="name" activeField={filters.sort} order={filters.order} onSort={handleSort}>
                       Team
                     </SortableTH>
-                    <TH>Department</TH>
                     <TH>Managers</TH>
                     <TH className="w-24 text-right">People</TH>
                     <TH className="w-28">Status</TH>
@@ -168,17 +152,17 @@ export function TeamsPage() {
                 </THead>
                 <TBody>
                   {query.isLoading ? (
-                    <TableSkeleton rows={6} columns={canManage ? 6 : 5} />
+                    <TableSkeleton rows={6} columns={canManage ? 5 : 4} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={canManage ? 6 : 5} className="p-0">
+                      <TD colSpan={canManage ? 5 : 4} className="p-0">
                         <EmptyState
                           icon={Users2}
                           title={hasFilters ? 'No teams match your filters' : 'No teams yet'}
                           description={
                             hasFilters
                               ? 'Try a different search term or clear the filters.'
-                              : 'Teams sit inside a department and group people who work together.'
+                              : 'Teams group the people who work together. They are independent of departments - a person has both.'
                           }
                           action={
                             canManage && !hasFilters ? (
@@ -200,7 +184,6 @@ export function TeamsPage() {
                             <p className="truncate text-[12px] text-muted-foreground">{row.description}</p>
                           ) : null}
                         </TD>
-                        <TD className="text-[13px]">{row.departmentName}</TD>
                         <TD className="text-[13px]">
                           {/*
                             A button rather than a column of names, and that is a
@@ -221,7 +204,21 @@ export function TeamsPage() {
                               : row.managerNames.join(', ')}
                           </Button>
                         </TD>
-                        <TD className="tabular text-right text-[13px]">{row.employeeCount}</TD>
+                        <TD className="tabular text-right text-[13px]">
+                          {/*
+                            Through to the People list, filtered to this team,
+                            where somebody is put on a team and taken off one.
+                            Their department is set on the same record and is a
+                            separate field - which is why there is no member
+                            list here that would have to agree with that one.
+                          */}
+                          <Link
+                            to={`/people?teamId=${row.id}`}
+                            className="text-primary hover:underline"
+                          >
+                            {row.employeeCount}
+                          </Link>
+                        </TD>
                         <TD>
                           <Badge variant={row.isActive ? 'success' : 'neutral'}>
                             {row.isActive ? 'Active' : 'Inactive'}
@@ -292,14 +289,12 @@ function TeamDrawer({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const { lookups } = useLookups();
   const isEdit = team !== null;
 
   const { register, handleSubmit, formState, reset, setError } = useForm<TeamInput>({
     resolver: zodResolver(teamInputSchema),
     values: {
       name: team?.name ?? '',
-      departmentId: team?.departmentId ?? '',
       description: team?.description ?? '',
       isActive: team?.isActive ?? true,
     },
@@ -332,23 +327,15 @@ function TeamDrawer({
         <form onSubmit={handleSubmit((values) => mutation.mutate(values))} className="contents">
           <DialogHeader>
             <DialogTitle>{isEdit ? `Edit ${team.name}` : 'New team'}</DialogTitle>
-            <DialogDescription>Every team belongs to exactly one department.</DialogDescription>
+            <DialogDescription>
+              A team is its own thing, not a sub-department. People are put on one from their own
+              record, where their department is set separately.
+            </DialogDescription>
           </DialogHeader>
 
           <DialogBody className="space-y-4">
             <FormField label="Name" htmlFor="team-name" error={formState.errors.name?.message} required>
               <Input {...register('name')} autoFocus />
-            </FormField>
-
-            <FormField label="Department" htmlFor="team-department" error={formState.errors.departmentId?.message} required>
-              <NativeSelect {...register('departmentId')}>
-                <option value="">Choose a department</option>
-                {lookups.departments.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </NativeSelect>
             </FormField>
 
             <FormField label="Description" htmlFor="team-description" error={formState.errors.description?.message}>

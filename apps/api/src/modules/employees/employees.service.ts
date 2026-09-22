@@ -45,6 +45,27 @@ export const LIST_INCLUDE = {
 
 export const DETAIL_INCLUDE = {
   ...LIST_INCLUDE,
+  /*
+   * Overrides the list's `team`, which is only id and name, to bring the
+   * team's ACTIVE managers with it. The profile shows Department, Team and
+   * Team Manager as three separate facts, and the third is a property of the
+   * team's roster - never of the department, and never `manager`, which is the
+   * reporting line. `toDetail` strips the roster back out of `team` itself so
+   * the shape of that field stays what `EmployeeListItem` promises.
+   */
+  team: {
+    select: {
+      id: true,
+      name: true,
+      managers: {
+        where: { isActive: true },
+        orderBy: { assignedAt: 'asc' },
+        select: {
+          employee: { select: { id: true, firstName: true, lastName: true, displayName: true } },
+        },
+      },
+    },
+  },
   secondaryManager: { select: { id: true, firstName: true, lastName: true } },
   workExperience: { orderBy: { fromDate: 'desc' } },
   // Newest qualification first, like work experience. A year is optional on
@@ -113,6 +134,12 @@ export function toListItem(row: ListRow): EmployeeListItem {
 export function toDetail(row: DetailRow, includeRestricted: boolean): EmployeeDetail {
   const detail: EmployeeDetail = {
     ...toListItem(row),
+    // Id and name only - the roster travels in `teamManagers` below.
+    team: row.team ? { id: row.team.id, name: row.team.name } : null,
+    teamManagers: (row.team?.managers ?? []).map((m) => ({
+      id: m.employee.id,
+      fullName: m.employee.displayName?.trim() || fullName(m.employee.firstName, m.employee.lastName),
+    })),
     middleName: row.middleName,
     displayName: row.displayName,
     personalEmail: row.personalEmail,
@@ -233,10 +260,7 @@ export async function assertReferencesExist(
       ? prisma.department.findFirst({ where: { id: input.departmentId, companyId }, select: { id: true } })
       : null,
     input.teamId
-      ? prisma.team.findFirst({
-          where: { id: input.teamId, companyId },
-          select: { id: true, departmentId: true },
-        })
+      ? prisma.team.findFirst({ where: { id: input.teamId, companyId }, select: { id: true } })
       : null,
     input.designationId
       ? prisma.designation.findFirst({ where: { id: input.designationId, companyId }, select: { id: true } })
@@ -261,14 +285,13 @@ export async function assertReferencesExist(
     details.secondaryManagerId = ['That employee does not exist.'];
   }
 
-  // A team belongs to exactly one department; allowing a mismatch would make
-  // department-scoped queries disagree with the org chart.
-  if (team && input.departmentId && team.departmentId !== input.departmentId) {
-    details.teamId = ['That team belongs to a different department.'];
-  }
-  if (team && !input.departmentId) {
-    details.teamId = ['Choose the team’s department as well.'];
-  }
+  /*
+   * NO DEPARTMENT/TEAM CROSS-CHECK. There used to be one - a team belonged to
+   * exactly one department, so a person's team had to sit inside their
+   * department, and a team with no department was rejected outright. Teams are
+   * an independent dimension now: Development and Team Alpha are two separate
+   * facts about the same person, and either may be set without the other.
+   */
 
   if (selfId) {
     if (input.managerId === selfId) details.managerId = ['An employee cannot report to themselves.'];

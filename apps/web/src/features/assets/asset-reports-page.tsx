@@ -459,7 +459,7 @@ export function AssetReportsPage() {
               <NativeSelect
                 aria-label="Department"
                 value={filters.departmentId}
-                onChange={(event) => update({ departmentId: event.target.value, teamId: '' })}
+                onChange={(event) => update({ departmentId: event.target.value })}
                 className="xl:w-44"
               >
                 <option value="">All departments</option>
@@ -477,15 +477,12 @@ export function AssetReportsPage() {
                 className="xl:w-40"
               >
                 <option value="">All teams</option>
-                {lookups.teams
-                  .filter(
-                    (team) => !filters.departmentId || team.departmentId === filters.departmentId,
-                  )
-                  .map((team) => (
-                    <option key={team.id} value={team.id}>
-                      {team.label}
-                    </option>
-                  ))}
+                {/* Every team: department and team narrow independently. */}
+                {lookups.teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.label}
+                  </option>
+                ))}
               </NativeSelect>
 
               <NativeSelect

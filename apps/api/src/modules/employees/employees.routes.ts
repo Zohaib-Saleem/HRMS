@@ -128,6 +128,12 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         query.designationId ? { designationId: query.designationId } : {},
         query.locationId ? { locationId: query.locationId } : {},
         query.managerId ? { managerId: query.managerId } : {},
+        // Through the roster of the employee's own team. Not the department,
+        // which names no managers, and not `managerId`, which is the
+        // reporting line.
+        query.teamManagerId
+          ? { team: { managers: { some: { employeeId: query.teamManagerId, isActive: true } } } }
+          : {},
         ...searchClauses,
       ],
     };

@@ -119,9 +119,8 @@ export const orgHierarchyRoutes: FastifyPluginAsync = async (app) => {
 
       const teams = await prisma.team.findMany({
         where: teamWhere,
-        orderBy: [{ department: { name: 'asc' } }, { name: 'asc' }],
+        orderBy: { name: 'asc' },
         include: {
-          department: { select: { id: true, name: true } },
           managers: {
             where: { isActive: true },
             orderBy: { assignedAt: 'asc' },
@@ -158,8 +157,6 @@ export const orgHierarchyRoutes: FastifyPluginAsync = async (app) => {
         chartTeams.push({
           teamId: team.id,
           teamName: team.name,
-          departmentId: team.department.id,
-          departmentName: team.department.name,
           isActive: team.isActive,
           managers: team.managers.map((m) => toPerson(m.employee)),
           members: members.map(toPerson),

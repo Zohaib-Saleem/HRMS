@@ -633,10 +633,7 @@ export async function assertOpeningReferences(
         })
       : null,
     input.teamId
-      ? prisma.team.findFirst({
-          where: { id: input.teamId, companyId },
-          select: { id: true, departmentId: true },
-        })
+      ? prisma.team.findFirst({ where: { id: input.teamId, companyId }, select: { id: true } })
       : null,
     input.locationId
       ? prisma.location.findFirst({
@@ -666,10 +663,9 @@ export async function assertOpeningReferences(
   }
   if (input.recruiterId && !recruiter) details.recruiterId = ['That employee does not exist.'];
 
-  // A team belongs to exactly one department, exactly as on the employee form.
-  if (team && input.departmentId && team.departmentId !== input.departmentId) {
-    details.teamId = ['That team belongs to a different department.'];
-  }
+  // No department/team cross-check: a team is not a sub-unit of a department,
+  // so a vacancy may name either, both or neither. Same rule as the employee
+  // form - see `validateEmployeeRelations`.
 
   if (Object.keys(details).length > 0) throw new ValidationError(details);
 }

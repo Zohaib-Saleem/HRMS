@@ -131,6 +131,7 @@ A first-class record, not a free-text job title. Employees reference it.
 ### Teams
 
 The reference has **no Team entity** — it models sub-structure through *parent departments*.
+We have both, as two independent dimensions rather than a hierarchy.
 Our Phase 1 schema already has `Department → Team`.
 **KEEP our two-level model**, and add `parentDepartmentId` for deeper nesting. See §13.
 
@@ -493,9 +494,11 @@ a weakly typed schema, unreliable reporting and a permanent migration problem. W
 typed schema with proper migrations. If genuinely dynamic attributes are needed later, we
 add a scoped custom-attributes table — not a whole form engine.
 
-**3. Teams stay, and departments gain a parent.**
-The reference has no Team entity, only nested departments. Our `Department → Team` model is
-clearer for the common case, so it stays; we add `parentDepartment` for deeper nesting.
+**3. Teams stay, as a dimension of their own, and departments gain a parent.**
+The reference has no Team entity, only nested departments. We keep both and keep them
+SEPARATE: an employee has a department and a team independently, and a team is not a
+sub-department. Departments get `parentDepartment` for deeper nesting; teams get a roster of
+one to three managers, which is what the approval chain reads.
 
 **4. Designation becomes a real entity.**
 Phase 1 used free-text `jobTitle`. The reference is right here — a lookup table gives clean

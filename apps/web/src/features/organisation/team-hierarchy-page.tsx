@@ -96,10 +96,12 @@ export function TeamHierarchyPage() {
             {chart.teams.map((team) => (
               <div key={team.teamId} className="px-5 py-4">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div>
-                    <p className="text-[14px] font-medium">{team.teamName}</p>
-                    <p className="text-[12px] text-muted-foreground">{team.departmentName}</p>
-                  </div>
+                  {/*
+                    The team's name and nothing under it. A department used to
+                    sit here, back when a team was a sub-unit of one; it is not,
+                    and a team's people may come from several departments.
+                  */}
+                  <p className="text-[14px] font-medium">{team.teamName}</p>
                   <Badge variant="neutral">{team.memberCount} people</Badge>
                 </div>
 

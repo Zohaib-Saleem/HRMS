@@ -268,7 +268,7 @@ function wireFetch() {
       return respond({
         data: {
           departments: [{ id: 'dept-dev', label: 'Development' }],
-          teams: [{ id: 'team-platform', label: 'Platform', departmentId: 'dept-dev' }],
+          teams: [{ id: 'team-platform', label: 'Platform' }],
           designations: [],
           locations: [{ id: 'loc-lahore', label: 'Lahore Office' }],
           managers: [],

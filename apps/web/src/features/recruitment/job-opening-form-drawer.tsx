@@ -157,20 +157,14 @@ export function JobOpeningFormDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, opening?.id]);
 
-  const departmentId = form.watch('departmentId');
   const status = form.watch('status');
 
   /*
-   * A team belongs to a department, so a team left selected after the
-   * department changed is a combination the server will refuse and the reader
-   * can already see is wrong.
+   * Department and team are INDEPENDENT on a vacancy, exactly as they are on a
+   * person: a role may be in Development, on Team Alpha, in both or in
+   * neither. Nothing clears the team when the department changes, because the
+   * pair was never a parent and a child.
    */
-  const teams = lookups.teams.filter((team) => !departmentId || team.departmentId === departmentId);
-  React.useEffect(() => {
-    const teamId = form.getValues('teamId');
-    if (teamId && !teams.some((team) => team.id === teamId)) form.setValue('teamId', '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [departmentId]);
 
   const mutation = useMutation({
     mutationFn: async (values: FormValues) => {
@@ -256,14 +250,10 @@ export function JobOpeningFormDrawer({
                 </NativeSelect>
               </FormField>
 
-              <FormField
-                label="Team"
-                htmlFor="jo-team"
-                hint={departmentId ? undefined : 'Choose a department first.'}
-              >
-                <NativeSelect {...form.register('teamId')} disabled={!departmentId}>
+              <FormField label="Team" htmlFor="jo-team">
+                <NativeSelect {...form.register('teamId')}>
                   <option value="">Not stated</option>
-                  {teams.map((team) => (
+                  {lookups.teams.map((team) => (
                     <option key={team.id} value={team.id}>
                       {team.label}
                     </option>

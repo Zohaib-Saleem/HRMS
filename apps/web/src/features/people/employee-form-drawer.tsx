@@ -125,7 +125,6 @@ export function EmployeeFormDrawer({
   });
 
   const { register, handleSubmit, formState, watch, setError, reset } = form;
-  const departmentId = watch('departmentId');
 
   /*
    * The employment status as the form currently holds it, and what the record
@@ -139,10 +138,12 @@ export function EmployeeFormDrawer({
   const employmentStatus = watch('employmentStatus') || null;
   const wasProbation = employee?.employmentStatus === 'PROBATION';
 
-  // Teams belong to a department, so the options narrow as soon as one is picked.
-  const teamOptions = lookups.teams.filter(
-    (team) => !departmentId || team.departmentId === departmentId,
-  );
+  /*
+   * EVERY team is offered, whatever department is picked. Department and team
+   * are independent facts about a person - Development AND Team Alpha - so
+   * narrowing one by the other would hide the very combinations this form
+   * exists to record.
+   */
 
   const mutation = useMutation({
     mutationFn: (values: EmployeeInput) =>
@@ -247,10 +248,10 @@ export function EmployeeFormDrawer({
                     ))}
                   </NativeSelect>
                 </FormField>
-                <FormField label="Team" htmlFor="emp-team" error={formState.errors.teamId?.message} hint={departmentId ? undefined : 'Choose a department first.'}>
-                  <NativeSelect {...register('teamId')} disabled={!departmentId}>
+                <FormField label="Team" htmlFor="emp-team" error={formState.errors.teamId?.message}>
+                  <NativeSelect {...register('teamId')}>
                     <option value="">Not set</option>
-                    {teamOptions.map((o) => (
+                    {lookups.teams.map((o) => (
                       <option key={o.id} value={o.id}>{o.label}</option>
                     ))}
                   </NativeSelect>

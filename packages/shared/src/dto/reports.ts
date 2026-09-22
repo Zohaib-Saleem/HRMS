@@ -160,6 +160,13 @@ export interface EmployeeMasterRow {
   confirmationDate: string | null;
   departmentName: string | null;
   teamName: string | null;
+  /**
+   * The ACTIVE managers of this person's team, joined by a comma. A separate
+   * column from `managerName`, which is the reporting line: the team manager
+   * is whoever runs the team and is the person the approval chain asks, and
+   * the two are frequently different people.
+   */
+  teamManagerNames: string | null;
   designationName: string | null;
   jobTitle: string | null;
   locationName: string | null;
@@ -297,6 +304,7 @@ export const EMPLOYEE_MASTER_COLUMNS: readonly MasterColumn[] = [
   { key: 'confirmationDate', label: 'Confirmation Date', group: 'Employment' },
   { key: 'departmentName', label: 'Department', group: 'Employment', default: true },
   { key: 'teamName', label: 'Team', group: 'Employment', default: true },
+  { key: 'teamManagerNames', label: 'Team Manager', group: 'Employment', default: true },
   { key: 'designationName', label: 'Designation', group: 'Employment', default: true },
   { key: 'jobTitle', label: 'Job Title', group: 'Employment' },
   { key: 'locationName', label: 'Location', group: 'Employment' },

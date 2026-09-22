@@ -128,7 +128,7 @@ function toRecord(row: ManagerRow, withAccess: Set<string>): TeamManagerRecord {
 async function teamOrThrow(companyId: string, teamId: string) {
   const team = await prisma.team.findFirst({
     where: { id: teamId, companyId },
-    include: { department: { select: { name: true } }, _count: { select: { employees: true } } },
+    include: { _count: { select: { employees: true } } },
   });
   if (!team) throw new NotFoundError('Team');
   return team;
@@ -187,7 +187,6 @@ export const teamManagerRoutes: FastifyPluginAsync = async (app) => {
       const data: TeamManagerRoster = {
         teamId: team.id,
         teamName: team.name,
-        departmentName: team.department.name,
         employeeCount: team._count.employees,
         managers: rows.filter((r) => r.isActive).map((r) => toRecord(r, withAccess)),
         formerManagers: rows
