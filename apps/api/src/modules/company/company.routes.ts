@@ -203,6 +203,8 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
     duplicatePunchWindowSeconds: true,
     maxPlausibleSpanMinutes: true,
     allowImplausibleSpans: true,
+    overnightCheckOutWindowMinutes: true,
+    overnightCheckOutCutoff: true,
     weekendWorkRule: true,
     holidayWorkRule: true,
     timezone: true,

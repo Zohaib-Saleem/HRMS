@@ -290,6 +290,8 @@ const FIELD_LABELS: Record<keyof AttendanceRulesInput, string> = {
   duplicatePunchWindowSeconds: 'Duplicate punch window',
   maxPlausibleSpanMinutes: 'Longest believable day',
   allowImplausibleSpans: 'Score implausible days anyway',
+  overnightCheckOutWindowMinutes: 'A day can still be closed for',
+  overnightCheckOutCutoff: 'Last time a punch can close yesterday',
 };
 
 const shown = (v: unknown): string => {
@@ -373,6 +375,8 @@ export function AttendanceRulesPage() {
           duplicatePunchWindowSeconds: query.data.duplicatePunchWindowSeconds,
           maxPlausibleSpanMinutes: query.data.maxPlausibleSpanMinutes,
           allowImplausibleSpans: query.data.allowImplausibleSpans,
+          overnightCheckOutWindowMinutes: query.data.overnightCheckOutWindowMinutes,
+          overnightCheckOutCutoff: query.data.overnightCheckOutCutoff,
         }
       : undefined,
   });
@@ -458,6 +462,8 @@ export function AttendanceRulesPage() {
     duplicatePunchWindowSeconds: rules.duplicatePunchWindowSeconds,
     maxPlausibleSpanMinutes: rules.maxPlausibleSpanMinutes,
     allowImplausibleSpans: rules.allowImplausibleSpans,
+    overnightCheckOutWindowMinutes: rules.overnightCheckOutWindowMinutes,
+    overnightCheckOutCutoff: rules.overnightCheckOutCutoff,
   };
   const window =
     (toMinutes(live?.defaultShiftEnd ?? rules.defaultShiftEnd) ?? 0) -
@@ -1060,6 +1066,42 @@ export function AttendanceRulesPage() {
                 />
               )}
             />
+
+            {/*
+              The day that ends after midnight. Separate from the bound above:
+              that one asks whether a day is believable, these ask which day a
+              punch belongs to - and a punch can be attributed correctly to a
+              day that is then too long to score.
+            */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                label="A day can still be closed for (minutes)"
+                htmlFor="overnightCheckOutWindowMinutes"
+                hint="Somebody who stays until one in the morning badges out on the next date. Within this long after a day's first punch, that punch closes the day instead of opening a new one - and only while the day is still open. Zero switches the rule off."
+                error={form.formState.errors.overnightCheckOutWindowMinutes?.message}
+              >
+                <Input
+                  id="overnightCheckOutWindowMinutes"
+                  type="number"
+                  min={0}
+                  disabled={!canManage}
+                  {...form.register('overnightCheckOutWindowMinutes')}
+                />
+              </FormField>
+              <FormField
+                label="Last time a punch can close yesterday"
+                htmlFor="overnightCheckOutCutoff"
+                hint="After this local time a punch is an arrival however open yesterday looks. Stops a forgotten departure being closed by the next morning."
+                error={form.formState.errors.overnightCheckOutCutoff?.message}
+              >
+                <Input
+                  id="overnightCheckOutCutoff"
+                  type="time"
+                  disabled={!canManage}
+                  {...form.register('overnightCheckOutCutoff')}
+                />
+              </FormField>
+            </div>
           </CardContent>
         </Card>
 

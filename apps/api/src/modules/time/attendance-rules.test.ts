@@ -67,6 +67,8 @@ const DEFAULTS: AttendancePolicy = {
   duplicatePunchWindowSeconds: 60,
   maxPlausibleSpanMinutes: 960,
   allowImplausibleSpans: false,
+  overnightCheckOutWindowMinutes: 1080,
+  overnightCheckOutCutoff: '06:00',
 };
 
 /** Scores one day. `shift` null means "no assignment, use the company window". */

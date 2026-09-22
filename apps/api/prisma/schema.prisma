@@ -267,6 +267,39 @@ model Company {
   /// On, it restores the previous behaviour for a company that wants it.
   allowImplausibleSpans Boolean @default(false)
 
+  // --- the day that ends after midnight ------------------------------------
+  // Somebody who stays until one in the morning punches out on a date that is
+  // not the date they worked. Read literally, that punch opens a new day: the
+  // long day is left with an arrival and no departure and earns nothing, and
+  // the next day is scored from a 01:00 "arrival" it never had. Both halves
+  // are wrong, and the evening's overtime is the part that costs somebody
+  // money.
+  //
+  // The rule is deliberately conditional rather than a moved midnight. A fixed
+  // cutoff cannot tell a late departure from an early arrival, so this asks
+  // the only question that can: is the previous day still open?
+
+  /// How long after a day's first punch a later punch can still be read as
+  /// that day's departure. Zero switches the rule off entirely and restores
+  /// reading every post-midnight punch as a fresh arrival.
+  ///
+  /// It is a span rather than an hour of the clock because the question is
+  /// "how long can one working day be?", which is about this company, and a
+  /// day that started at 09:00 and one that started at 14:00 do not stop
+  /// being one day at the same moment.
+  ///
+  /// Deliberately longer than `maxPlausibleSpanMinutes`: this decides which
+  /// day a punch belongs to, that decides whether the resulting day is
+  /// believable. A day can be attributed correctly and still be too long to
+  /// score, and the two answers are better given separately.
+  overnightCheckOutWindowMinutes Int @default(1080)
+
+  /// The latest local time at which a punch can still close the previous day.
+  /// After it, a punch is an arrival however open yesterday looks - the guard
+  /// that stops a forgotten departure being closed by the next morning's
+  /// arrival, turning two days into one.
+  overnightCheckOutCutoff String @default("06:00")
+
   // --- attendance module (step 1) ----------------------------------------
   // Flags and non-working-day behaviour. Defaults reproduce what the engine
   // did before these existed, so nothing derived changes until Super Admin

@@ -80,6 +80,8 @@ const ATTENDANCE: AttendancePolicy = {
   duplicatePunchWindowSeconds: 60,
   maxPlausibleSpanMinutes: 960,
   allowImplausibleSpans: false,
+  overnightCheckOutWindowMinutes: 1080,
+  overnightCheckOutCutoff: '06:00',
 };
 
 const PAYROLL: EffectiveConfig = {

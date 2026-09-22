@@ -313,6 +313,16 @@ export const attendanceRulesSchema = z
       .max(1440, 'A day cannot be longer than a day.')
       .optional(),
     allowImplausibleSpans: z.boolean().optional(),
+    overnightCheckOutWindowMinutes: z.coerce
+      .number()
+      .int('Use whole minutes.')
+      .min(0, 'The window cannot be negative.')
+      .max(1440, 'A day cannot be longer than a day.')
+      .optional(),
+    overnightCheckOutCutoff: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use a 24-hour time, such as 06:00.')
+      .optional(),
 
     /**
      * Added with the attendance module. Optional so a client sending the
@@ -510,6 +520,8 @@ export const ATTENDANCE_RULE_DEFAULTS: AttendanceRuleValues = {
   duplicatePunchWindowSeconds: 60,
   maxPlausibleSpanMinutes: 960,
   allowImplausibleSpans: false,
+  overnightCheckOutWindowMinutes: 1080,
+  overnightCheckOutCutoff: '06:00',
   overtimeEnabled: true,
   overtimeFromShiftEnd: true,
   overtimeCountsEarlyArrival: false,
@@ -813,6 +825,20 @@ export const ATTENDANCE_RULE_SECTIONS: readonly AttendanceRuleSection[] = [
         description:
           'Off: a day longer than the bound contributes no hours and is listed for correction. On: it is scored on its punches, which is what happened before this setting existed.',
         kind: 'boolean',
+      },
+      {
+        key: 'overnightCheckOutWindowMinutes',
+        label: 'A day can still be closed for',
+        description:
+          'Somebody who stays until one in the morning badges out on the next date. Within this long after a day\u2019s first punch, such a punch is read as that day\u2019s departure instead of a new arrival - but only while that day is still open, so a day that already has a departure is never reopened. Zero switches the rule off and reads every punch after midnight as an arrival.',
+        kind: 'minutes',
+      },
+      {
+        key: 'overnightCheckOutCutoff',
+        label: 'Last time a punch can close yesterday',
+        description:
+          'After this local time a punch is an arrival however open yesterday looks. The guard that stops a forgotten departure being closed by the next morning, turning two days into one.',
+        kind: 'time',
       },
     ],
   },

@@ -7,6 +7,7 @@ import {
   resolvePolicyFor,
 } from '../time/attendance-policy.js';
 import { shiftOnDate } from '../time/attendance.service.js';
+import { reattributeOvernightPunches } from './overnight-attribution.js';
 
 /**
  * Turning raw punches into attendance.
@@ -308,6 +309,57 @@ async function markProcessed(ids: readonly string[]): Promise<void> {
 }
 
 /**
+ * Re-attributes a batch's post-midnight punches and returns every day that
+ * must now be recalculated - the ones the caller asked for, plus the previous
+ * days that have just acquired a departure.
+ *
+ * A failure here is not allowed to cost the batch: attribution is an
+ * improvement on the reading, and the old reading is still a reading. The days
+ * the caller asked for are scored either way.
+ */
+async function withOvernightDays(
+  companyId: string,
+  pairing: AttendancePunchPairing,
+  days: ReadonlyArray<{ employeeId: string; dayKey: string }>,
+): Promise<Array<{ employeeId: string; dayKey: string }>> {
+  const byEmployee = new Map<string, string[]>();
+  for (const day of days) {
+    const list = byEmployee.get(day.employeeId) ?? [];
+    list.push(day.dayKey);
+    byEmployee.set(day.employeeId, list);
+  }
+
+  const all = new Map(days.map((d) => [`${d.employeeId}:${d.dayKey}`, d]));
+
+  for (const [employeeId, dayKeys] of byEmployee) {
+    try {
+      const policy = await resolvePolicyFor(
+        companyId,
+        employeeId,
+        dayKeyToDateColumn(dayKeys[0]!),
+      );
+      const touched = await reattributeOvernightPunches({
+        companyId,
+        employeeId,
+        dayKeys,
+        settings: {
+          windowMinutes: policy.overnightCheckOutWindowMinutes,
+          cutoff: policy.overnightCheckOutCutoff,
+          timeZone: policy.timeZone,
+          pairing,
+          duplicateWindowSeconds: policy.duplicatePunchWindowSeconds,
+        },
+      });
+      for (const dayKey of touched) all.set(`${employeeId}:${dayKey}`, { employeeId, dayKey });
+    } catch {
+      // Keep the batch. The caller's days are still scored below.
+    }
+  }
+
+  return [...all.values()];
+}
+
+/**
  * Recalculates every employee-day a batch of punches touched.
  *
  * Failures are per-day: one employee whose recalculation throws must not stop
@@ -322,7 +374,15 @@ export async function recalculateDays(input: {
   let skipped = 0;
   let failed = 0;
 
-  for (const day of input.days) {
+  /*
+   * Before anything is scored, give the post-midnight punches back to the day
+   * they close. This has to happen first and for the whole batch: moving a
+   * punch changes TWO days, and scoring one of them from the old attribution
+   * would write a record that the next pass immediately contradicts.
+   */
+  const days = await withOvernightDays(input.companyId, input.pairing, input.days);
+
+  for (const day of days) {
     try {
       const result = await recalculateFromPunches({
         companyId: input.companyId,

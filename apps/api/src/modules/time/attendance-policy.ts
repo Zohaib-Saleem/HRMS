@@ -65,6 +65,13 @@ export interface AttendancePolicy {
   maxPlausibleSpanMinutes: number;
   /** Score a day past the bound anyway, restoring the old behaviour. */
   allowImplausibleSpans: boolean;
+  /**
+   * How long after a day's first punch a later punch can still be read as
+   * that day's departure rather than the next day's arrival. Zero: off.
+   */
+  overnightCheckOutWindowMinutes: number;
+  /** Local `HH:MM` after which a punch is an arrival however open yesterday looks. */
+  overnightCheckOutCutoff: string;
 
   // --- attendance module (step 1) -----------------------------------------
   /** Break assumed for the default window when no shift is assigned. */
@@ -160,6 +167,8 @@ const POLICY_SELECT = {
   duplicatePunchWindowSeconds: true,
   maxPlausibleSpanMinutes: true,
   allowImplausibleSpans: true,
+  overnightCheckOutWindowMinutes: true,
+  overnightCheckOutCutoff: true,
 } as const;
 
 /**

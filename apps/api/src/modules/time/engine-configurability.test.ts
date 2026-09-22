@@ -69,6 +69,8 @@ const COMPANY_A: AttendancePolicy = {
   duplicatePunchWindowSeconds: 60,
   maxPlausibleSpanMinutes: 960,
   allowImplausibleSpans: false,
+  overnightCheckOutWindowMinutes: 1080,
+  overnightCheckOutCutoff: '06:00',
 };
 
 /** Company B - a different company, agreeing with A about nothing. */
