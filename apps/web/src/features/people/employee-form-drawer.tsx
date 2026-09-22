@@ -103,6 +103,7 @@ export function EmployeeFormDrawer({
       sourceOfHire: employee?.sourceOfHire ?? '',
       linkedinUrl: employee?.linkedinUrl ?? '',
       priorExperienceMonths: employee?.priorExperienceMonths ?? null,
+      excludedFromAttendance: employee?.excludedFromAttendance ?? false,
       dateOfBirth: employee?.dateOfBirth ?? '',
       gender: (employee?.gender as EmployeeInput['gender']) ?? null,
       maritalStatus: (employee?.maritalStatus as EmployeeInput['maritalStatus']) ?? null,
@@ -350,6 +351,22 @@ export function EmployeeFormDrawer({
                 <FormField label="Source of hire" htmlFor="emp-sourceOfHire" error={formState.errors.sourceOfHire?.message}>
                   <Input {...register('sourceOfHire')} />
                 </FormField>
+                <label className={cn('flex cursor-pointer items-start gap-3 text-[13.5px]', 'sm:col-span-2')}>
+                  <input
+                    type="checkbox"
+                    {...register('excludedFromAttendance')}
+                    className="mt-0.5 size-4 shrink-0 rounded border-input accent-[var(--primary)]"
+                  />
+                  <span>
+                    <span className="block font-medium">Does not punch in</span>
+                    <span className="block text-[12.5px] text-muted-foreground">
+                      Keeps this person out of attendance entirely - no absent rows, and no
+                      row on the sheet, the reports or the analytics. They stay active
+                      everywhere else: the org chart, approvals, assets and leave. For a
+                      partner or a director, not for somebody who is simply away.
+                    </span>
+                  </span>
+                </label>
               </>
             ) : null}
 

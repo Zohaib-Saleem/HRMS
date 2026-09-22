@@ -462,6 +462,14 @@ function OverviewTab({
                   : null
               }
             />
+            {/*
+              Shown only when set. A row reading "Attendance: counted" against
+              all 77 people who simply punch would be noise; the exception is
+              the thing worth stating.
+            */}
+            {employee.excludedFromAttendance ? (
+              <Field label="Attendance" value="Not counted - does not punch in" />
+            ) : null}
           </dl>
         </CardContent>
       </Card>

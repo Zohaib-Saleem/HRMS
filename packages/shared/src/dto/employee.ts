@@ -230,6 +230,16 @@ const employeeBaseSchema = z
     sourceOfHire: optionalText(120),
     linkedinUrl: optionalText(300),
     priorExperienceMonths: z.coerce.number().int().min(0).max(1200).nullish(),
+    /**
+     * Somebody who never punches - a partner, a director.
+     *
+     * Defaulted false rather than nullish: "nobody has said" and "counted
+     * normally" are the same answer here, and a tri-state would only invite a
+     * screen to render a third thing. It is a job fact rather than a status:
+     * the person stays ACTIVE everywhere else, and only attendance stops
+     * asking about them.
+     */
+    excludedFromAttendance: z.boolean().default(false),
 
     // personal
     dateOfBirth: optionalDate,
@@ -534,6 +544,11 @@ export interface EmployeeDetail extends EmployeeListItem {
   sourceOfHire: string | null;
   linkedinUrl: string | null;
   priorExperienceMonths: number | null;
+  /**
+   * True for somebody who never punches. They stay ACTIVE and appear
+   * everywhere else; attendance simply stops asking about them.
+   */
+  excludedFromAttendance: boolean;
   dateOfBirth: string | null;
   gender: string | null;
   maritalStatus: string | null;

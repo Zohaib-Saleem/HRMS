@@ -167,6 +167,7 @@ function seed(): void {
     workEmail: null,
     phone: null,
     jobTitle: null,
+    excludedFromAttendance: false,
     createdAt: new Date('2024-01-15T00:00:00Z'),
     updatedAt: new Date('2024-01-15T00:00:00Z'),
     // The relations DETAIL_INCLUDE pulls in. Empty rather than absent, because
@@ -291,6 +292,71 @@ describe('the three employment statuses', () => {
 
     expect(response.statusCode).toBe(200);
     expect(db.rows.get('emp-unclassified')!.employmentStatus).toBeNull();
+  });
+});
+
+describe('excluding somebody from attendance', () => {
+  /*
+   * The partner case. The flag is not a status and not a lifecycle date, so
+   * the thing worth pinning is that it travels the ordinary PATCH path: the
+   * schema is the whitelist, `toPrismaData` carries it, and a call that does
+   * not mention it must not reset it. That last one is the whole risk - the
+   * base schema defaults it to false, and if `.partial()` ever stopped
+   * suppressing that default, every unrelated save would quietly put a
+   * partner back on the attendance sheet.
+   */
+  it('sets the flag when asked', async () => {
+    const response = await patch(await hrAdmin(), TARGET, { excludedFromAttendance: true });
+
+    expect(response.statusCode).toBe(200);
+    expect(db.rows.get(TARGET)!.excludedFromAttendance).toBe(true);
+  });
+
+  it('carries the flag back on the detail payload', async () => {
+    const response = await patch(await hrAdmin(), TARGET, { excludedFromAttendance: true });
+
+    expect(
+      response.json<{ data: { excludedFromAttendance: boolean } }>().data.excludedFromAttendance,
+    ).toBe(true);
+  });
+
+  it('leaves it alone on a PATCH that does not mention it', async () => {
+    await patch(await hrAdmin(), TARGET, { excludedFromAttendance: true });
+    const response = await patch(await hrAdmin(), TARGET, { jobTitle: 'Partner' });
+
+    expect(response.statusCode).toBe(200);
+    expect(db.rows.get(TARGET)!.excludedFromAttendance).toBe(true);
+  });
+
+  it('clears it again when asked, so the exclusion is reversible', async () => {
+    await patch(await hrAdmin(), TARGET, { excludedFromAttendance: true });
+    const response = await patch(await hrAdmin(), TARGET, { excludedFromAttendance: false });
+
+    expect(response.statusCode).toBe(200);
+    expect(db.rows.get(TARGET)!.excludedFromAttendance).toBe(false);
+  });
+
+  it('refuses a caller who may read employees but not manage them', async () => {
+    const response = await patch(await manager(), TARGET, { excludedFromAttendance: true });
+
+    expect(response.statusCode).toBe(403);
+    expect(db.rows.get(TARGET)!.excludedFromAttendance).toBe(false);
+  });
+
+  it('refuses the employee themselves - being outside attendance is not self-serve', async () => {
+    const response = await patch(await selfServing(), TARGET, { excludedFromAttendance: true });
+
+    expect(response.statusCode).toBe(403);
+    expect(db.rows.get(TARGET)!.excludedFromAttendance).toBe(false);
+  });
+
+  it('rejects a non-boolean rather than coercing it', async () => {
+    for (const bogus of ['yes', 'true', 1, null]) {
+      const response = await patch(await hrAdmin(), TARGET, { excludedFromAttendance: bogus });
+      expect(response.statusCode).toBe(422);
+    }
+
+    expect(db.rows.get(TARGET)!.excludedFromAttendance).toBe(false);
   });
 });
 
