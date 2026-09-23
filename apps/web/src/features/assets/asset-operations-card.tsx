@@ -4,6 +4,7 @@ import { Boxes, CheckCircle2, PackageOpen, Wrench } from 'lucide-react';
 import { PERMISSIONS, type AssetSummary } from '@hrms/shared';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { DashboardGrid } from '@/components/layout/dashboard-grid';
 import { StatCard } from '@/components/ui/stat-card';
 import { usePermissions } from '@/features/auth/session-context';
 
@@ -60,14 +61,19 @@ export function AssetOperationsCard() {
     byStatus === undefined ? undefined : byStatus.LOST + byStatus.DAMAGED;
 
   return (
-    <div className="mt-4">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <h2 className="text-[15px] font-semibold tracking-tight">Asset register</h2>
+    /* No margin of its own: the dashboard that hosts this owns the gap between
+       its rows (`DashboardStack`), and the tiles break on the same ladder as
+       every other row on that page (`DashboardGrid`). */
+    <section aria-labelledby="asset-register-heading">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 id="asset-register-heading" className="text-[15px] font-semibold tracking-tight">
+          Asset register
+        </h2>
         <Button variant="outline" size="sm" asChild>
           <Link to="/assets/dashboard">Open asset dashboard</Link>
         </Button>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <DashboardGrid columns={4}>
         <StatCard
           label="Total assets"
           value={summary?.total}
@@ -106,7 +112,7 @@ export function AssetOperationsCard() {
           loading={loading}
           to="/assets?status=UNDER_REPAIR"
         />
-      </div>
-    </div>
+      </DashboardGrid>
+    </section>
   );
 }

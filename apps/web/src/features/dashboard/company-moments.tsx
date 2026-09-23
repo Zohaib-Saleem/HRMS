@@ -245,7 +245,7 @@ export function CompanyMoments({
   if (total === 0) return null;
 
   return (
-    <section className="mb-4 space-y-2.5" aria-labelledby="company-moments-heading">
+    <section className="space-y-2.5" aria-labelledby="company-moments-heading">
       <h2 id="company-moments-heading" className="text-sm font-semibold">
         {companyName ? `Today at ${companyName}` : 'Celebrations & new joiners'}
       </h2>

@@ -51,8 +51,13 @@ function currentPosition(): Promise<{ latitude: number; longitude: number }> {
  * The server decides whether today is a working day; this only renders what it
  * is told. That keeps the weekend, holiday and leave rules in one place instead
  * of duplicating the calendar logic in the browser.
+ *
+ * The bottom margin it has always carried is a default rather than a rule: the
+ * attendance page, which stacks sections by their own margins, keeps it; the
+ * dashboard, whose rows are spaced by `DashboardStack`, passes `mb-0` so this
+ * card is not the one row on the page with a gap of its own beneath it.
  */
-export function AttendanceToday() {
+export function AttendanceToday({ className }: { className?: string } = {}) {
   const queryClient = useQueryClient();
   const [mode, setMode] = React.useState<AttendanceMode>('OFFICE');
 
@@ -107,7 +112,7 @@ export function AttendanceToday() {
 
   if (today.isLoading) {
     return (
-      <Card className="mb-6">
+      <Card className={cn('mb-6', className)}>
         <CardContent className="flex items-center gap-4 py-5">
           <Skeleton className="size-11 rounded-lg" />
           <div className="flex-1 space-y-2">
@@ -127,7 +132,7 @@ export function AttendanceToday() {
   if (!state) return null;
 
   return (
-    <Card className="mb-6">
+    <Card className={cn('mb-6', className)}>
       <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center">
         <span
           className={cn(

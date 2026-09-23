@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -45,6 +46,18 @@ import { assetDate } from './assets-shared';
  * hold it gets a shorter dashboard rather than a broken one.
  */
 
+/**
+ * How many issued items the card lists before it hands over to /assets.
+ *
+ * A dashboard card is a glance, and this one shares a row with lunch and cases:
+ * an employee holding eight pieces of kit would otherwise set the height of
+ * that whole row and push everything below it down the page. Three is what fits
+ * beside a case card with its counts in it. The rest are not hidden - the
+ * count in the header is the real total and the link goes to the full list,
+ * which the server scopes to the reader's own assets.
+ */
+const LISTED = 3;
+
 export function MyAssetsCard() {
   const { has } = usePermissions();
   const canRead = has(PERMISSIONS.ASSET_READ);
@@ -88,16 +101,25 @@ export function MyAssetsCard() {
     totalAssigned: answer?.totalAssigned ?? EMPTY_MY_ASSETS.totalAssigned,
   };
 
+  /*
+   * Listed, and what is left over. Sliced for DISPLAY only: `totalAssigned` in
+   * the header is the server's own figure and is untouched by this.
+   */
+  const listed = data.assigned.slice(0, LISTED);
+  const beyond = data.assigned.length - listed.length;
+
   return (
     <>
-      <Card>
+      {/* A column filling the height its dashboard row gives it - see
+          `DashboardGrid`. */}
+      <Card className="flex h-full flex-col">
         <CardHeader className="flex-row items-center justify-between gap-2">
           <CardTitle>My assets</CardTitle>
           {data.totalAssigned > 0 ? (
             <Badge variant="neutral">{data.totalAssigned}</Badge>
           ) : null}
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="flex flex-1 flex-col gap-3">
           {query.isLoading ? (
             <>
               <Skeleton className="h-4 w-48" />
@@ -161,7 +183,7 @@ export function MyAssetsCard() {
               ))}
 
               <ul className="space-y-2">
-                {data.assigned.map((row) => (
+                {listed.map((row) => (
                   <li key={row.assignmentId} className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-[13.5px] font-medium">{row.name}</p>
@@ -184,6 +206,12 @@ export function MyAssetsCard() {
                   </li>
                 ))}
               </ul>
+
+              {beyond > 0 ? (
+                <Button variant="ghost" size="sm" className="-mx-2 self-start" asChild>
+                  <Link to="/assets">View all {data.assigned.length} assets</Link>
+                </Button>
+              ) : null}
             </>
           )}
         </CardContent>

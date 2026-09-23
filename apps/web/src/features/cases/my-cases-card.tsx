@@ -80,7 +80,11 @@ export function MyCasesCard() {
       : Object.values(counts).reduce((sum, n) => sum + n, 0);
 
   return (
-    <Card>
+    /* A column filling the height its dashboard row gives it - see
+       `DashboardGrid`. The two header buttons wrap onto a second line on a
+       narrow column, which is why this card was taller than its neighbours;
+       stretching the row makes that difference cost nothing. */
+    <Card className="flex h-full flex-col">
       <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
         <CardTitle className="flex items-center gap-2">
           <LifeBuoy className="size-4" aria-hidden /> My cases
@@ -97,16 +101,23 @@ export function MyCasesCard() {
         </div>
       </CardHeader>
 
-      <CardContent>
+      <CardContent className="flex flex-1 flex-col justify-center">
         {query.isLoading ? (
           <Skeleton className="h-24 w-full" />
         ) : query.isError ? (
           <ErrorState error={query.error} onRetry={() => void query.refetch()} />
         ) : total === 0 ? (
           <EmptyState
+            className="px-0 py-2"
             icon={LifeBuoy}
             title="No cases"
-            description="Raise one when something needs sorting out - a wrong payslip, a laptop that will not start, an office repair - and you want it tracked rather than remembered."
+            // The same sentence /cases opens with. It ran three examples long
+            // here - a wrong payslip, a laptop that will not start, an office
+            // repair - which wrapped to four lines in a card a third of the
+            // dashboard wide and made this the tallest card in its row, so the
+            // two short cards beside it were stretched to match a list of
+            // examples. The examples were never the point; the tracking is.
+            description="Raise one when something needs sorting out and you want it tracked."
             action={
               canCreate ? (
                 <Button variant="outline" size="sm" onClick={() => setCreating(true)}>
@@ -117,7 +128,11 @@ export function MyCasesCard() {
           />
         ) : (
           <>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+            {/* Two by two, at every width. Four across was a viewport breakpoint
+                reading a card that is a THIRD of the viewport wide: from `md`
+                up the counts sat in ~70px columns and "In progress" wrapped
+                under its own number. */}
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
               {HEADLINE.map((status) => (
                 <div key={status}>
                   <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">

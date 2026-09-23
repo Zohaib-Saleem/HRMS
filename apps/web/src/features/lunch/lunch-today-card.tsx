@@ -78,7 +78,14 @@ export function LunchTodayCard() {
   const allPaid = live.length > 0 && live.every((order) => order.paymentStatus === 'PAID');
 
   return (
-    <Card>
+    /*
+     * Laid out as a column that fills the height its dashboard row gives it -
+     * see `DashboardGrid`. The card is the shortest of the three in that row
+     * and used to be the reason the row opted out of equal heights; centring
+     * its one line of content inside the space instead of padding the bottom
+     * out is what makes an equal-height row look deliberate rather than empty.
+     */
+    <Card className="flex h-full flex-col">
       <CardHeader className="flex-row items-center justify-between gap-2">
         <CardTitle>Today&rsquo;s lunch</CardTitle>
         {live.length > 0 ? (
@@ -88,7 +95,7 @@ export function LunchTodayCard() {
         ) : null}
       </CardHeader>
 
-      <CardContent>
+      <CardContent className="flex flex-1 flex-col justify-center">
         {query.isLoading ? (
           <Skeleton className="h-12 w-full" />
         ) : live.length === 0 ? (

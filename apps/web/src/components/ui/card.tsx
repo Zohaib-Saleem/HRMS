@@ -20,6 +20,11 @@ export function CardHeader({
 }: React.HTMLAttributes<HTMLDivElement> & { bordered?: boolean }) {
   return (
     <div
+      // Named so a layout can reach every header in a row at once - the
+      // dashboard levels them so a card with a button in its header and one
+      // with only a title still put their titles on the same line. No style of
+      // its own; nothing else selects on it.
+      data-slot="card-header"
       className={cn(
         'flex flex-col gap-1 px-5 py-4',
         bordered && 'border-b border-border',

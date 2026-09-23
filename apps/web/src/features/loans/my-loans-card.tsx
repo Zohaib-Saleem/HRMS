@@ -102,7 +102,10 @@ export function MyLoansCard() {
             {/* The live loan, in full. Only an ACTIVE loan is deducted, so
                 only an ACTIVE loan gets the figures. */}
             {active ? (
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-border bg-surface-muted/40 px-4 py-3 sm:grid-cols-4">
+              /* Two at every width: `sm:grid-cols-4` was a VIEWPORT breakpoint
+                 deciding the inside of a card that is a third of the viewport
+                 wide, and four money columns in it truncated each figure. */
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-border bg-surface-muted/40 px-4 py-3">
                 <div>
                   <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">
                     Outstanding

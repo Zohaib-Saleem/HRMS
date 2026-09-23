@@ -91,7 +91,10 @@ export function MyMedicalCard() {
       <CardContent>
         {view ? (
           <>
-            <dl className="grid grid-cols-3 gap-3 text-sm">
+            {/* Two, not three. This card is a third of the dashboard wide and
+                three money figures across it truncated the very numbers it is
+                here to report - "PKR 100,0...". */}
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
               <Figure label="Annual limit" value={money(view.annualLimit, view.currency)} />
               <Figure label="Used" value={money(view.used, view.currency)} />
               <Figure
