@@ -31,6 +31,11 @@ import {
   teamScopeFilter,
 } from '../../auth/scope.js';
 import { employeeProfileSummary } from './employee-profile.service.js';
+import {
+  applyPunchCode,
+  assertPunchCodeAssignable,
+  carriesPunchCode,
+} from './employee-punch-code.service.js';
 import { employeeTimeline } from './employee-timeline.service.js';
 import {
   DETAIL_INCLUDE,
@@ -371,7 +376,17 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
       });
       if (duplicate) throw new ConflictError(`Employee number ${employeeNumber} is already in use.`);
 
-      let data = toPrismaData({ ...input, employeeNumber });
+      /*
+       * The punch code is judged before the employee exists.
+       *
+       * A PIN that belongs to somebody else has to refuse the whole form, not
+       * leave a half-made employee behind an error message. Nothing is written
+       * here; `applyPunchCode` below re-checks and does the writing.
+       */
+      if (carriesPunchCode(input)) await assertPunchCodeAssignable(auth, null, input);
+
+      const { punchCode, punchDeviceId, ...employeeFields } = input;
+      let data = toPrismaData({ ...employeeFields, employeeNumber });
       if (!auth.permissions.has(PERMISSIONS.EMPLOYEE_SENSITIVE_READ)) {
         data = stripRestricted(data);
       }
@@ -381,14 +396,26 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         include: DETAIL_INCLUDE,
       });
 
+      // Writes the device mapping, and lets the existing re-attribution pick
+      // up any punches already sitting unmapped under that PIN.
+      const punch = await applyPunchCode({
+        auth,
+        employeeId: created.id,
+        input: { punchCode, punchDeviceId },
+        request,
+      });
+
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
         action: 'employee.create',
         entityType: 'Employee',
         entityId: created.id,
-        summary: `Created employee ${created.firstName} ${created.lastName} (${employeeNumber})`.trim(),
-        after: data,
+        summary:
+          `Created employee ${created.firstName} ${created.lastName} (${employeeNumber})${
+            punch?.punchCode ? `; PunchCode ${punch.punchCode}` : ''
+          }`.trim(),
+        after: punch?.punchCode ? { ...data, punchCode: punch.punchCode } : data,
         request,
       });
 
@@ -489,8 +516,17 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      /*
+       * The punch code is a device mapping, not a column on this row, so it
+       * comes off the payload before the employee update and is written
+       * through the device module afterwards. Absent means "leave it alone";
+       * an explicit empty value means "this person punches under no PIN".
+       */
+      const { punchCode, punchDeviceId, ...employeeFields } = input;
+      if (carriesPunchCode(input)) await assertPunchCodeAssignable(auth, id, input);
+
       let data = toPrismaData({
-        ...input,
+        ...employeeFields,
         employeeNumber: input.employeeNumber ?? before.employeeNumber,
       });
       // Without the sensitive grant these fields are left exactly as they were,
@@ -503,6 +539,13 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
         where: { id },
         data: data as Prisma.EmployeeUncheckedUpdateInput,
         include: DETAIL_INCLUDE,
+      });
+
+      const punch = await applyPunchCode({
+        auth,
+        employeeId: id,
+        input: { punchCode, punchDeviceId },
+        request,
       });
 
       /**
@@ -544,7 +587,22 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const changes = diff(before as unknown as Record<string, unknown>, data);
-      if (changes.changed.length > 0) {
+      /*
+       * A punch-code change counts as a change to this employee even when no
+       * column on the row moved. The device module writes its own mapping
+       * audit; this is what puts it on the person's timeline, where somebody
+       * asking "why did their attendance start appearing" will look.
+       */
+      const punchNote = punch
+        ? punch.punchCode === null
+          ? '; cleared their punch code'
+          : `; punch code ${punch.punchCode}${
+              punch.reattributedPunches
+                ? ` (${punch.reattributedPunches} punch(es) over ${punch.affectedDays} day(s) now attributed to them)`
+                : ''
+            }`
+        : '';
+      if (changes.changed.length > 0 || punch) {
         /**
          * An employment-status change is an HR event, and the trail says so.
          *
@@ -571,7 +629,7 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
             : 'employee.update',
           entityType: 'Employee',
           entityId: id,
-          summary: `Updated ${updated.firstName} ${updated.lastName}:${statusMove} (${changes.changed.join(', ')})${accountNote ? `; ${accountNote}` : ''}`.trim(),
+          summary: `Updated ${updated.firstName} ${updated.lastName}:${statusMove} (${changes.changed.join(', ') || 'no field changes'})${accountNote ? `; ${accountNote}` : ''}${punchNote}`.trim(),
           before: changes.before,
           after: changes.after,
           request,

@@ -421,17 +421,27 @@ function OverviewTab({
           <dl className="grid gap-4 sm:grid-cols-2">
             <Field label="Employee ID" value={<span className="font-mono">{employee.employeeNumber}</span>} />
             {/*
-              The PunchCode the terminals know this person by, for display only.
-              Read from the mapping the device module owns; changing it is done
-              there, on the screen that also re-attributes the punches, because
-              editing it here would silently change whose attendance is whose.
-              Absent for a caller without device.read, and for anyone not
-              enrolled on a terminal.
+              The PunchCode the terminals know this person by, read from the
+              mapping the device module owns. Shown as "Not assigned" rather
+              than hidden when there is none: an absent line reads as "this
+              screen does not show punch codes", and the whole point is that
+              somebody with no code has no attendance and needs one. Editing it
+              is done on the employee form or the Device User Mapping screen,
+              both of which go through the mapping service.
+
+              The key itself is absent for a caller without device.read, which
+              is the difference between "not yours to see" and "not set".
             */}
-            {summary?.punchCodes && summary.punchCodes.length > 0 ? (
+            {summary?.punchCodes ? (
               <Field
                 label={summary.punchCodes.length > 1 ? 'PunchCodes' : 'PunchCode'}
-                value={<span className="font-mono">{summary.punchCodes.join(', ')}</span>}
+                value={
+                  summary.punchCodes.length > 0 ? (
+                    <span className="font-mono">{summary.punchCodes.join(', ')}</span>
+                  ) : (
+                    <span className="text-muted-foreground">Not assigned</span>
+                  )
+                }
               />
             ) : null}
             <Field label="Status" value={EMPLOYEE_STATUS_LABELS[employee.status]} />

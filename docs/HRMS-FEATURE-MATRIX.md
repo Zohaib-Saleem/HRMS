@@ -115,6 +115,7 @@ it holds the permission by default.
 | LAN connector ingest (`/connector`) | IMPLEMENTED | SA, HR | — | Endpoints plus the on-site agent in `apps/connector` |
 | **Physical K50 connection** | **PENDING** | — | hardware | Never connected. No claim of hardware verification is made anywhere |
 | Device user mapping | IMPLEMENTED | SA, HR | employees | Unmapped punches are stored and reported, never discarded |
+| Punch code on the employee form | IMPLEMENTED | SA, HR | devices | Same mapping service; `device.manage` to set, refuses a code somebody else holds |
 | Sync history and diagnostics | IMPLEMENTED | SA, HR | — | Per-run counts and per-record failure reasons |
 | Duplicate protection | IMPLEMENTED | — | — | Unique fingerprint per device |
 | Raw punch browser | IMPLEMENTED | SA, HR | — | Read-only |

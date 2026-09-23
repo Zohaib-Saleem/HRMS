@@ -40,10 +40,46 @@ designation, location, hire date, and employment type.
 | Hire date | no | Payroll clamps the period to it. Missing → warning |
 | Confirmation date, termination date | no | Confirmation date is required to make somebody Permanent |
 | Source of hire, LinkedIn, prior experience | no | Descriptive |
+| **Punch code** | no | *Attendance tab.* The PIN the terminal knows them by — **not** the employee number. See below |
+| **Does not punch in** | no | *Attendance tab.* Keeps somebody off the attendance sheet entirely — partners, and anyone who never uses a terminal |
 | Date of birth, gender, marital status, nationality, blood group | no | |
 | Present/permanent address, emergency contact | no | |
 | **National ID, passport, visa, bank account** | no | **Restricted** — see below |
 | Notes | no | |
+
+### The Attendance tab
+
+Two fields on the employee form belong to attendance rather than to the
+employee record, and both are on their own tab so they can be answered while
+the person is being created.
+
+**Punch code** is the User ID / PIN the ZKTeco terminal knows somebody by. It is
+**not** the employee number and is never defaulted from it — in this company 30
+of 80 people punch under a different number, and one roster row has been seen
+carrying a PIN in its Employee ID column. Typing one here writes the same
+device mapping the **Settings → Device user mapping** screen writes, through
+the same service, so the two screens cannot disagree.
+
+- Leave it blank for somebody with no biometric enrolment yet. Their punches, if
+  any arrive, stay *Unmapped* until it is filled in — stored, counted, never
+  discarded.
+- Filling it in attributes the punches already recorded under that code and
+  belonging to nobody. No punch is edited, deleted or re-timed, and scoring them
+  is still an explicit **Reprocess**.
+- A code somebody else holds is **refused by name**, not taken over. Handing a
+  PIN from a leaver to a new joiner is a dated decision about two people's
+  attendance and stays on the mapping screen, which asks for the date.
+- Changing somebody's own code closes the old mapping rather than editing it, so
+  the punches already attributed under the old PIN stay theirs.
+- Clearing the field retires the mapping. Nothing historical moves.
+- The field needs `device.read` to see and `device.manage` to set — Super Admin
+  and HR Admin hold both. A role with `employee.manage` alone does not see it,
+  and the API refuses it there too.
+
+**Does not punch in** excludes somebody from attendance altogether: the absence
+job, the sheet, reports, analytics and team attendance all skip them. It is not
+a status — they stay Active for the org chart, approvals, assets and leave. It
+is what the two partner accounts use.
 
 ### Restricted fields
 

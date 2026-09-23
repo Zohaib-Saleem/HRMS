@@ -361,6 +361,29 @@ June's punches stay Ayesha's. July's become Bilal's.
 **View history** on any row reads the audit log rather than a private copy, so
 the panel and the audit trail cannot tell two different stories.
 
+### Setting a PunchCode from the employee form
+
+A new joiner's PIN is known while the employee is being created, so **People →
+Add employee → Attendance** asks for it there. The field writes the same mapping
+through the same service — it is the mapping screen's front door, not a second
+copy of the data — and everything above still holds:
+
+- The mapping it writes is open-ended, which is what "this is their PunchCode"
+  means. Punches already sitting under that code and belonging to nobody become
+  this employee's; nothing already attributed to someone else is moved.
+- A code held by another employee is **refused by name**. The form will not take
+  a PIN over, because a takeover needs an effective date — that is what the
+  mapping screen is for, and the refusal says so.
+- Changing the code on the form closes the old mapping instead of editing it.
+  Clearing the field retires it. Neither touches a historical punch.
+- `device.read` to see the field, `device.manage` to set it. Without the grant
+  the field is not rendered and the API refuses it, so employee editing still
+  works for roles that have no business with attendance.
+
+The employee's profile shows the code under **PunchCode**, and reads *Not
+assigned* rather than disappearing when there is none — somebody with no code
+has no attendance, which is worth seeing.
+
 ---
 
 ## 8b. Reports

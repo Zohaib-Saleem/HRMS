@@ -241,6 +241,27 @@ const employeeBaseSchema = z
      */
     excludedFromAttendance: z.boolean().default(false),
 
+    /**
+     * The device PIN this person punches under, written through to the device
+     * module's mapping rather than stored on the employee row.
+     *
+     * NOT the employee number. The terminal knows people by whatever number
+     * was typed at enrolment - 1021 punches as 51 here - so the two are
+     * separate fields and neither is ever defaulted from the other.
+     *
+     * A string, because terminals pad and reuse these. Absent on a PATCH means
+     * "leave the mapping alone"; an explicit null or empty string means "this
+     * person no longer punches under any PIN", which closes the mapping
+     * without touching a single historical punch.
+     */
+    punchCode: optionalText(32),
+    /**
+     * Which terminal the punch code belongs to. Omitted when the company has
+     * exactly one device, which is the usual case; the route refuses to guess
+     * when there are several.
+     */
+    punchDeviceId: optionalId,
+
     // personal
     dateOfBirth: optionalDate,
     gender: z.enum(GENDERS).nullish(),

@@ -32,7 +32,7 @@ HRMS field — no column was added because a spreadsheet had one.
 | Matric/Inter/Bachelors/Masters … | `employee_education` rows | Education |
 | Yearly salary columns | `employee_salaries` (in force on the reference day) | Current Salary, Salary Effective, Revisions |
 | — | `salary_revisions` (latest) | Last Revision, Last Revision Amount |
-| — | `attendance_device_user_mappings.deviceUserId` | **PunchCode** |
+| Punch Code *(optional column)* | `attendance_device_user_mappings.deviceUserId` | **PunchCode** |
 | — | `leave.service.balancesForEmployee`, folded by `foldPaidBalances` | Leave Entitlement / Used / Remaining / Pending / by Type |
 | — | `leave_requests` counts | Leave Requests, Pending, Approved, Rejected/Cancelled |
 | — | `loans.service.loanTotals` over `employee_loan_installments` | Loan Amount / Paid / Outstanding / Monthly / Installments Left / Next Due |
@@ -47,6 +47,16 @@ number**, and the HR roster has been observed carrying a PIN in its Employee ID 
 for two people — one of which is a live employee number belonging to somebody else.
 `Employee Code` reads `employees.employeeNumber`; `PunchCode` reads
 `attendance_device_user_mappings`, gated on `device.read`.
+
+The import script reads a **`Punch Code`** column if the roster has one, and
+reads it as nothing else: the Employee ID column is never taken for a PIN, nor
+the PIN for an employee number. It is **fill-only** — a mapping is created only
+where the employee has no active one and nobody else holds the code. A code that
+disagrees with what HRMS holds, or that belongs to somebody else, is printed as
+a conflict for a person to settle; no existing mapping is ever edited or closed,
+and the only punches it touches are ones attributed to nobody at all. With no
+device configured, or more than one, the column is reported as unresolved rather
+than guessed at — a PIN belongs to a terminal.
 
 ## 2. Master Sheet columns with no HRMS equivalent
 

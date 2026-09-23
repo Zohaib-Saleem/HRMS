@@ -4,7 +4,15 @@
  * Reads "Master Sheet.xlsx" and reconciles it against the HRMS employee
  * records. Dry-run by default: it prints the plan and writes nothing. Only
  * `--apply` writes, and even then it never touches attendance, payroll, leave,
- * loan or contract history, and never touches punch-code mappings.
+ * loan or contract history.
+ *
+ * The one exception to "never touches punch-code mappings" is the optional
+ * "Punch Code" column, added because a roster is where a new joiner's device
+ * PIN is first written down. It is fill-only: a code is created where the
+ * employee has none and the code is held by nobody else, and any disagreement
+ * - a different code on file, or a code already belonging to somebody else -
+ * is reported for a person to settle. It never edits or closes an existing
+ * mapping, and it never guesses the PIN from the Employee ID.
  *
  *   npx dotenv -e .env -- npx tsx scripts/import-employee-master.mjs --file "/root/Master Sheet.xlsx"
  *   npx dotenv -e .env -- npx tsx scripts/import-employee-master.mjs --file "..." --apply
@@ -13,7 +21,9 @@
  *   - Employees are matched on `employeeNumber` and nothing else. The roster's
  *     "Employee ID" column has been observed to hold a device punch code for at
  *     least two people, one of whom is a different employee entirely, so a
- *     fallback match on punch code would corrupt the wrong record.
+ *     fallback match on punch code would corrupt the wrong record. The
+ *     "Punch Code" column is a separate column and is never read as an
+ *     employee number, nor the Employee ID ever read as a punch code.
  *   - Rows with a blank or zero Employee ID are never imported.
  *   - Yearly salary columns take effect on 31 December of their year - they
  *     record what somebody was on by the end of it - except the year still in
@@ -346,14 +356,45 @@ async function buildPlan() {
     },
   });
   const byNumber = new Map(employees.map((e) => [e.employeeNumber, e]));
-  // Punch codes are loaded for one reason: to recognise a roster row whose
-  // "Employee ID" is actually a device PIN. They are never used to match, and
-  // nothing here writes to them.
+  // Punch codes are loaded for two reasons: to recognise a roster row whose
+  // "Employee ID" is actually a device PIN, and to decide whether the optional
+  // "Punch Code" column has anything new to say.
   const punchMappings = await prisma.attendanceDeviceUserMapping.findMany({
     where: { companyId: company.id },
-    select: { deviceUserId: true, employee: { select: { employeeNumber: true, firstName: true, lastName: true } } },
+    select: {
+      deviceUserId: true,
+      deviceId: true,
+      isActive: true,
+      employeeId: true,
+      employee: { select: { employeeNumber: true, firstName: true, lastName: true } },
+    },
   });
   const byPunchCode = new Map(punchMappings.map((m) => [m.deviceUserId, m.employee]));
+  const activeMappings = punchMappings.filter((m) => m.isActive);
+  const holderOfCode = new Map(activeMappings.map((m) => [m.deviceUserId, m]));
+  const codesOfEmployee = new Map();
+  for (const m of activeMappings) {
+    codesOfEmployee.set(m.employeeId, [...(codesOfEmployee.get(m.employeeId) ?? []), m.deviceUserId]);
+  }
+
+  /*
+   * A punch code belongs to a terminal, so it cannot be written without one.
+   * One device is the usual case; with several, which terminal a roster column
+   * refers to is a question the spreadsheet does not answer, and guessing it
+   * would file somebody's attendance against the wrong device.
+   */
+  const devices = await prisma.attendanceDevice.findMany({
+    where: { companyId: company.id },
+    select: { id: true, name: true },
+    orderBy: { name: 'asc' },
+  });
+  const punchDevice = devices.length === 1 ? devices[0] : null;
+  const punchDeviceRefusal =
+    devices.length === 0
+      ? 'no attendance device is configured'
+      : devices.length > 1
+        ? `${devices.length} attendance devices exist (${devices.map((d) => d.name).join(', ')}); the roster does not say which`
+        : null;
 
   const departments = await prisma.department.findMany({ where: { companyId: company.id } });
   const deptByName = new Map(departments.map((d) => [norm(d.name), d]));
@@ -375,6 +416,9 @@ async function buildPlan() {
     newDepartments: new Set(),
     pendingDepartments: [],
     newTeams: new Map(),
+    punchCodes: [],
+    punchDevice,
+    punchDeviceRefusal,
   };
 
   for (const sheetName of ['Master Sheet', 'Leavers']) {
@@ -390,7 +434,9 @@ async function buildPlan() {
       continue;
     }
     for (const r of parsed.rows) {
-      planRow(plan, sheetName, r, { byNumber, byPunchCode, deptByName, teamByName, company });
+      planRow(plan, sheetName, r, {
+        byNumber, byPunchCode, holderOfCode, codesOfEmployee, deptByName, teamByName, company,
+      });
     }
   }
 
@@ -540,6 +586,37 @@ function planRow(plan, sheetName, r, ctx) {
     }
   }
 
+  // --- punch code ----------------------------------------------------------
+  /*
+   * Fill-only, and never derived from the Employee ID. 1021 punches as 51 in
+   * this company; copying one column into the other is exactly the mistake
+   * that files a stranger's attendance against somebody's record.
+   */
+  const punch = text(r.get('Punch Code'));
+  if (punch) {
+    const held = ctx.codesOfEmployee.get(existing.id) ?? [];
+    const holder = ctx.holderOfCode.get(punch);
+    if (held.includes(punch)) {
+      // already agrees
+    } else if (holder && holder.employeeId !== existing.id) {
+      plan.conflicts.push({
+        where, number, name,
+        field: 'punchCode',
+        excel: punch,
+        hrms: `held by ${holder.employee.employeeNumber} ${`${holder.employee.firstName} ${holder.employee.lastName}`.trim()}`,
+      });
+    } else if (held.length) {
+      plan.conflicts.push({ where, number, name, field: 'punchCode', excel: punch, hrms: held.join(', ') });
+    } else if (plan.punchDeviceRefusal) {
+      plan.unresolved.push({
+        where, number, name,
+        what: `punch code ${punch} not written - ${plan.punchDeviceRefusal}`,
+      });
+    } else {
+      plan.punchCodes.push({ where, number, name, employeeId: existing.id, punchCode: punch });
+    }
+  }
+
   // --- education -----------------------------------------------------------
   const haveLevels = new Set(existing.education.map((e) => e.level));
   const rows = educationRows(r).filter((e) => !haveLevels.has(e.level));
@@ -597,6 +674,17 @@ function printPreview(plan) {
   }
   if (plan.salaries.length > 12) console.log(`  ... and ${plan.salaries.length - 12} more employees`);
 
+  h(`D2. PUNCH CODES TO MAP (${plan.punchCodes.length})`);
+  if (!plan.punchCodes.length) console.log('  none');
+  for (const p of plan.punchCodes) {
+    console.log(`  ${p.number.padEnd(6)} ${(p.name ?? '').padEnd(26)} punch code ${p.punchCode} -> ${plan.punchDevice?.name ?? '?'}`);
+  }
+  if (plan.punchCodes.length) {
+    console.log('\n  Each creates an open-ended device mapping. Punches already recorded under');
+    console.log('  that code and attributed to NOBODY become this employee\'s; a punch already');
+    console.log('  attributed to someone is never moved, and no punch is edited or re-timed.');
+  }
+
   const eduRows = plan.education.reduce((n, e) => n + e.rows.length, 0);
   h(`E. EDUCATION (${plan.education.length} employees, ${eduRows} records)`);
   for (const e of plan.education) {
@@ -644,8 +732,10 @@ function printPreview(plan) {
   }
 
   h('UNTOUCHED BY THIS IMPORT');
-  console.log('  punch-code mappings, attendance records, raw punches, payroll, leave,');
-  console.log('  contracts, loans, and every employee name. No record is ever deleted.');
+  console.log('  attendance records, punch timestamps, payroll, leave, contracts, loans,');
+  console.log('  and every employee name. No record is ever deleted, no existing punch-code');
+  console.log('  mapping is edited or closed, and no punch is re-timed or re-attributed away');
+  console.log('  from the employee it already belongs to.');
 }
 
 // ---------------------------------------------------------------------- apply
@@ -660,6 +750,8 @@ async function apply(plan) {
   let salaryRows = 0;
   let revisions = 0;
   let eduRows = 0;
+  let punchMaps = 0;
+  let punchesAttributed = 0;
 
   await prisma.$transaction(async (tx) => {
     const created = new Map();
@@ -728,9 +820,44 @@ async function apply(plan) {
         eduRows += 1;
       }
     }
+
+    /*
+     * Punch codes, last, and only the ones the plan cleared: the employee has
+     * no active mapping and nobody else holds the code.
+     *
+     * The mapping is open-ended, which is what "this is their punch code"
+     * means, and the attribution that follows touches ONLY punches with no
+     * employee at all. `processedAt` is cleared on those so an explicit
+     * reprocess can score them; nothing is recalculated here, and no punch
+     * that already belongs to somebody is moved.
+     */
+    for (const p of plan.punchCodes) {
+      await tx.attendanceDeviceUserMapping.create({
+        data: {
+          companyId: plan.company.id,
+          deviceId: plan.punchDevice.id,
+          deviceUserId: p.punchCode,
+          employeeId: p.employeeId,
+          isActive: true,
+          notes: 'Imported from employee master roster',
+        },
+      });
+      punchMaps += 1;
+
+      const moved = await tx.attendanceRawPunch.updateMany({
+        where: {
+          companyId: plan.company.id,
+          deviceId: plan.punchDevice.id,
+          deviceUserId: p.punchCode,
+          employeeId: null,
+        },
+        data: { employeeId: p.employeeId, processedAt: null },
+      });
+      punchesAttributed += moved.count;
+    }
   }, { timeout: 120_000 });
 
-  console.log(`\nApplied: ${neededDepartments(plan).size} departments created, ${updated} employees updated, ${salaryRows} salary records, ${revisions} revisions, ${eduRows} education records.`);
+  console.log(`\nApplied: ${neededDepartments(plan).size} departments created, ${updated} employees updated, ${salaryRows} salary records, ${revisions} revisions, ${eduRows} education records, ${punchMaps} punch-code mapping(s) covering ${punchesAttributed} previously unmapped punch(es).`);
 }
 
 async function main() {

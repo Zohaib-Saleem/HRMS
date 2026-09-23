@@ -303,6 +303,13 @@ the mapping is added, **Reprocess** turns the stored punches into attendance.
 > No employee is ever created automatically from an unknown device user. That
 > would let anyone who can enrol a finger create a person in the HRMS.
 
+A mapping can also be created from the other end: **People → Add employee →
+Attendance → Punch code** writes through this same service, so a new joiner's
+PIN is recorded while the record is being made rather than on a second visit
+here. It offers no effective date and refuses a PIN somebody else holds —
+handing a code over is a dated decision and stays on this screen. Both routes
+need `device.manage`.
+
 ---
 
 ## 8. Sync history and diagnostics

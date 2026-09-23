@@ -71,7 +71,10 @@ export function DeviceMappingPage() {
   const query = useQuery({
     queryKey: ['device-mappings', { deviceId, includeInactive }],
     queryFn: () =>
-      api.get<{ data: DeviceMappingRecord[] }>('/attendance/mappings', {
+      // `api.get` already unwraps the { data } envelope, so the generic is the
+      // array itself. Naming the envelope here made every row vanish: the type
+      // said `.data.data` and the runtime had nothing there.
+      api.get<DeviceMappingRecord[]>('/attendance/mappings', {
         query: {
           deviceId: deviceId || undefined,
           includeInactive: includeInactive ? 'true' : undefined,
@@ -94,7 +97,7 @@ export function DeviceMappingPage() {
   });
 
   const term = search.trim().toLowerCase();
-  const rows = (query.data?.data ?? []).filter((row) =>
+  const rows = (query.data ?? []).filter((row) =>
     term === ''
       ? true
       : [row.deviceUserId, row.employeeName, row.employeeNumber, row.deviceName, row.deviceSerial]
@@ -599,7 +602,7 @@ function HistoryDrawer({
   const query = useQuery({
     queryKey: ['device-mappings', 'history', mapping?.id],
     queryFn: () =>
-      api.get<{ data: DeviceMappingHistoryEntry[] }>('/attendance/mappings/history', {
+      api.get<DeviceMappingHistoryEntry[]>('/attendance/mappings/history', {
         query: { deviceId: mapping!.deviceId, deviceUserId: mapping!.deviceUserId },
       }),
     enabled: mapping !== null,
@@ -622,7 +625,7 @@ function HistoryDrawer({
             <ErrorState error={query.error} onRetry={() => void query.refetch()} />
           ) : query.isLoading ? (
             <TableSkeleton rows={4} />
-          ) : (query.data?.data ?? []).length === 0 ? (
+          ) : (query.data ?? []).length === 0 ? (
             <EmptyState
               icon={History}
               title="No recorded changes"
@@ -630,7 +633,7 @@ function HistoryDrawer({
             />
           ) : (
             <ul className="space-y-2">
-              {(query.data?.data ?? []).map((entry) => (
+              {(query.data ?? []).map((entry) => (
                 <li key={entry.id} className="rounded-lg border border-border p-3 text-[13px]">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <span className="font-medium">{entry.actorName ?? 'System'}</span>
