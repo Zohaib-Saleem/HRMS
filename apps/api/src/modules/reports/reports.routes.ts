@@ -120,9 +120,16 @@ const filenameFor = (report: EmployeeMasterReport, extension: string) =>
   `employee-master-${report.from}-to-${report.to}.${extension}`;
 
 export const reportRoutes: FastifyPluginAsync = async (app) => {
-  // Reading the master report is reading employees. Every other block inside a
-  // row is gated separately, by the module that owns it.
-  app.addHook('preHandler', requirePermission(PERMISSIONS.EMPLOYEE_READ));
+  // The master report is the consolidated HR view, so it needs its own grant
+  // AS WELL AS `employee.read`: a manager or team manager reads the directory
+  // for their own reporting line and does not, on that alone, get every
+  // module's figure for those people on one sheet. Both gates sit on the whole
+  // module, so the screen, the CSV and the workbook answer 403 together. Each
+  // block inside a row is then gated separately, by the module that owns it.
+  app.addHook(
+    'preHandler',
+    requirePermission(PERMISSIONS.EMPLOYEE_READ, PERMISSIONS.EMPLOYEE_MASTER_REPORT_READ),
+  );
 
   app.get('/employee-master', async (request, reply) => {
     const auth = requireAuthContext(request);
@@ -204,4 +211,7 @@ async function auditExport(
 }
 
 /** Re-exported so a reader of this file can see the permission surface at a glance. */
-export const REPORT_PERMISSIONS: readonly Permission[] = [PERMISSIONS.EMPLOYEE_READ];
+export const REPORT_PERMISSIONS: readonly Permission[] = [
+  PERMISSIONS.EMPLOYEE_READ,
+  PERMISSIONS.EMPLOYEE_MASTER_REPORT_READ,
+];

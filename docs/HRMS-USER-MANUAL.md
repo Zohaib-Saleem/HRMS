@@ -229,7 +229,7 @@ Grouped as the Roles screen groups them.
 | Group | Permissions |
 |---|---|
 | Organisation | `company.read`, `company.manage`, `department.read/manage`, `team.read/manage`, `designation.read/manage`, `location.read/manage` |
-| People | `employee.read`, `employee.manage`, `employee.sensitive.read`, `employee.import`, `employee.export` |
+| People | `employee.read`, `employee.manage`, `employee.sensitive.read`, `employee.import`, `employee.export`, `employee_master_report.read` (the Employee Master Report, Super Admin and HR Admin only) |
 | Access control | `user.read`, `user.manage`, `role.read`, `role.manage` |
 | Approvals | `approval.read`, `approval.act`, `approval.manage` |
 | Payroll | `payroll.read`, `payroll.manage`, `payroll.approve`, `payslip.read` |

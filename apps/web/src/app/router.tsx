@@ -605,10 +605,18 @@ export function AppRoutes() {
           <Route path="assets/:id" element={<AssetDetailPage />} />
         </Route>
 
-        {/* employee.read is the whole gate. Each block inside a row - pay,
-            leave, loans, attendance - is gated again server-side, so a reader
-            without payroll.read gets rows with no salary rather than a 403. */}
-        <Route element={<RequirePermission permission={PERMISSIONS.EMPLOYEE_READ} />}>
+        {/* The report's own grant AND employee.read, the same pair the API
+            requires. Each block inside a row - pay, leave, loans, attendance -
+            is gated again server-side, so a reader without payroll.read gets
+            rows with no salary rather than a 403. */}
+        <Route
+          element={
+            <RequirePermission
+              permission={[PERMISSIONS.EMPLOYEE_READ, PERMISSIONS.EMPLOYEE_MASTER_REPORT_READ]}
+              mode="all"
+            />
+          }
+        >
           <Route path="reports/employee-master" element={<EmployeeMasterReportPage />} />
         </Route>
 

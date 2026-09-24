@@ -2,6 +2,17 @@
 
 Date: 2026-09-11. Read-only feature; no migration, no data change.
 
+## 0. Who can open it
+
+`GET /reports/employee-master`, `/export.csv` and `/export.xlsx` all require
+**`employee_master_report.read` AND `employee.read`**, enforced on the API
+module, so an unauthorised caller gets a 403 from every one of them - the
+sidebar row and the route are hidden with the same grant, but the API is the
+gate. By default only **Super Admin** and **HR Admin** hold the report grant;
+Manager, Team Manager, Employee and IT Asset Manager do not. Inside a row, each
+block (pay, leave, loans, attendance, punch codes, restricted fields) is still
+gated by the module that owns it.
+
 ## 1. Master Sheet → HRMS → Report
 
 The import script (`scripts/import-employee-master.mjs`) is the authority for the

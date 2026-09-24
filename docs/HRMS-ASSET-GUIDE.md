@@ -190,7 +190,9 @@ employee may see does not thereby widen this.
 **What it is not** is an HR role, and three absences are deliberate:
 
 - **No `employee.read`.** That single grant is what opens People, Team
-  attendance, Attendance reports and the Employee Master Report, and it is half
+  attendance and Attendance reports (the Employee Master Report additionally
+  needs `employee_master_report.read`, which only Super Admin and HR Admin
+  hold), and it is half
   the gate on the company dashboard's figures. An asset manager needs to *pick*
   a person to hand a laptop to, which is a lookup rather than a directory — see
   below.

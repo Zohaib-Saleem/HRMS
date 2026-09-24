@@ -134,7 +134,8 @@ and cannot move it. An employee sees their own on their dashboard and has no
 route by which to change it.
 
 **Where it shows.** People carries it as a column and as a filter, and so does
-the Employee Master Report — filter, column and export alike, spelled
+the Employee Master Report (Super Admin and HR Admin only, behind
+`employee_master_report.read`) — filter, column and export alike, spelled
 *Probation* rather than `PROBATION`. An unclassified record reads *Not set* on
 the employee's detail panel and as a dash in the lists. Filtering People by a
 status narrows to that status; asking for none returns everybody, unclassified
@@ -350,7 +351,8 @@ payslips, lunch, cases, loans and medical.
 
 | Not held | Consequence |
 |---|---|
-| `employee.read` | No People screen, no Team attendance, no Attendance reports, no Employee Master Report, and no company-wide dashboard figures |
+| `employee.read` | No People screen, no Team attendance, no Attendance reports, and no company-wide dashboard figures |
+| `employee_master_report.read` | No Employee Master Report - screen, CSV and workbook alike. Super Admin and HR Admin only; `employee.read` is required beside it |
 | `asset.dispose` | They can *retire* an asset — out of service, still owned — but writing one off for good stays with HR Admin and Super Admin |
 | `attendance.manage` | No Correction centre. They raise their own correction requests like anybody else |
 | `payroll.*` | No payroll, no salaries, no payslips but their own |
@@ -559,7 +561,14 @@ any manual adjustment. `used` and `pending` come from the request rows.
 
 ### Adjustments and carry-forward
 
-- **Adjust** (`leave.manage`) — positive or negative, with a note. Audited.
+- **Adjust** (`leave.manage`, Super Admin and HR Admin) — from the employee's
+  profile, **Leave tab → Adjust** on the leave-type row. Positive or negative,
+  and the **reason is compulsory**; it is shown under the figure in the
+  Adjustment column. The figure REPLACES the adjustment on record for that
+  type and year rather than adding to it. Entitlement, opening, accrued, used,
+  pending and remaining are calculated and are not editable - the dialog says
+  so. Audited as `leave.balance.adjust` with who, the old value and the new
+  value; no leave request is touched.
 - **Carry forward** (`leave.manage`) — moves the remaining balance into the next
   year, capped per type.
 

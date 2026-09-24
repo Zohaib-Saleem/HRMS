@@ -59,6 +59,12 @@ export const PERMISSIONS = {
   EMPLOYEE_SENSITIVE_READ: 'employee.sensitive.read',
   EMPLOYEE_IMPORT: 'employee.import',
   EMPLOYEE_EXPORT: 'employee.export',
+  /// The Employee Master Report: one row per employee with every module's
+  /// figure for that person, on screen and as a file. Deliberately its own
+  /// grant rather than a reading of `employee.read`, which every manager and
+  /// team manager holds for their own reporting line - the report is the
+  /// consolidated HR view, and `employee.read` is still required beside it.
+  EMPLOYEE_MASTER_REPORT_READ: 'employee_master_report.read',
 
   // --- Access control ---
   USER_READ: 'user.read',
@@ -502,6 +508,11 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       },
       { value: PERMISSIONS.EMPLOYEE_IMPORT, label: 'Import employees', description: 'Bulk-create employees from a file.' },
       { value: PERMISSIONS.EMPLOYEE_EXPORT, label: 'Export employees', description: 'Download employee data as a file.' },
+      {
+        value: PERMISSIONS.EMPLOYEE_MASTER_REPORT_READ,
+        label: 'Employee Master Report',
+        description: 'Open and export the consolidated employee master report. Needs "View employees" as well.',
+      },
     ],
   },
   {
@@ -1110,6 +1121,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleKey, readonly Permission
     PERMISSIONS.EMPLOYEE_SENSITIVE_READ,
     PERMISSIONS.EMPLOYEE_IMPORT,
     PERMISSIONS.EMPLOYEE_EXPORT,
+    PERMISSIONS.EMPLOYEE_MASTER_REPORT_READ,
     PERMISSIONS.USER_READ,
     PERMISSIONS.ROLE_READ,
     PERMISSIONS.AUDIT_READ,

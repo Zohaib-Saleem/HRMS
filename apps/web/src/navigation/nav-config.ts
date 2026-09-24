@@ -405,12 +405,13 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         // The consolidated HR view: one row per employee, every module's figure
-        // for that person. Gated on employee.read; the columns a reader may
-        // fill are decided per block by the module that owns them.
+        // for that person. Gated on its own grant, which the server requires
+        // beside employee.read; the columns a reader may fill are decided per
+        // block by the module that owns them.
         label: 'Employee Master Report',
         to: '/reports/employee-master',
         icon: FileSpreadsheet,
-        permission: PERMISSIONS.EMPLOYEE_READ,
+        permission: PERMISSIONS.EMPLOYEE_MASTER_REPORT_READ,
         status: 'ready',
         matchPrefix: true,
       },
