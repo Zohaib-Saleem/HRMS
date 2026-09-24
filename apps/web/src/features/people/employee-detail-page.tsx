@@ -44,6 +44,7 @@ import { EmployeeContracts } from '@/features/employment/employee-contracts';
 import { EmployeePolicies } from '@/features/employment/employee-policies';
 import { EmployeeLoans } from '@/features/loans/employee-loans';
 import { EmployeeLeave } from '@/features/leave/employee-leave';
+import { EmployeeMedical } from '@/features/medical/employee-medical';
 import { EmployeePayrollHistory } from '@/features/payroll/employee-payroll-history';
 import { EmployeeAttendanceViews } from '@/features/time/employee-attendance-views';
 import { EmployeeAssetsTab } from '@/features/assets/employee-assets-tab';
@@ -77,6 +78,7 @@ const TABS = [
   'Personal',
   'Attendance',
   'Leave',
+  'Medical',
   'Loans',
   'Salary & Payroll',
   'Contracts & Policies',
@@ -301,6 +303,13 @@ export function EmployeeDetailPage() {
             // it is not shown at all, so the row says what is actually here.
             if (item === 'Attendance') return has(PERMISSIONS.ATTENDANCE_READ);
             if (item === 'Leave') return has(PERMISSIONS.LEAVE_READ);
+            // Another person's medical record is the one place a wide data
+            // scope is not enough: the server wants medical.manage beside
+            // medical.read, so the tab asks for the same pair. An employee
+            // reaches their own record on the Medical page, not here.
+            if (item === 'Medical') {
+              return has(PERMISSIONS.MEDICAL_READ) && has(PERMISSIONS.MEDICAL_MANAGE);
+            }
             if (item === 'Loans') return has(PERMISSIONS.LOAN_READ);
             if (item === 'Salary & Payroll') {
               return has(PERMISSIONS.PAYROLL_READ) || has(PERMISSIONS.PAYSLIP_READ);
@@ -341,7 +350,12 @@ export function EmployeeDetailPage() {
       {tab === 'Attendance' ? (
         <EmployeeAttendanceViews employeeId={employee.id} employeeName={employee.fullName} />
       ) : null}
-      {tab === 'Leave' ? <EmployeeLeave employeeId={employee.id} /> : null}
+      {tab === 'Leave' ? (
+        <EmployeeLeave employeeId={employee.id} employeeName={employee.fullName} />
+      ) : null}
+      {tab === 'Medical' ? (
+        <EmployeeMedical employeeId={employee.id} employeeName={employee.fullName} />
+      ) : null}
       {tab === 'Loans' ? (
         <EmployeeLoans employeeId={employee.id} employeeName={employee.fullName} />
       ) : null}

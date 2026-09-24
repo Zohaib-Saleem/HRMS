@@ -11,7 +11,7 @@ import {
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
-import { recordAudit } from '../../core/audit.js';
+import { diff, recordAudit } from '../../core/audit.js';
 import { ForbiddenError } from '../../core/errors.js';
 import { requireAuthContext, requirePermission } from '../../auth/guards.js';
 import { currentMedicalPolicy } from './medical-policy.service.js';
@@ -200,17 +200,30 @@ export const medicalRoutes: FastifyPluginAsync = async (app) => {
     const subject = await resolveMedicalSubject(auth, existing.employeeId);
     requireDependentManagement(subject.canManage);
 
+    const data = {
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.relationship !== undefined ? { relationship: input.relationship } : {}),
+      ...(input.dateOfBirth !== undefined ? { dateOfBirth: toDate(input.dateOfBirth) } : {}),
+      ...(input.gender !== undefined ? { gender: input.gender } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+    };
+
     await prisma.medicalDependent.update({
       where: { id: existing.id },
-      data: {
-        ...(input.name !== undefined ? { name: input.name } : {}),
-        ...(input.relationship !== undefined ? { relationship: input.relationship } : {}),
-        ...(input.dateOfBirth !== undefined ? { dateOfBirth: toDate(input.dateOfBirth) } : {}),
-        ...(input.gender !== undefined ? { gender: input.gender } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-        updatedBy: auth.userId,
-      },
+      data: { ...data, updatedBy: auth.userId },
     });
+
+    /**
+     * Old and new value, field by field, for the fields that actually
+     * changed. The summary stays impersonal - it is what the audit list shows
+     * to anybody with `audit.read` - and the values sit in the before/after
+     * columns the audit screen opens on demand, the same place every other
+     * edit in the product keeps them.
+     */
+    const changes = diff(
+      existing as unknown as Record<string, unknown>,
+      data as unknown as Record<string, unknown>,
+    );
 
     await recordAudit({
       companyId: auth.companyId,
@@ -218,7 +231,9 @@ export const medicalRoutes: FastifyPluginAsync = async (app) => {
       action: 'medical.dependent.update',
       entityType: 'MedicalDependent',
       entityId: existing.id,
-      summary: 'Updated a medical dependent',
+      summary: `Updated a medical dependent (${changes.changed.join(', ') || 'no field changes'})`,
+      before: changes.before,
+      after: changes.after,
       request,
     });
 

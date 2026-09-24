@@ -508,6 +508,49 @@ describe('maintaining dependents', () => {
     expect(db.medicalDependent.update).not.toHaveBeenCalled();
   });
 
+  it('lets HR edit somebody else’s dependent from their profile, and audits old and new', async () => {
+    db.medicalDependent.findFirst.mockResolvedValue(
+      dependent({ employeeId: 'emp-other', name: 'Old Name', gender: 'FEMALE' }),
+    );
+    db.medicalDependent.findMany.mockResolvedValue([
+      dependent({ employeeId: 'emp-other', name: 'New Name', gender: null }),
+    ]);
+
+    const app = await appAs(HR_ADMIN, 'ALL');
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/medical/dependents/dep-1',
+      // An explicit null clears the gender; it must reach the row as null,
+      // not be dropped as "not mentioned".
+      payload: { name: 'New Name', gender: null },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const update = db.medicalDependent.update.mock.calls[0]![0];
+    expect(update.data).toMatchObject({ name: 'New Name', gender: null, updatedBy: 'user-1' });
+    expect(update.data).not.toHaveProperty('relationship');
+
+    const audit = db.auditLog.create.mock.calls[0]![0].data;
+    expect(audit.action).toBe('medical.dependent.update');
+    expect(audit.before).toEqual({ name: 'Old Name', gender: 'FEMALE' });
+    expect(audit.after).toEqual({ name: 'New Name', gender: null });
+    expect(audit.summary).toContain('name, gender');
+  });
+
+  it('refuses a MANAGER editing a report’s dependent, even with a wide scope', async () => {
+    db.medicalDependent.findFirst.mockResolvedValue(dependent({ employeeId: 'emp-other' }));
+
+    const app = await appAs(MANAGER, 'ALL');
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/medical/dependents/dep-1',
+      payload: { name: 'Renamed' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(db.medicalDependent.update).not.toHaveBeenCalled();
+  });
+
   it('deletes a dependent with no claim history', async () => {
     db.medicalDependent.findFirst.mockResolvedValue(dependent());
     db.medicalClaim.count.mockResolvedValue(0);
