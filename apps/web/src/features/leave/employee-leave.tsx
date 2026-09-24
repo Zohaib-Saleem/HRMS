@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarOff, ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
+import { CalendarOff, ChevronLeft, ChevronRight, ExternalLink, Pencil } from 'lucide-react';
 import {
   APPROVAL_STATUS_LABELS,
   LEAVE_DAY_PART_LABELS,
@@ -18,6 +18,7 @@ import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { usePermissions } from '@/features/auth/session-context';
 import { LEAVE_STATUS_TONE } from './my-leave-page';
+import { LeaveAdjustmentDialog } from './leave-adjustment-dialog';
 
 /**
  * One employee's leave, for the Employee 360 profile.
@@ -34,11 +35,24 @@ import { LEAVE_STATUS_TONE } from './my-leave-page';
  * those months have no rows, and this table says so rather than reconstructing
  * dates that nobody recorded. The balance figures above it come from the leave
  * service; nothing on this screen adds up days of its own.
+ *
+ * The one thing HR can change here is the ADJUSTMENT column - the manual
+ * correction the balance service already reads - behind `leave.manage`, which
+ * Super Admin and HR Admin hold and nobody else does by default. Everything
+ * else in the row is calculated and stays that way; the dialog says so.
  */
-export function EmployeeLeave({ employeeId }: { employeeId: string }) {
+export function EmployeeLeave({
+  employeeId,
+  employeeName,
+}: {
+  employeeId: string;
+  employeeName?: string;
+}) {
   const { has } = usePermissions();
   const canRead = has(PERMISSIONS.LEAVE_READ);
+  const canManage = has(PERMISSIONS.LEAVE_MANAGE);
   const [year, setYear] = React.useState(() => new Date().getUTCFullYear());
+  const [adjusting, setAdjusting] = React.useState<LeaveBalanceRecord | null>(null);
 
   const balances = useQuery({
     queryKey: ['leave', 'balances', { employeeId, year }],
@@ -131,6 +145,7 @@ export function EmployeeLeave({ employeeId }: { employeeId: string }) {
                     <TH className="text-right">Used</TH>
                     <TH className="text-right">Pending</TH>
                     <TH className="text-right">Remaining</TH>
+                    {canManage ? <TH className="w-px" /> : null}
                   </TR>
                 </THead>
                 <TBody>
@@ -154,8 +169,16 @@ export function EmployeeLeave({ employeeId }: { employeeId: string }) {
                       {/* An administrative correction, positive or negative. Shown
                           in its own column rather than folded into the remaining
                           figure, so a balance nobody expects can be explained. */}
-                      <TD className="tabular text-right text-muted-foreground">
+                      <TD
+                        className="tabular text-right text-muted-foreground"
+                        title={row.adjustmentNote ?? undefined}
+                      >
                         {row.adjustmentDays === 0 ? '—' : signed(row.adjustmentDays)}
+                        {row.adjustmentNote ? (
+                          <span className="block max-w-[18ch] truncate text-[11px] font-normal">
+                            {row.adjustmentNote}
+                          </span>
+                        ) : null}
                       </TD>
                       <TD className="tabular text-right">{days(row.usedDays)}</TD>
                       <TD className="tabular text-right text-muted-foreground">
@@ -164,6 +187,19 @@ export function EmployeeLeave({ employeeId }: { employeeId: string }) {
                       <TD className="tabular text-right font-medium">
                         {days(row.availableDays)}
                       </TD>
+                      {canManage ? (
+                        <TD className="text-right">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-label={`Adjust ${row.leaveTypeName} balance`}
+                            onClick={() => setAdjusting(row)}
+                          >
+                            <Pencil className="size-4" aria-hidden />
+                            Adjust
+                          </Button>
+                        </TD>
+                      ) : null}
                     </TR>
                   ))}
                   <TR className="bg-muted/40">
@@ -189,6 +225,7 @@ export function EmployeeLeave({ employeeId }: { employeeId: string }) {
                     <TD className="tabular text-right font-medium">
                       {days(total((b) => b.availableDays))}
                     </TD>
+                    {canManage ? <TD /> : null}
                   </TR>
                 </TBody>
               </Table>
@@ -296,6 +333,17 @@ export function EmployeeLeave({ employeeId }: { employeeId: string }) {
           </CardContent>
         )}
       </Card>
+
+      {canManage ? (
+        <LeaveAdjustmentDialog
+          open={adjusting !== null}
+          onClose={() => setAdjusting(null)}
+          employeeId={employeeId}
+          employeeName={employeeName}
+          year={year}
+          balance={adjusting}
+        />
+      ) : null}
     </div>
   );
 }

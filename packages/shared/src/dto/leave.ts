@@ -168,18 +168,33 @@ export interface LeaveBalanceRecord {
   openingDays: number;
   accruedDays: number;
   adjustmentDays: number;
+  /** Why the adjustment was made. Null when there is none. */
+  adjustmentNote: string | null;
   usedDays: number;
   pendingDays: number;
   availableDays: number;
 }
 
+/**
+ * A manual correction to one employee's balance for one leave type and year.
+ *
+ * `adjustmentDays` is the whole correction, not an increment: it replaces the
+ * stored figure, and the audit trail records what it replaced. The reason is
+ * compulsory - a balance nobody can explain is a balance nobody trusts, and
+ * the note is shown beside the figure on the employee's profile.
+ */
 export const balanceAdjustmentSchema = z.object({
   employeeId: z.string().trim().min(1),
   leaveTypeId: z.string().trim().min(1),
   year: z.coerce.number().int().min(2000).max(2100),
   adjustmentDays: z.coerce.number().min(-365).max(365),
-  adjustmentNote: z.string().trim().max(500).optional().nullable(),
+  adjustmentNote: z
+    .string()
+    .trim()
+    .min(3, 'Give the reason for this adjustment.')
+    .max(500, 'Keep the reason under 500 characters.'),
 });
+export type BalanceAdjustmentInput = z.infer<typeof balanceAdjustmentSchema>;
 
 // ------------------------------------------------------------------ holidays
 

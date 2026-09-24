@@ -418,26 +418,35 @@ export const leaveBalanceRoutes: FastifyPluginAsync = async (app) => {
       });
       if (!leaveType) throw new ValidationError({ leaveTypeId: ['That leave type does not exist.'] });
 
+      const key = {
+        employeeId: input.employeeId,
+        leaveTypeId: input.leaveTypeId,
+        year: input.year,
+      };
+
+      /**
+       * What is being replaced, read before the write so the audit entry can
+       * say what the figure was. Only the two stored columns are touched:
+       * opening days belong to the carry-forward run, and used, pending and
+       * available are derived from the leave requests, which this never edits.
+       */
+      const existing = await prisma.leaveBalance.findUnique({
+        where: { employeeId_leaveTypeId_year: key },
+        select: { adjustmentDays: true, adjustmentNote: true },
+      });
+      const before = {
+        adjustmentDays: existing ? Number(existing.adjustmentDays) : 0,
+        adjustmentNote: existing?.adjustmentNote ?? null,
+      };
+      const after = {
+        adjustmentDays: input.adjustmentDays,
+        adjustmentNote: input.adjustmentNote,
+      };
+
       const saved = await prisma.leaveBalance.upsert({
-        where: {
-          employeeId_leaveTypeId_year: {
-            employeeId: input.employeeId,
-            leaveTypeId: input.leaveTypeId,
-            year: input.year,
-          },
-        },
-        create: {
-          companyId: auth.companyId,
-          employeeId: input.employeeId,
-          leaveTypeId: input.leaveTypeId,
-          year: input.year,
-          adjustmentDays: input.adjustmentDays,
-          adjustmentNote: input.adjustmentNote ?? null,
-        },
-        update: {
-          adjustmentDays: input.adjustmentDays,
-          adjustmentNote: input.adjustmentNote ?? null,
-        },
+        where: { employeeId_leaveTypeId_year: key },
+        create: { companyId: auth.companyId, ...key, ...after },
+        update: after,
       });
 
       await recordAudit({
@@ -446,12 +455,13 @@ export const leaveBalanceRoutes: FastifyPluginAsync = async (app) => {
         action: 'leave.balance.adjust',
         entityType: 'LeaveBalance',
         entityId: saved.id,
-        summary: `Adjusted ${leaveType.name} balance by ${input.adjustmentDays} day(s) for ${input.year}`,
-        after: { adjustmentDays: input.adjustmentDays, note: input.adjustmentNote ?? null },
+        summary: `Set the ${leaveType.name} adjustment for ${input.year} to ${input.adjustmentDays} day(s), from ${before.adjustmentDays}: ${input.adjustmentNote}`,
+        before,
+        after,
         request,
       });
 
-      return reply.send({ data: { id: saved.id } });
+      return reply.send({ data: { id: saved.id, ...after } });
     },
   );
 

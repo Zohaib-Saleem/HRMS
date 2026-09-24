@@ -113,6 +113,7 @@ export interface LeaveBalanceView {
   openingDays: number;
   accruedDays: number;
   adjustmentDays: number;
+  adjustmentNote: string | null;
   usedDays: number;
   pendingDays: number;
   availableDays: number;
@@ -184,6 +185,7 @@ export async function balancesForEmployee(
       openingDays: opening,
       accruedDays: round2(accrued),
       adjustmentDays: adjustment,
+      adjustmentNote: row?.adjustmentNote ?? null,
       usedDays: round2(used),
       pendingDays: round2(pending),
       availableDays: round2(opening + accrued + adjustment - used - pending),

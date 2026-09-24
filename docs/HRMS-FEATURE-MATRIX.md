@@ -99,6 +99,7 @@ it holds the permission by default.
 |---|---|---|---|---|
 | Leave types | IMPLEMENTED | SA, HR | — | Entitlement, accrual, carry-forward, paid/unpaid |
 | Leave balance | IMPLEMENTED | all (own) | leave types | Derived, not stored: `opening + accrued + adjustment − used − pending` |
+| Leave balance adjustment | IMPLEMENTED | SA, HR | leave balance | Profile → Leave → Adjust. Reason compulsory; audited with old and new value; calculated columns stay read-only |
 | Leave request | IMPLEMENTED | all | approval engine | Half-day supported for single-day requests |
 | Leave cancellation | IMPLEMENTED | all (own) | — | |
 | Balance adjustment | IMPLEMENTED | SA, HR | — | `leave.manage`, positive or negative, with a note |
