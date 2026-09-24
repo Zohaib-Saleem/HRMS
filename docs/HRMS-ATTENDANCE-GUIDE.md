@@ -200,9 +200,34 @@ The stored record is only one input. Precedence, highest first:
 1. WEEKEND    the day is in the company's weekend days
 2. HOLIDAY    a holiday applies to that employee's location
 3. ON_LEAVE   approved leave covers the date
-4. the stored record's status
+4. the stored record, RE-SCORED under the policy in force for that employee
+              on that date (the same computeAttendance call that produces the
+              hours, lateness and overtime); an ADMIN-corrected record keeps
+              the status the administrator gave it
 5. ABSENT     nothing recorded on a working day
 ```
+
+> **The status is not read back from the row.** The `status` column on
+> `attendance_records` is a write-time cache, like `workedMinutes` and
+> `overtimeMinutes`: it says what the thresholds were on the night the day
+> was imported. Every screen, report, export and payroll run scores the stored
+> punches through the active policy, so changing `halfDayMinutes`,
+> `fullDayMinutes` or `fullDayToleranceMinutes` in Settings changes what a
+> day is worth on the very next read - with no re-import and no code change.
+> Until 2026-09-24 the status was the one figure still read off the row, which
+> is why raising the full-day threshold moved every number on the screen except
+> the half-day verdict.
+>
+> **History is kept under the thresholds it was imported with.** Migration
+> `20260924120000_history_attendance_policy` adds a company-scope policy
+> override, *History to 11 Sep 2026 (thresholds then in force)*, effective
+> 2025-01-01 to 2026-09-11, carrying full day 480, tolerance 30 and irregular
+> cutoff 11:00 - the values configured when the history was imported on
+> 2026-09-08. It is an ordinary policy under **Settings → Policy overrides**
+> and can be edited or removed there. About 340 days still read differently
+> from the stored status even under it, because the engine moved from elapsed
+> time to scheduled coverage on 2026-09-10; those are the engine's current
+> reading, not a threshold change.
 
 Weekend and holiday beat leave **deliberately**: booking leave across a public
 holiday should not report the holiday as a day of leave, and the leave balance

@@ -342,23 +342,7 @@ export async function deriveRangeForEmployees(
       const working = isShiftWorkingDay(d, assigned, policy.weekendDays);
 
       /**
-       * Order matters. Weekend, off day, holiday and approved leave describe
-       * the day itself and hold whether it is past or future. A stored record
-       * is fact. Only then does the absence of a record mean anything - and it
-       * means "absent" solely for a day that has already happened. A working
-       * day in the future is UPCOMING: nobody has failed to attend a day that
-       * has not arrived.
-       */
-      let status: DerivedAttendanceStatus;
-      if (!working) status = companyWeekend || !shiftDecides ? 'WEEKEND' : 'OFF_DAY';
-      else if (holidayName) status = 'HOLIDAY';
-      else if (onLeave) status = 'ON_LEAVE';
-      else if (record) status = record.status;
-      else if (key > todayKey) status = 'UPCOMING';
-      else status = 'ABSENT';
-
-      /**
-       * The figures, RECOMPUTED rather than read back.
+       * The figures AND the status, RECOMPUTED rather than read back.
        *
        * This is the single source of truth for what a day is worth. The stored
        * columns are a write-time cache of the same calculation, and a cache is
@@ -366,15 +350,25 @@ export async function deriveRangeForEmployees(
        * policy happened to be in force that night, so reading them back meant
        * a company could change its overtime rule and watch nothing change.
        *
+       * The status used to be the one column still read back. The hours, the
+       * lateness and the overtime followed the policy in force; the PRESENT /
+       * HALF_DAY / ABSENT verdict beside them followed whatever the half-day
+       * and full-day thresholds were on the night the day was imported. So a
+       * company could raise its half-day threshold in Settings and watch every
+       * figure on the screen move except the one the setting is named after.
+       * The verdict now comes from the same `computeAttendance` call as the
+       * figures, so the configured thresholds decide it - and changing them
+       * changes it, with no import and no code change.
+       *
        * The policy used is the one resolved for THIS employee on THIS date -
        * employee over team over department over company, effective-dated - so
        * an override no longer silently disagrees with the figure the import
        * stored under it.
        *
        * A record an administrator corrected is the exception and keeps its
-       * stored figures. Those numbers are a human decision about what the day
-       * was worth, and re-deriving them would quietly overrule the person who
-       * made it.
+       * stored figures and its stored status. Those are a human decision about
+       * what the day was worth, and re-deriving them would quietly overrule the
+       * person who made it.
        */
       const dayPolicy = policyFor(employee.id, d);
       const admin = record?.source === 'ADMIN';
@@ -389,6 +383,24 @@ export async function deriveRangeForEmployees(
               policy: dayPolicy,
             })
           : null;
+
+      /**
+       * Order matters. Weekend, off day, holiday and approved leave describe
+       * the day itself and hold whether it is past or future. A stored record
+       * is fact - its punches are, and the policy in force says what they are
+       * worth. Only then does the absence of a record mean anything - and it
+       * means "absent" solely for a day that has already happened. A working
+       * day in the future is UPCOMING: nobody has failed to attend a day that
+       * has not arrived.
+       */
+      let status: DerivedAttendanceStatus;
+      if (!working) status = companyWeekend || !shiftDecides ? 'WEEKEND' : 'OFF_DAY';
+      else if (holidayName) status = 'HOLIDAY';
+      else if (onLeave) status = 'ON_LEAVE';
+      else if (computed) status = computed.status;
+      else if (record) status = record.status;
+      else if (key > todayKey) status = 'UPCOMING';
+      else status = 'ABSENT';
 
       const workedMinutes = computed ? computed.workedMinutes : (record?.workedMinutes ?? null);
       const lateMinutes = computed ? computed.lateMinutes : (record?.lateMinutes ?? null);

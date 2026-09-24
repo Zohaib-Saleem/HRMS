@@ -295,9 +295,21 @@ describe('the figures', () => {
   });
 
   it('prices an absence and shows it as its own deduction column', async () => {
-    const records = presentRecords() as Array<{ status: string; workedMinutes: number | null }>;
+    // An absence as the absence job records one: no punches at all. The
+    // deriver scores a stored day on its punches under the policy in force,
+    // so a row stamped ABSENT with a full day's punches would derive PRESENT.
+    const records = presentRecords() as Array<{
+      status: string;
+      workedMinutes: number | null;
+      checkInAt: Date | null;
+      checkOutAt: Date | null;
+      source: string;
+    }>;
     records[0]!.status = 'ABSENT';
     records[0]!.workedMinutes = null;
+    records[0]!.checkInAt = null;
+    records[0]!.checkOutAt = null;
+    records[0]!.source = 'SYSTEM';
     db.attendanceRecord.findMany.mockResolvedValue(records);
 
     const row = (await preview()).rows[0]!;

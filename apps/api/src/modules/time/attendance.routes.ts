@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { Prisma } from '@prisma/client';
+import type { AttendanceSource, Prisma } from '@prisma/client';
 import {
   PERMISSIONS,
   type AttendanceDay,
@@ -51,15 +51,19 @@ import { clockBoundary, dayKeyToDateColumn, todayInZone } from '../../core/zoned
 import {
   assertCheckInIpAllowed,
   assertCheckInLocationAllowed,
+  assignmentOn,
   deriveRange,
   deriveRangeForEmployees,
   emptyMonthlyTotals as emptyTotals,
+  shiftAssignmentsForRange,
   shiftOnDate,
   tallyDerived as tally,
   type DerivedDay,
 } from './attendance.service.js';
 import {
   computeAttendance,
+  effectiveShift,
+  policyResolverFor,
   resolveAttendancePolicy,
   resolvePolicyFor,
 } from './attendance-policy.js';
@@ -113,6 +117,55 @@ function assertUsableRange(from: Date, to: Date): void {
       to: [`Ask for at most ${MAX_RANGE_DAYS} days at a time; this range is ${days}.`],
     });
   }
+}
+
+/**
+ * What one page of stored days is worth under the active policy.
+ *
+ * One policy resolution and one shift lookup for the whole page, then the same
+ * `computeAttendance` the deriver and the import use. Returns only the rows it
+ * re-scored: ADMIN corrections are left out so the caller keeps the stored
+ * verdict for them.
+ */
+async function rescoreStatuses(
+  companyId: string,
+  rows: ReadonlyArray<{
+    id: string;
+    employeeId: string;
+    date: Date;
+    checkInAt: Date | null;
+    checkOutAt: Date | null;
+    source: AttendanceSource;
+  }>,
+): Promise<Map<string, AttendanceStatus>> {
+  const result = new Map<string, AttendanceStatus>();
+  const scorable = rows.filter((row) => row.source !== 'ADMIN');
+  if (scorable.length === 0) return result;
+
+  const employeeIds = [...new Set(scorable.map((row) => row.employeeId))];
+  const dates = scorable.map((row) => row.date.getTime());
+  const from = new Date(Math.min(...dates));
+  const to = new Date(Math.max(...dates));
+
+  const [policyFor, assignments] = await Promise.all([
+    policyResolverFor(companyId, employeeIds, from, to),
+    shiftAssignmentsForRange(employeeIds, from, to),
+  ]);
+
+  for (const row of scorable) {
+    const key = row.date.toISOString().slice(0, 10);
+    const policy = policyFor(row.employeeId, row.date);
+    const assigned = assignmentOn(assignments.get(row.employeeId) ?? [], key)?.shift ?? null;
+    const computed = computeAttendance({
+      day: key,
+      checkInAt: row.checkInAt,
+      checkOutAt: row.checkOutAt,
+      shift: assigned ? effectiveShift(assigned, policy) : null,
+      policy,
+    });
+    result.set(row.id, computed.status);
+  }
+  return result;
 }
 
 export const attendanceRoutes: FastifyPluginAsync = async (app) => {
@@ -180,12 +233,30 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       }),
     ]);
 
+    /**
+     * The status of each listed day, under the policy in force for it.
+     *
+     * The stored column is what the import wrote the night the day arrived,
+     * under the thresholds of that night. The calendar and the reports score
+     * the same punches through `deriveRange`, which reads the active policy,
+     * and the two used to disagree on any day imported before a threshold was
+     * changed. The table is the same page of the same rows; it is re-scored
+     * the same way so the three views cannot say three different things.
+     *
+     * A day an administrator corrected keeps the status they gave it - a
+     * human decision, exactly as the deriver treats it. The `status` filter
+     * above still narrows on the stored column, because a filter has to be a
+     * WHERE clause to paginate; a re-scored day therefore lists under the
+     * status it was imported with and shows the one the policy now gives it.
+     */
+    const rescored = await rescoreStatuses(auth.companyId, rows);
+
     const data: AttendanceRecordItem[] = rows.map((row) => ({
       id: row.id,
       employeeId: row.employeeId,
       employeeName: displayName(row.employee),
       date: row.date.toISOString().slice(0, 10),
-      status: row.status as AttendanceStatus,
+      status: (rescored.get(row.id) ?? row.status) as AttendanceStatus,
       checkInAt: row.checkInAt?.toISOString() ?? null,
       checkOutAt: row.checkOutAt?.toISOString() ?? null,
       workedMinutes: row.workedMinutes,
