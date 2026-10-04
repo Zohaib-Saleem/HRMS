@@ -4,6 +4,7 @@ import { ChevronsLeft, Lock } from 'lucide-react';
 import type { Permission } from '@hrms/shared';
 import { NAV_SECTIONS, type NavItem } from '@/navigation/nav-config';
 import { useSession } from '@/features/auth/session-context';
+import { useMedicalHiddenFromMenu } from '@/features/medical/use-medical-hidden';
 import { cn } from '@/lib/utils';
 
 /**
@@ -28,14 +29,19 @@ interface SidebarProps {
 export function SidebarNav({ collapsed, onToggleCollapsed, onNavigate }: SidebarProps) {
   const { permissions, session } = useSession();
   const location = useLocation();
+  // Not a permission: an employee the medical benefit does not reach holds
+  // medical.read like everybody else, and is simply not shown the entry.
+  const medicalHidden = useMedicalHiddenFromMenu();
 
   const sections = React.useMemo(
     () =>
       NAV_SECTIONS.map((section) => ({
         ...section,
-        items: section.items.filter((item) => isVisible(item, permissions)),
+        items: section.items.filter(
+          (item) => isVisible(item, permissions) && !(medicalHidden && item.to === '/medical'),
+        ),
       })).filter((section) => section.items.length > 0),
-    [permissions],
+    [permissions, medicalHidden],
   );
 
   return (

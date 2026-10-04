@@ -6,6 +6,7 @@ import {
   medicalDependentCreateSchema,
   medicalDependentQuerySchema,
   medicalDependentUpdateSchema,
+  medicalEmployeeOverrideSchema,
   type MedicalBenefitView,
   type MedicalDependentRecord,
 } from '@hrms/shared';
@@ -89,7 +90,8 @@ export const medicalRoutes: FastifyPluginAsync = async (app) => {
       categoryUsage({ companyId: auth.companyId, employeeId: subject.employeeId, year, policy }),
     ]);
 
-    const annualLimit = Number(policy.annualLimitPerEmployee);
+    // The employee's own limit when HR has set one, else the policy's.
+    const annualLimit = eligibility.benefitLimit;
     const round2 = (n: number) => Math.round(n * 100) / 100;
 
     const data: MedicalBenefitView = {
@@ -110,15 +112,92 @@ export const medicalRoutes: FastifyPluginAsync = async (app) => {
       available: Math.max(0, round2(annualLimit - position.used - position.pending)),
       categoryUsage: usage,
       canManageDependents: subject.canManage,
+      // Never for somebody who is not eligible: the claim gate would refuse it
+      // anyway, and offering the button only to refuse is worse than not.
       canSubmitClaim:
-        subject.isSelf && auth.permissions.has(PERMISSIONS.MEDICAL_CLAIM_REQUEST)
+        eligibility.eligible &&
+        (subject.isSelf && auth.permissions.has(PERMISSIONS.MEDICAL_CLAIM_REQUEST)
           ? true
-          : subject.canManage,
+          : subject.canManage),
+      canEditOverride: subject.canManage && !subject.isSelf,
+      canEditPolicy: auth.permissions.has(PERMISSIONS.MEDICAL_POLICY_MANAGE),
       dependentCoverage: dependentCoverage(policy),
       dependents: applyCoverage(dependents, policy),
     };
 
     return reply.send({ data });
+  });
+
+  /**
+   * Set HR's per-employee decision: eligible, not eligible or follow the
+   * policy, and an individual annual limit.
+   *
+   * `medical.manage` (Super Admin and HR), on somebody else's record only -
+   * nobody grants themselves an exception to the benefit they are paid under.
+   * A reason is compulsory whenever the result departs from the policy, and the
+   * audit keeps the old and new values.
+   */
+  app.put('/override', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const input = parseOrThrow(medicalEmployeeOverrideSchema, request.body);
+    const subject = await resolveMedicalSubject(auth, input.employeeId);
+    requireDependentManagement(subject.canManage);
+    if (subject.isSelf) {
+      throw new ForbiddenError('You cannot set a medical override on your own record.');
+    }
+
+    const existing = await prisma.employee.findFirstOrThrow({
+      where: { id: subject.employeeId, companyId: auth.companyId },
+      select: {
+        medicalEligibilityOverride: true,
+        medicalAnnualLimitOverride: true,
+        medicalOverrideNote: true,
+      },
+    });
+
+    const followsPolicy = input.eligibility === 'FOLLOW_POLICY' && input.annualLimit === null;
+    const data = {
+      medicalEligibilityOverride:
+        input.eligibility === 'FOLLOW_POLICY' ? null : input.eligibility,
+      medicalAnnualLimitOverride: input.annualLimit,
+      // Back to the policy clears the reason with it: a note describing an
+      // exception that no longer exists would mislead the next reader.
+      medicalOverrideNote: followsPolicy ? null : input.note,
+    };
+
+    await prisma.employee.update({ where: { id: subject.employeeId }, data });
+
+    const changes = diff(
+      {
+        medicalEligibilityOverride: existing.medicalEligibilityOverride,
+        medicalAnnualLimitOverride:
+          existing.medicalAnnualLimitOverride === null
+            ? null
+            : Number(existing.medicalAnnualLimitOverride),
+        medicalOverrideNote: existing.medicalOverrideNote,
+      },
+      data as unknown as Record<string, unknown>,
+    );
+
+    await recordAudit({
+      companyId: auth.companyId,
+      actorId: auth.userId,
+      action: 'medical.override.update',
+      entityType: 'Employee',
+      entityId: subject.employeeId,
+      summary: followsPolicy
+        ? 'Returned an employee to the medical policy'
+        : `Set a medical override (${changes.changed.join(', ') || 'no field changes'})`,
+      before: changes.before,
+      after: changes.after,
+      request,
+    });
+
+    const eligibility = await evaluateMedicalEligibility({
+      companyId: auth.companyId,
+      employeeId: subject.employeeId,
+    });
+    return reply.send({ data: eligibility });
   });
 
   /** An employee's dependents, with coverage resolved against the live policy. */

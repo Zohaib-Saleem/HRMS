@@ -907,6 +907,18 @@ model Employee {
   medicalDependents MedicalDependent[]
   medicalClaims     MedicalClaim[]
 
+  /// HR's per-employee answer to "is the medical benefit theirs", over the
+  /// policy's. Null follows the policy. ELIGIBLE covers somebody the policy's
+  /// personal rules would refuse (service, probation, employment stage);
+  /// NOT_ELIGIBLE refuses somebody it would cover. Neither reaches past the
+  /// benefit being switched off company-wide, or a parked or ended record.
+  medicalEligibilityOverride MedicalEligibilityOverride?
+  /// This employee's own annual limit, in place of the policy's. Null: the
+  /// policy's limit applies.
+  medicalAnnualLimitOverride Decimal?                    @db.Decimal(14, 2)
+  /// Why the override was made. Required by the API whenever one is set.
+  medicalOverrideNote        String?
+
   // --- celebrations ---
   greetingsReceived MomentGreeting[] @relation("MomentGreetingRecipient")
   greetingsSent     MomentGreeting[] @relation("MomentGreetingSender")
@@ -3921,6 +3933,13 @@ model MedicalPolicyCategory {
   @@unique([policyId, category])
   @@index([policyId])
   @@map("medical_policy_categories")
+}
+
+/// HR's per-employee decision about the medical benefit. See
+/// `Employee.medicalEligibilityOverride`.
+enum MedicalEligibilityOverride {
+  ELIGIBLE
+  NOT_ELIGIBLE
 }
 
 /// Somebody an employee's medical benefit may extend to.

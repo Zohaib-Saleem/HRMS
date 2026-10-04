@@ -19,7 +19,7 @@ import { MEDICAL_POLICY_DEFAULTS, PERMISSIONS, defaultCategoryLimits, type Permi
 
 const db = vi.hoisted(() => ({
   company: { findUniqueOrThrow: vi.fn() },
-  employee: { findFirst: vi.fn(), findFirstOrThrow: vi.fn() },
+  employee: { findFirst: vi.fn(), findFirstOrThrow: vi.fn(), update: vi.fn() },
   medicalPolicy: { findFirst: vi.fn(), upsert: vi.fn(), create: vi.fn() },
   medicalDependent: {
     findFirst: vi.fn(),
@@ -584,5 +584,105 @@ describe('maintaining dependents', () => {
     const audit = db.auditLog.create.mock.calls[0]![0].data;
     expect(audit.action).toBe('medical.dependent.create');
     expect(audit.summary).not.toContain('Zara');
+  });
+});
+
+describe("HR's per-employee medical override", () => {
+  const put = (app: FastifyInstance, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PUT', url: '/medical/override', payload });
+
+  it('lets HR mark somebody not eligible, with a reason, and audits old and new', async () => {
+    db.employee.findFirstOrThrow.mockResolvedValueOnce({
+      medicalEligibilityOverride: null,
+      medicalAnnualLimitOverride: null,
+      medicalOverrideNote: null,
+    });
+    const app = await appAs(HR_ADMIN);
+    const res = await put(app, {
+      employeeId: 'emp-other',
+      eligibility: 'NOT_ELIGIBLE',
+      annualLimit: null,
+      note: 'Covered by spouse employer',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(db.employee.update).toHaveBeenCalledWith({
+      where: { id: 'emp-other' },
+      data: {
+        medicalEligibilityOverride: 'NOT_ELIGIBLE',
+        medicalAnnualLimitOverride: null,
+        medicalOverrideNote: 'Covered by spouse employer',
+      },
+    });
+    const audit = db.auditLog.create.mock.calls[0]![0].data;
+    expect(audit.action).toBe('medical.override.update');
+    expect(audit.before).toEqual({ medicalEligibilityOverride: null, medicalOverrideNote: null });
+    expect(audit.after).toEqual({
+      medicalEligibilityOverride: 'NOT_ELIGIBLE',
+      medicalOverrideNote: 'Covered by spouse employer',
+    });
+  });
+
+  it('refuses an exception without a reason', async () => {
+    const app = await appAs(HR_ADMIN);
+    const res = await put(app, { employeeId: 'emp-other', eligibility: 'FOLLOW_POLICY', annualLimit: 150000 });
+
+    expect(res.statusCode).toBe(422);
+    expect(db.employee.update).not.toHaveBeenCalled();
+  });
+
+  it('clears the reason when somebody goes back to the policy', async () => {
+    db.employee.findFirstOrThrow.mockResolvedValueOnce({
+      medicalEligibilityOverride: 'ELIGIBLE',
+      medicalAnnualLimitOverride: null,
+      medicalOverrideNote: 'Exception',
+    });
+    const app = await appAs(HR_ADMIN);
+    const res = await put(app, { employeeId: 'emp-other', eligibility: 'FOLLOW_POLICY', note: 'stale' });
+
+    expect(res.statusCode).toBe(200);
+    expect(db.employee.update.mock.calls[0]![0].data).toEqual({
+      medicalEligibilityOverride: null,
+      medicalAnnualLimitOverride: null,
+      medicalOverrideNote: null,
+    });
+  });
+
+  it('refuses HR setting an override on their own record', async () => {
+    const app = await appAs(HR_ADMIN);
+    const res = await put(app, {
+      employeeId: 'emp-self',
+      eligibility: 'ELIGIBLE',
+      note: 'Myself',
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(db.employee.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an employee and a manager alike', async () => {
+    for (const grants of [EMPLOYEE, MANAGER]) {
+      const app = await appAs(grants, 'ALL');
+      const res = await put(app, { employeeId: 'emp-other', eligibility: 'ELIGIBLE', note: 'Please' });
+      expect(res.statusCode).toBe(403);
+    }
+    expect(db.employee.update).not.toHaveBeenCalled();
+  });
+
+  it('offers no claim button to somebody who is not eligible', async () => {
+    db.medicalPolicy.findFirst.mockResolvedValue(policy({ enabled: false }));
+    const app = await appAs([...EMPLOYEE, PERMISSIONS.MEDICAL_CLAIM_REQUEST], 'OWN');
+    const res = await app.inject({ method: 'GET', url: '/medical/benefit' });
+
+    expect(res.json().data.canSubmitClaim).toBe(false);
+    expect(res.json().data.canEditOverride).toBe(false);
+  });
+
+  it('tells HR they may edit the override on somebody else, and not the policy', async () => {
+    const app = await appAs(HR_ADMIN);
+    const res = await app.inject({ method: 'GET', url: '/medical/benefit?employeeId=emp-other' });
+
+    expect(res.json().data.canEditOverride).toBe(true);
+    expect(res.json().data.canEditPolicy).toBe(false);
   });
 });

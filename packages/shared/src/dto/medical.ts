@@ -120,6 +120,8 @@ export const MEDICAL_ELIGIBILITY_RULES = [
   'MIN_EMPLOYMENT',
   'PROBATION',
   'PERMANENT_NOT_ALLOWED',
+  /** HR marked this employee not eligible, whatever the policy says. */
+  'MANUAL_OVERRIDE',
 ] as const;
 
 export type MedicalEligibilityRule = (typeof MEDICAL_ELIGIBILITY_RULES)[number];
@@ -145,6 +147,72 @@ export interface MedicalCategoryEntitlement {
   employeeContributionPercent: number;
 }
 
+// --- the per-employee override ------------------------------------------------
+
+/**
+ * HR's per-employee decision, over the policy's.
+ *
+ * FOLLOW_POLICY is the absence of a decision and is stored as null. ELIGIBLE
+ * covers somebody the policy's personal rules - service, probation, employment
+ * stage - would refuse; NOT_ELIGIBLE refuses somebody it would cover. Neither
+ * reaches past the benefit being switched off company-wide, or a record that is
+ * suspended, inactive or (when the policy blocks it) resigned or terminated:
+ * those are not judgements about one person.
+ */
+export const MEDICAL_ELIGIBILITY_OVERRIDES = ['FOLLOW_POLICY', 'ELIGIBLE', 'NOT_ELIGIBLE'] as const;
+export type MedicalEligibilityOverride = (typeof MEDICAL_ELIGIBILITY_OVERRIDES)[number];
+
+export const MEDICAL_ELIGIBILITY_OVERRIDE_LABELS: Record<MedicalEligibilityOverride, string> = {
+  FOLLOW_POLICY: 'Follow the medical policy',
+  ELIGIBLE: 'Eligible (override)',
+  NOT_ELIGIBLE: 'Not eligible (override)',
+};
+
+/** What HR has set for one employee, as the eligibility answer reports it. */
+export interface MedicalEmployeeOverride {
+  eligibility: MedicalEligibilityOverride;
+  /** This employee's own annual limit. Null: the policy's applies. */
+  annualLimit: number | null;
+  note: string | null;
+}
+
+/**
+ * Setting the override. Needs `medical.manage`.
+ *
+ * A reason is compulsory whenever the result departs from the policy, the same
+ * rule a leave adjustment follows: an exception nobody explained is one nobody
+ * can later defend or undo with confidence.
+ */
+export const medicalEmployeeOverrideSchema = z
+  .object({
+    employeeId: z.string().trim().min(1).max(64),
+    eligibility: z.enum(MEDICAL_ELIGIBILITY_OVERRIDES),
+    annualLimit: z.coerce
+      .number({ invalid_type_error: 'Enter an amount.' })
+      .min(0, 'The limit cannot be negative.')
+      .max(1_000_000_000, 'That limit is too large.')
+      .nullable()
+      .default(null),
+    note: z
+      .string()
+      .trim()
+      .max(500, 'Keep the reason under 500 characters.')
+      .nullish()
+      .transform((v) => (v ? v : null)),
+  })
+  .superRefine((value, ctx) => {
+    const departs = value.eligibility !== 'FOLLOW_POLICY' || value.annualLimit !== null;
+    if (departs && (!value.note || value.note.length < 3)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['note'],
+        message: 'Give the reason for departing from the policy.',
+      });
+    }
+  });
+
+export type MedicalEmployeeOverrideInput = z.infer<typeof medicalEmployeeOverrideSchema>;
+
 /** Which version decided this answer. Quoted back so an answer is explicable. */
 export interface MedicalPolicyVersionRef {
   id: string;
@@ -167,8 +235,15 @@ export interface MedicalEligibilityResult {
   /** Things worth saying that do not block anything. */
   warnings: string[];
   policyVersion: MedicalPolicyVersionRef;
-  /** The annual limit this employee is measured against, under that version. */
+  /**
+   * The annual limit this employee is measured against: their own override
+   * when HR has set one, otherwise the policy version's.
+   */
   benefitLimit: number;
+  /** The policy version's own limit, so a screen can show what was overridden. */
+  policyBenefitLimit: number;
+  /** HR's per-employee decision. FOLLOW_POLICY with nulls when there is none. */
+  override: MedicalEmployeeOverride;
   categoryLimits: MedicalCategoryEntitlement[];
   currency: string;
   /** What the rules were measured against, so a refusal can be explained. */
@@ -251,6 +326,10 @@ export interface MedicalBenefitView {
   canManageDependents: boolean;
   /** Whether the caller may submit a claim against this benefit. */
   canSubmitClaim: boolean;
+  /** Whether the caller may set this employee's eligibility and limit override. */
+  canEditOverride: boolean;
+  /** Whether the caller may change the company medical policy itself. */
+  canEditPolicy: boolean;
   dependentCoverage: MedicalDependentCoverage;
   dependents: MedicalDependentRecord[];
 }

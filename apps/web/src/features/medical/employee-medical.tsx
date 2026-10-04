@@ -1,8 +1,15 @@
+import * as React from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { HeartPulse, ShieldCheck, Wallet } from 'lucide-react';
-import { PERMISSIONS, type MedicalBenefitView } from '@hrms/shared';
+import { HeartPulse, Pencil, Settings2, ShieldCheck, Wallet } from 'lucide-react';
+import {
+  MEDICAL_ELIGIBILITY_OVERRIDE_LABELS,
+  PERMISSIONS,
+  type MedicalBenefitView,
+} from '@hrms/shared';
 import { api } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatCard } from '@/components/ui/stat-card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -10,6 +17,7 @@ import { ErrorState } from '@/components/feedback/states';
 import { usePermissions } from '@/features/auth/session-context';
 import { isoDay, money } from '@/features/employment/employment-shared';
 import { MedicalDependentsCard } from './medical-dependents-card';
+import { MedicalOverrideDialog } from './medical-override-dialog';
 
 /**
  * One employee's medical details, for the Employee 360 profile.
@@ -28,6 +36,11 @@ import { MedicalDependentsCard } from './medical-dependents-card';
  * `medical.manage`, the pair the endpoint requires for another person's
  * record. An ordinary employee never sees this tab and, on their own Medical
  * page, sees their dependents without the controls.
+ *
+ * HR and Super Admin (`medical.manage`) can also set this employee's own
+ * exception to the policy - eligible, not eligible, or an individual annual
+ * limit - through `MedicalOverrideDialog`. The company-wide rules stay in
+ * Settings; a holder of `medical.policy.manage` gets a link there.
  */
 export function EmployeeMedical({
   employeeId,
@@ -37,6 +50,7 @@ export function EmployeeMedical({
   employeeName?: string;
 }) {
   const { has } = usePermissions();
+  const [editing, setEditing] = React.useState(false);
   const allowed = has(PERMISSIONS.MEDICAL_READ) && has(PERMISSIONS.MEDICAL_MANAGE);
 
   const query = useQuery({
@@ -59,16 +73,41 @@ export function EmployeeMedical({
   const view = query.data;
   const { eligibility } = view;
   const currency = view.currency;
+  const { override } = eligibility;
+  const hasOverride = override.eligibility !== 'FOLLOW_POLICY' || override.annualLimit !== null;
 
   return (
     <div className="space-y-5">
+      {view.canEditOverride || view.canEditPolicy ? (
+        <div className="flex flex-wrap justify-end gap-2">
+          {view.canEditPolicy ? (
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/settings/medical-policy">
+                <Settings2 className="size-4" aria-hidden />
+                Edit medical rules
+              </Link>
+            </Button>
+          ) : null}
+          {view.canEditOverride ? (
+            <Button size="sm" onClick={() => setEditing(true)}>
+              <Pencil className="size-4" aria-hidden />
+              Edit medical details
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
           label="Annual limit"
           value={money(view.annualLimit, currency)}
           icon={Wallet}
           tone="primary"
-          hint={`${eligibility.policyVersion.name} · benefit year ${view.benefitYear}`}
+          hint={
+            override.annualLimit !== null
+              ? `Individual limit · policy is ${money(eligibility.policyBenefitLimit, currency)}`
+              : `${eligibility.policyVersion.name} · benefit year ${view.benefitYear}`
+          }
         />
         <StatCard
           label="Used"
@@ -135,6 +174,11 @@ export function EmployeeMedical({
                 value={eligibility.employment.onProbation ? 'On probation' : 'Confirmed'}
               />
               <Row
+                label="Medical setting"
+                value={MEDICAL_ELIGIBILITY_OVERRIDE_LABELS[override.eligibility]}
+              />
+              {hasOverride && override.note ? <Row label="Reason" value={override.note} /> : null}
+              <Row
                 label="Policy in force since"
                 value={isoDay(eligibility.policyVersion.effectiveFrom.slice(0, 10))}
               />
@@ -144,6 +188,10 @@ export function EmployeeMedical({
 
         <MedicalDependentsCard view={view} />
       </div>
+
+      {view.canEditOverride ? (
+        <MedicalOverrideDialog open={editing} onClose={() => setEditing(false)} view={view} />
+      ) : null}
     </div>
   );
 }

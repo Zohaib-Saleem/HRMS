@@ -364,3 +364,67 @@ describe('warnings, which say something true without blocking', () => {
     expect(result.warnings.join(' ')).toContain('category');
   });
 });
+
+describe("HR's per-employee override", () => {
+  it('covers somebody the personal rules refuse when HR marks them eligible', async () => {
+    db.employee.findFirst.mockResolvedValue(
+      employee({
+        hireDate: new Date('2026-08-01T00:00:00Z'),
+        employmentStatus: 'PROBATION',
+        medicalEligibilityOverride: 'ELIGIBLE',
+      }),
+    );
+
+    const result = await evaluate();
+
+    expect(result.eligible).toBe(true);
+    expect(result.override.eligibility).toBe('ELIGIBLE');
+    expect(result.warnings.join(' ')).toContain('HR exception');
+  });
+
+  it('does not reach past the benefit being switched off', async () => {
+    db.medicalPolicy.findFirst.mockResolvedValue(policy({ enabled: false }));
+    db.employee.findFirst.mockResolvedValue(employee({ medicalEligibilityOverride: 'ELIGIBLE' }));
+
+    const result = await evaluate();
+
+    expect(result.eligible).toBe(false);
+    expect(result.failedRules).toEqual(['BENEFIT_DISABLED']);
+  });
+
+  it('does not cover a suspended record', async () => {
+    db.employee.findFirst.mockResolvedValue(
+      employee({ status: 'SUSPENDED', medicalEligibilityOverride: 'ELIGIBLE' }),
+    );
+
+    const result = await evaluate();
+
+    expect(result.eligible).toBe(false);
+    expect(result.failedRules).toEqual(['EMPLOYMENT_STATUS']);
+  });
+
+  it('refuses somebody the policy would cover when HR marks them not eligible', async () => {
+    db.employee.findFirst.mockResolvedValue(employee({ medicalEligibilityOverride: 'NOT_ELIGIBLE' }));
+
+    const result = await evaluate();
+
+    expect(result.eligible).toBe(false);
+    expect(result.failedRules).toEqual(['MANUAL_OVERRIDE']);
+  });
+
+  it("measures them against their own limit, and still quotes the policy's", async () => {
+    db.medicalPolicy.findFirst.mockResolvedValue(policy({ annualLimitPerEmployee: 100_000 }));
+    db.employee.findFirst.mockResolvedValue(employee({ medicalAnnualLimitOverride: 150_000 }));
+
+    const result = await evaluate();
+
+    expect(result.benefitLimit).toBe(150_000);
+    expect(result.policyBenefitLimit).toBe(100_000);
+  });
+
+  it('follows the policy when nothing is set', async () => {
+    const result = await evaluate();
+
+    expect(result.override).toEqual({ eligibility: 'FOLLOW_POLICY', annualLimit: null, note: null });
+  });
+});

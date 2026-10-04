@@ -229,7 +229,9 @@ export async function assessMedicalClaim(
     }),
   ]);
 
-  const annualLimit = Number(policy.annualLimitPerEmployee);
+  // The employee's own limit when HR has set one; the eligibility answer
+  // already resolved which applies.
+  const annualLimit = eligibility.benefitLimit;
   const available = Math.max(0, round2(annualLimit - position.used - position.pending));
   const categoryAvailable =
     category.annualLimit === null

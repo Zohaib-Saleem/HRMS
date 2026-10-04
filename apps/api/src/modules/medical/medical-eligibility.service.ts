@@ -4,6 +4,7 @@ import {
   isEmploymentStatusEligible,
   type EmploymentStatus,
   type MedicalCategoryEntitlement,
+  type MedicalEmployeeOverride,
   type MedicalEligibilityFailure,
   type MedicalEligibilityResult,
   type MedicalEligibilityRule,
@@ -91,6 +92,14 @@ export async function evaluateMedicalEligibility(
   const failures: MedicalEligibilityFailure[] = [];
   const warnings: string[] = [];
   const fail = (rule: MedicalEligibilityRule, message: string) => failures.push({ rule, message });
+  /*
+   * The rules that judge the person rather than the company or the record:
+   * service, probation and employment stage. Held apart because an HR override
+   * of ELIGIBLE answers exactly these, and nothing else.
+   */
+  const personal: MedicalEligibilityFailure[] = [];
+  const failPersonal = (rule: MedicalEligibilityRule, message: string) =>
+    personal.push({ rule, message });
 
   const [policy, company] = await Promise.all([
     input.policy ?? currentMedicalPolicy(input.companyId, now),
@@ -105,7 +114,7 @@ export async function evaluateMedicalEligibility(
     name: policy.policyName,
     effectiveFrom: policy.effectiveFrom.toISOString(),
   };
-  const benefitLimit = Number(policy.annualLimitPerEmployee);
+  const policyBenefitLimit = Number(policy.annualLimitPerEmployee);
   const categoryLimits = categoryEntitlements(policy);
 
   const employee = await prisma.employee.findFirst({
@@ -116,6 +125,9 @@ export async function evaluateMedicalEligibility(
       hireDate: true,
       confirmationDate: true,
       employmentStatus: true,
+      medicalEligibilityOverride: true,
+      medicalAnnualLimitOverride: true,
+      medicalOverrideNote: true,
       contracts: {
         where: { status: 'ACTIVE', contractType: 'PROBATION' },
         select: { id: true },
@@ -138,7 +150,9 @@ export async function evaluateMedicalEligibility(
       ],
       warnings: [],
       policyVersion: version,
-      benefitLimit,
+      benefitLimit: policyBenefitLimit,
+      policyBenefitLimit,
+      override: { eligibility: 'FOLLOW_POLICY', annualLimit: null, note: null },
       categoryLimits,
       currency: company.currency,
       employment: {
@@ -149,6 +163,16 @@ export async function evaluateMedicalEligibility(
       },
     };
   }
+
+  const override: MedicalEmployeeOverride = {
+    eligibility: employee.medicalEligibilityOverride ?? 'FOLLOW_POLICY',
+    annualLimit:
+      employee.medicalAnnualLimitOverride == null
+        ? null
+        : Number(employee.medicalAnnualLimitOverride),
+    note: employee.medicalOverrideNote ?? null,
+  };
+  const benefitLimit = override.annualLimit ?? policyBenefitLimit;
 
   const onProbation = isOnProbation(employee, now);
   const monthsServed = employee.hireDate ? completedMonths(employee.hireDate, now) : null;
@@ -192,12 +216,12 @@ export async function evaluateMedicalEligibility(
   // --- 4. length of service --------------------------------------------------
   if (policy.minEmploymentMonths > 0) {
     if (monthsServed === null) {
-      fail(
+      failPersonal(
         'MIN_EMPLOYMENT',
         `Your joining date is not on record, so ${policy.minEmploymentMonths} months of service cannot be confirmed. Ask HR to add it.`,
       );
     } else if (monthsServed < policy.minEmploymentMonths) {
-      fail(
+      failPersonal(
         'MIN_EMPLOYMENT',
         `You have completed ${monthsServed} month${monthsServed === 1 ? '' : 's'} of service. The minimum is ${policy.minEmploymentMonths}.`,
       );
@@ -206,7 +230,7 @@ export async function evaluateMedicalEligibility(
 
   // --- 5. probation ----------------------------------------------------------
   if (onProbation && !policy.allowProbation) {
-    fail('PROBATION', 'Employees on probation are not covered while probation cover is off.');
+    failPersonal('PROBATION', 'Employees on probation are not covered while probation cover is off.');
   }
 
   // --- 6. employment status --------------------------------------------------
@@ -225,10 +249,27 @@ export async function evaluateMedicalEligibility(
   // unusual and none of this code's business to rule out.
   const employmentStatus = employee.employmentStatus as EmploymentStatus | null;
   if (employmentStatus !== 'PROBATION' && !isEmploymentStatusEligible(policy, employmentStatus)) {
-    fail(
+    failPersonal(
       employmentStatus === 'PERMANENT' ? 'PERMANENT_NOT_ALLOWED' : 'EMPLOYMENT_STATUS',
       `${EMPLOYMENT_STATUS_LABELS[employmentStatus as EmploymentStatus]} employees are not covered under the current medical policy.`,
     );
+  }
+
+  // --- 7. HR's per-employee decision ---------------------------------------
+  //
+  // Applied last, and only to what it answers. ELIGIBLE sets aside the personal
+  // rules above; it cannot switch the benefit on for one person while it is off
+  // for the company, nor cover a record the policy has parked or ended - those
+  // are not judgements about this person. NOT_ELIGIBLE refuses outright.
+  if (override.eligibility === 'ELIGIBLE') {
+    if (personal.length > 0 && failures.length === 0) {
+      warnings.push('Covered by an HR exception to the medical policy.');
+    }
+  } else {
+    failures.push(...personal);
+  }
+  if (override.eligibility === 'NOT_ELIGIBLE') {
+    fail('MANUAL_OVERRIDE', 'HR has marked you as not eligible for the medical benefit.');
   }
 
   // --- warnings: true, and not blocking -------------------------------------
@@ -249,6 +290,8 @@ export async function evaluateMedicalEligibility(
     warnings,
     policyVersion: version,
     benefitLimit,
+    policyBenefitLimit,
+    override,
     categoryLimits,
     currency: company.currency,
     employment: {

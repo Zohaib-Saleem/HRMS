@@ -3,6 +3,8 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DEFAULT_ROLE_PERMISSIONS, PERMISSIONS, type Permission } from '@hrms/shared';
 
 /**
@@ -33,10 +35,33 @@ vi.mock('@/features/auth/session-context', () => ({
   }),
 }));
 
+/*
+ * The menu asks the server whether the caller's medical benefit reaches them.
+ * Answered from the cache below; the api is mocked only so nothing leaves the
+ * test if a refetch fires.
+ */
+let medicalEligible = true;
+
+vi.mock('@/lib/api', () => ({
+  api: { get: vi.fn(() => new Promise(() => {})) },
+}));
+
 import { SidebarNav } from '@/components/layout/sidebar';
+import { MY_MEDICAL_KEY } from '@/features/medical/my-medical-card';
 import { NAV_SECTIONS } from './nav-config';
 
+function Providers({ children }: { children: ReactNode }) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(MY_MEDICAL_KEY, { eligibility: { eligible: medicalEligible } });
+  return (
+    <QueryClientProvider client={client}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
+}
+
 afterEach(() => {
+  medicalEligible = true;
   cleanup();
   vi.clearAllMocks();
 });
@@ -45,9 +70,9 @@ afterEach(() => {
 function sidebarFor(grants: readonly Permission[]): string[] {
   permissions = new Set(grants);
   render(
-    <MemoryRouter>
+    <Providers>
       <SidebarNav collapsed={false} onToggleCollapsed={() => {}} />
-    </MemoryRouter>,
+    </Providers>,
   );
   return screen.getAllByRole('link').map((link) => link.textContent?.trim() ?? '');
 }
@@ -194,9 +219,9 @@ describe('the order an employee reads it in', () => {
   it('groups them under headings an employee would recognise', () => {
     permissions = new Set(EMPLOYEE);
     render(
-      <MemoryRouter>
+      <Providers>
         <SidebarNav collapsed={false} onToggleCollapsed={() => {}} />
-      </MemoryRouter>,
+      </Providers>,
     );
 
     for (const heading of ['My work', 'My services', 'Documents', 'Company']) {
@@ -455,9 +480,9 @@ describe('the recruitment section', () => {
   it('is its own heading rather than four more rows under Management', () => {
     permissions = new Set(HR_ADMIN);
     render(
-      <MemoryRouter>
+      <Providers>
         <SidebarNav collapsed={false} onToggleCollapsed={() => {}} />
-      </MemoryRouter>,
+      </Providers>,
     );
 
     /*
@@ -550,5 +575,21 @@ describe('the registry itself', () => {
     expect(byPath.get('/cases')).toBe(PERMISSIONS.CASE_READ_OWN);
     expect(byPath.get('/payslips')).toBe(PERMISSIONS.PAYSLIP_READ);
     expect(byPath.get('/holidays')).toBe(PERMISSIONS.HOLIDAY_READ);
+  });
+});
+
+describe('medical in the menu', () => {
+  it('leaves Medical out for an employee the benefit does not reach', () => {
+    medicalEligible = false;
+    expect(sidebarFor(EMPLOYEE)).not.toContain('Medical');
+  });
+
+  it('shows it to an eligible employee', () => {
+    expect(sidebarFor(EMPLOYEE)).toContain('Medical');
+  });
+
+  it('keeps it for HR whatever their own eligibility, because the claims queue is there', () => {
+    medicalEligible = false;
+    expect(sidebarFor(HR_ADMIN)).toContain('Medical');
   });
 });
