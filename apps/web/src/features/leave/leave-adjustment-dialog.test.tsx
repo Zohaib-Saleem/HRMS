@@ -129,4 +129,29 @@ describe('LeaveAdjustmentDialog', () => {
     expect(onClose).toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
   });
+
+  it('shows the allocation and remaining balance before and after as the figure changes', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    const days = screen.getByLabelText(/Adjustment \(days\)/);
+    await user.clear(days);
+    await user.type(days, '2');
+
+    // Entitlement 20 + opening 0: allocation 17 → 22; remaining 8 → 13.
+    const preview = screen.getByTestId('leave-adjustment-preview');
+    expect(preview.textContent).toContain('17 → 22 days');
+    expect(preview.textContent).toContain('8 → 13 days');
+  });
+
+  it('refuses a figure that is not a whole or half day', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    const days = screen.getByLabelText(/Adjustment \(days\)/);
+    await user.clear(days);
+    await user.type(days, '1.3');
+    await user.click(screen.getByRole('button', { name: 'Save adjustment' }));
+
+    expect(await screen.findByText('Use whole or half days.')).toBeTruthy();
+    expect(post).not.toHaveBeenCalled();
+  });
 });

@@ -100,6 +100,19 @@ export function EmployeeLeave({
         >
           <CardTitle className="text-base">Leave balance {year}</CardTitle>
           <div className="flex items-center gap-1 self-start sm:self-auto">
+            {canManage && rows.length > 0 ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="mr-1"
+                // Opens on the first paid type - Annual, in practice - with a
+                // picker for the rest.
+                onClick={() => setAdjusting(rows.find((r) => r.isPaid) ?? rows[0]!)}
+              >
+                <Pencil className="size-4" aria-hidden />
+                Edit
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               size="icon-sm"
@@ -192,11 +205,11 @@ export function EmployeeLeave({
                           <Button
                             size="sm"
                             variant="ghost"
-                            aria-label={`Adjust ${row.leaveTypeName} balance`}
+                            aria-label={`Edit ${row.leaveTypeName} balance`}
                             onClick={() => setAdjusting(row)}
                           >
                             <Pencil className="size-4" aria-hidden />
-                            Adjust
+                            Edit
                           </Button>
                         </TD>
                       ) : null}
@@ -342,6 +355,8 @@ export function EmployeeLeave({
           employeeName={employeeName}
           year={year}
           balance={adjusting}
+          choices={rows}
+          onChoose={setAdjusting}
         />
       ) : null}
     </div>

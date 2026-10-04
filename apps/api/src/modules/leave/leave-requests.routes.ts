@@ -434,9 +434,57 @@ export const leaveBalanceRoutes: FastifyPluginAsync = async (app) => {
         where: { employeeId_leaveTypeId_year: key },
         select: { adjustmentDays: true, adjustmentNote: true },
       });
+      const oldAdjustment = existing ? Number(existing.adjustmentDays) : 0;
+
+      /*
+       * The balance as it stands, computed by the same service the profile
+       * reads, so the checks below and the allocation the audit quotes are the
+       * figures somebody saw on screen. Absent for an inactive leave type,
+       * which has no balance to protect.
+       */
+      const current = (
+        await balancesForEmployee(auth.companyId, input.employeeId, input.year)
+      ).find((b) => b.leaveTypeId === input.leaveTypeId);
+
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const delta = input.adjustmentDays - oldAdjustment;
+      const allocation = current
+        ? {
+            before: r2(current.annualEntitlementDays + current.openingDays + oldAdjustment),
+            after: r2(current.annualEntitlementDays + current.openingDays + input.adjustmentDays),
+          }
+        : null;
+
+      if (current && allocation) {
+        if (allocation.after < 0) {
+          throw new ValidationError({
+            adjustmentDays: [
+              `That would take the ${input.year} allocation below zero (${allocation.after} days).`,
+            ],
+          });
+        }
+        /*
+         * Never cut a balance below what has already been taken or booked.
+         * The leave requests stay as they are, so a lower figure would leave a
+         * negative balance that nothing can explain. Raising a balance that is
+         * already short is still allowed - it is a correction in the right
+         * direction.
+         */
+        const remainingAfter = r2(current.availableDays + delta);
+        if (delta < 0 && remainingAfter < 0) {
+          const committed = r2(current.usedDays + current.pendingDays);
+          throw new ValidationError({
+            adjustmentDays: [
+              `That would leave ${remainingAfter} days, below the ${committed} day(s) already taken or pending. Lower it by at most ${Math.max(0, current.availableDays)}.`,
+            ],
+          });
+        }
+      }
+
       const before = {
-        adjustmentDays: existing ? Number(existing.adjustmentDays) : 0,
+        adjustmentDays: oldAdjustment,
         adjustmentNote: existing?.adjustmentNote ?? null,
+        ...(allocation ? { allocationDays: allocation.before } : {}),
       };
       const after = {
         adjustmentDays: input.adjustmentDays,
@@ -449,15 +497,23 @@ export const leaveBalanceRoutes: FastifyPluginAsync = async (app) => {
         update: after,
       });
 
+      // Who and when are the audit row's own actor and timestamp columns.
+      const auditAfter = {
+        ...after,
+        ...(allocation ? { allocationDays: allocation.after } : {}),
+      };
+
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
         action: 'leave.balance.adjust',
         entityType: 'LeaveBalance',
         entityId: saved.id,
-        summary: `Set the ${leaveType.name} adjustment for ${input.year} to ${input.adjustmentDays} day(s), from ${before.adjustmentDays}: ${input.adjustmentNote}`,
+        summary: allocation
+          ? `${leaveType.name} ${input.year} allocation ${allocation.before} → ${allocation.after} day(s) (adjustment ${before.adjustmentDays} → ${input.adjustmentDays}): ${input.adjustmentNote}`
+          : `Set the ${leaveType.name} adjustment for ${input.year} to ${input.adjustmentDays} day(s), from ${before.adjustmentDays}: ${input.adjustmentNote}`,
         before,
-        after,
+        after: auditAfter,
         request,
       });
 

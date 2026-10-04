@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { FormField, Input, Textarea } from '@/components/ui/field';
+import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 
 /**
  * The one editable number on an employee's leave balance.
@@ -28,6 +28,12 @@ import { FormField, Input, Textarea } from '@/components/ui/field';
  * leave type and one year - the administrative correction the balance service
  * already reads - and the reason for it, which is compulsory and is shown
  * beside the figure afterwards.
+ *
+ * The adjustment is how one employee's allocation differs from the leave
+ * type's: 15 days a year plus an adjustment of 5 is an allocation of 20. The
+ * dialog shows that allocation and the remaining balance before and after as
+ * the figure is typed, and the server refuses a figure that would take the
+ * allocation below zero or the balance below what has already been taken.
  *
  * The figure replaces the stored adjustment rather than adding to it, so what
  * the dialog opens with is what is on record now and what it saves is what
@@ -59,6 +65,12 @@ export interface LeaveAdjustmentDialogProps {
   year: number;
   /** The balance row being adjusted; null while nothing is selected. */
   balance: LeaveBalanceRecord | null;
+  /**
+   * Every leave type's row for the year. When given, the dialog offers a
+   * leave-type picker and reports a change through `onChoose`.
+   */
+  choices?: readonly LeaveBalanceRecord[];
+  onChoose?: (balance: LeaveBalanceRecord) => void;
 }
 
 export function LeaveAdjustmentDialog({
@@ -68,6 +80,8 @@ export function LeaveAdjustmentDialog({
   employeeName,
   year,
   balance,
+  choices,
+  onChoose,
 }: LeaveAdjustmentDialogProps) {
   const queryClient = useQueryClient();
 
@@ -140,7 +154,28 @@ export function LeaveAdjustmentDialog({
   });
 
   const errors = form.formState.errors;
-  const title = balance ? `Adjust ${balance.leaveTypeName} ${year}` : 'Adjust leave balance';
+  const title = balance ? `Edit ${balance.leaveTypeName} leave ${year}` : 'Edit leave balance';
+
+  /*
+   * The before and after of what the adjustment moves, worked out from the
+   * figures the server sent. A preview only: the server recomputes both
+   * before it saves anything.
+   */
+  const typed = form.watch('adjustmentDays');
+  const typedNumber = typeof typed === 'number' ? typed : Number(String(typed).trim());
+  const preview =
+    balance && String(typed).trim() !== '' && Number.isFinite(typedNumber)
+      ? (() => {
+          const delta = typedNumber - balance.adjustmentDays;
+          const base = balance.annualEntitlementDays + balance.openingDays;
+          return {
+            allocationBefore: round2(base + balance.adjustmentDays),
+            allocationAfter: round2(base + typedNumber),
+            remainingBefore: balance.availableDays,
+            remainingAfter: round2(balance.availableDays + delta),
+          };
+        })()
+      : null;
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? null : onClose())}>
@@ -177,11 +212,29 @@ export function LeaveAdjustmentDialog({
             ) : null}
 
             <fieldset className="min-w-0 space-y-4" disabled={save.isPending}>
+              {choices && choices.length > 1 && onChoose ? (
+                <FormField label="Leave type" htmlFor="leave-adjustment-type">
+                  <NativeSelect
+                    value={balance?.leaveTypeId ?? ''}
+                    onChange={(event) => {
+                      const next = choices.find((c) => c.leaveTypeId === event.target.value);
+                      if (next) onChoose(next);
+                    }}
+                  >
+                    {choices.map((c) => (
+                      <option key={c.leaveTypeId} value={c.leaveTypeId}>
+                        {c.leaveTypeName}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </FormField>
+              ) : null}
+
               <FormField
                 label="Adjustment (days)"
                 htmlFor="leave-adjustment-days"
                 required
-                hint="Positive grants days, negative takes them away. Zero removes the correction."
+                hint="Positive grants days, negative takes them away, in whole or half days. Zero removes the correction."
                 error={errors.adjustmentDays?.message}
               >
                 <Input
@@ -193,6 +246,32 @@ export function LeaveAdjustmentDialog({
                   {...form.register('adjustmentDays')}
                 />
               </FormField>
+
+              {preview ? (
+                <dl
+                  data-testid="leave-adjustment-preview"
+                  className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-md border border-border px-3 py-2 text-[13px]"
+                >
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Allocation for {year}</dt>
+                    <dd className="tabular font-medium">
+                      {fmt(preview.allocationBefore)} → {fmt(preview.allocationAfter)} days
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Remaining</dt>
+                    <dd
+                      className={
+                        preview.remainingAfter < 0
+                          ? 'tabular font-medium text-destructive'
+                          : 'tabular font-medium'
+                      }
+                    >
+                      {fmt(preview.remainingBefore)} → {fmt(preview.remainingAfter)} days
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
 
               <FormField
                 label="Reason"
@@ -219,6 +298,9 @@ export function LeaveAdjustmentDialog({
     </Dialog>
   );
 }
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, ''));
 
 function Figure({ label, value }: { label: string; value: number }) {
   return (

@@ -187,7 +187,13 @@ export const balanceAdjustmentSchema = z.object({
   employeeId: z.string().trim().min(1),
   leaveTypeId: z.string().trim().min(1),
   year: z.coerce.number().int().min(2000).max(2100),
-  adjustmentDays: z.coerce.number().min(-365).max(365),
+  // Half-day steps, because a half day is the smallest unit a leave request
+  // can take; a figure in between would leave a balance no request can clear.
+  adjustmentDays: z.coerce
+    .number()
+    .min(-365)
+    .max(365)
+    .refine((v) => Number.isInteger(v * 2), 'Use whole or half days.'),
   adjustmentNote: z
     .string()
     .trim()
