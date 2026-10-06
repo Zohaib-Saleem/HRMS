@@ -354,6 +354,17 @@ describe('what a preview covers', () => {
     expect(result.to).toBe('2026-06-30');
   });
 
+  it('still counts the adjustments a calculated run has already claimed', async () => {
+    // Otherwise a correction raised from the preview vanishes from it the
+    // moment the run is recalculated, while the run itself still pays it.
+    await preview({ runId: 'run-1', periodId: undefined });
+
+    const where = db.payrollAdjustment.findMany.mock.calls[0]![0]!.where as {
+      OR: Array<Record<string, unknown>>;
+    };
+    expect(where.OR).toEqual([{ appliedRunId: null }, { appliedRunId: 'run-1' }]);
+  });
+
   it('accepts an explicit range, so a period need not exist yet', async () => {
     const result = await preview({
       periodId: undefined,

@@ -1,20 +1,26 @@
 import * as React from 'react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Calculator, Download } from 'lucide-react';
-import type {
-  PayrollPeriodRecord,
-  PayrollPreview,
-  PayrollPreviewRow,
-  PayrollRunRecord,
+import { toast } from 'sonner';
+import { AlertTriangle, Calculator, Download, Pencil, Trash2 } from 'lucide-react';
+import {
+  PERMISSIONS,
+  type PayrollAdjustmentRecord,
+  type PayrollCalculationResult,
+  type PayrollComponentKind,
+  type PayrollPeriodRecord,
+  type PayrollPreview,
+  type PayrollPreviewRow,
+  type PayrollRunRecord,
 } from '@hrms/shared';
-import { api } from '@/lib/api';
+import { ApiError, api, errorMessage } from '@/lib/api';
+import { Can, usePermissions } from '@/features/auth/session-context';
 import { useLookups } from '@/lib/lookups';
 import { cn, formatDate } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { NativeSelect } from '@/components/ui/field';
+import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import {
@@ -40,7 +46,16 @@ import { EmptyState, ErrorState } from '@/components/feedback/states';
  * paid days, absence, unpaid leave, allowances, overtime, deductions, gross,
  * net. A row opens to show the arithmetic line by line, because "why is this
  * number what it is" is the whole reason a preview exists.
+ *
+ * Editing is the one write it allows, and it goes through the payroll
+ * adjustment rather than around it: an Edit raises (or withdraws) a one-off
+ * earning or deduction with a reason, the preview recalculates with it, and
+ * the run that calculates next carries it onto the payslip. The figures the
+ * engine derives - attendance, rates, components - stay derived.
  */
+
+/** A run still open to its figures changing; anything later is settled. */
+const EDITABLE_RUN_STATUSES = new Set(['DRAFT', 'REVIEW']);
 
 const money = (value: number, currency: string): string =>
   new Intl.NumberFormat(undefined, {
@@ -56,7 +71,14 @@ export function PayrollPreviewPage() {
   const runId = params.get('runId') ?? '';
   const periodId = params.get('periodId') ?? '';
   const departmentId = params.get('departmentId') ?? '';
-  const [inspecting, setInspecting] = React.useState<PayrollPreviewRow | null>(null);
+  // An id rather than the row itself, so the drawer follows the recalculated
+  // figures after an edit instead of holding on to the ones it opened with.
+  const [inspectingId, setInspectingId] = React.useState<string | null>(null);
+  // Set once an edit has been made against a run that has already been
+  // calculated: its stored lines no longer match what the preview shows.
+  const [runStale, setRunStale] = React.useState(false);
+  const queryClient = useQueryClient();
+  const canManage = usePermissions().has(PERMISSIONS.PAYROLL_MANAGE);
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params);
@@ -66,6 +88,7 @@ export function PayrollPreviewPage() {
     // period?" is how a preview quietly describes the wrong month.
     if (key === 'runId' && value) next.delete('periodId');
     if (key === 'periodId' && value) next.delete('runId');
+    if (key === 'runId' || key === 'periodId') setRunStale(false);
     setParams(next, { replace: true });
   };
 
@@ -97,6 +120,26 @@ export function PayrollPreviewPage() {
 
   const preview = query.data;
   const currency = preview?.currency ?? 'PKR';
+  const inspecting = preview?.rows.find((r) => r.employeeId === inspectingId) ?? null;
+  const editable =
+    canManage && (preview?.runStatus == null || EDITABLE_RUN_STATUSES.has(preview.runStatus));
+
+  const recalculate = useMutation({
+    mutationFn: () => api.post<PayrollCalculationResult>(`/payroll/runs/${runId}/calculate`),
+    onSuccess: async (result) => {
+      setRunStale(false);
+      toast.success(
+        result.blocking > 0
+          ? `Run recalculated. ${result.blocking} exception(s) must be resolved before approval.`
+          : `Run recalculated: ${result.lines} line(s).`,
+      );
+      await queryClient.invalidateQueries({ queryKey: ['payroll'] });
+      await queryClient.invalidateQueries({ queryKey: ['payroll-runs'] });
+      await queryClient.invalidateQueries({ queryKey: ['payroll-run-lines', runId] });
+      await queryClient.invalidateQueries({ queryKey: ['payroll-run-exceptions', runId] });
+    },
+    onError: (error: unknown) => toast.error(errorMessage(error)),
+  });
 
   const exportHref = () => {
     const search = new URLSearchParams({ format: 'csv' });
@@ -180,6 +223,25 @@ export function PayrollPreviewPage() {
               <Total label="Overtime" value={money(preview.totals.overtimeAmount, currency)} />
               <Total label="Gross" value={money(preview.totals.grossAmount, currency)} />
               <Total label="Net" value={money(preview.totals.netAmount, currency)} emphasis />
+            </div>
+          ) : null}
+
+          {runStale && preview?.runId && preview.runStatus === 'REVIEW' ? (
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
+              <p>
+                The preview includes your edits, but the run still holds the figures it was last
+                calculated with. Recalculate it so the payslips carry them.
+              </p>
+              <Can permission={PERMISSIONS.PAYROLL_MANAGE}>
+                <Button
+                  size="sm"
+                  loading={recalculate.isPending}
+                  onClick={() => recalculate.mutate()}
+                >
+                  <Calculator />
+                  Recalculate run
+                </Button>
+              </Can>
             </div>
           ) : null}
 
@@ -298,9 +360,20 @@ export function PayrollPreviewPage() {
                         <TD className="text-right font-semibold tabular-nums">
                           {money(row.netAmount, row.currency)}
                         </TD>
-                        <TD className="text-right">
-                          <Button variant="ghost" size="sm" onClick={() => setInspecting(row)}>
-                            Inspect
+                        <TD className="whitespace-nowrap text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setInspectingId(row.employeeId)}
+                          >
+                            {editable ? (
+                              <>
+                                <Pencil className="size-3.5" aria-hidden />
+                                Edit
+                              </>
+                            ) : (
+                              'Inspect'
+                            )}
                           </Button>
                         </TD>
                       </TR>
@@ -342,7 +415,15 @@ export function PayrollPreviewPage() {
         </>
       )}
 
-      <InspectDrawer row={inspecting} onClose={() => setInspecting(null)} />
+      <InspectDrawer
+        row={inspecting}
+        runId={preview?.runId ?? null}
+        editable={editable}
+        onEdited={() => {
+          if (preview?.runId && preview.runStatus === 'REVIEW') setRunStale(true);
+        }}
+        onClose={() => setInspectingId(null)}
+      />
     </>
   );
 }
@@ -367,9 +448,15 @@ function Total({
 /** One employee's arithmetic, line by line. */
 function InspectDrawer({
   row,
+  runId,
+  editable,
+  onEdited,
   onClose,
 }: {
   row: PayrollPreviewRow | null;
+  runId: string | null;
+  editable: boolean;
+  onEdited: () => void;
   onClose: () => void;
 }) {
   return (
@@ -418,6 +505,15 @@ function InspectDrawer({
                   <LineTable lines={row.deductions} currency={row.currency} />
                 )}
               </section>
+
+              {editable ? (
+                <AdjustmentEditor
+                  employeeId={row.employeeId}
+                  runId={runId}
+                  currency={row.currency}
+                  onEdited={onEdited}
+                />
+              ) : null}
 
               <section className="rounded-lg border border-border p-4 text-sm">
                 <div className="flex justify-between">
@@ -506,5 +602,201 @@ function LineTable({
         </TBody>
       </Table>
     </TableWrapper>
+  );
+}
+
+const ADJUSTMENT_FIELDS = new Set(['kind', 'label', 'amount', 'reason']);
+
+/**
+ * The edit a preview allows: one-off earnings and deductions for one person.
+ *
+ * Lists the adjustments this preview is counting - not yet paid, and either
+ * unclaimed or claimed by the run being previewed - so a mistaken one can be
+ * withdrawn, and raises new ones. Each goes through the same endpoint and
+ * audit trail as any adjustment; an amount is always positive and the kind
+ * says which way it goes.
+ */
+export function AdjustmentEditor({
+  employeeId,
+  runId,
+  currency,
+  onEdited,
+}: {
+  employeeId: string;
+  runId: string | null;
+  currency: string;
+  onEdited: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [kind, setKind] = React.useState<PayrollComponentKind>('EARNING');
+  const [label, setLabel] = React.useState('');
+  const [amount, setAmount] = React.useState('');
+  const [reason, setReason] = React.useState('');
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
+  const [formError, setFormError] = React.useState<string | null>(null);
+
+  const reset = () => {
+    setKind('EARNING');
+    setLabel('');
+    setAmount('');
+    setReason('');
+    setErrors({});
+    setFormError(null);
+  };
+
+  // A different employee is a different form.
+  React.useEffect(reset, [employeeId]);
+
+  const adjustments = useQuery({
+    queryKey: ['payroll', 'adjustments', employeeId],
+    queryFn: () =>
+      api.getPage<PayrollAdjustmentRecord>('/payroll/adjustments', {
+        query: { employeeId, limit: 100 },
+      }),
+  });
+
+  const pending = (adjustments.data?.data ?? []).filter(
+    (a) => a.appliedAt === null && (a.appliedRunId === null || a.appliedRunId === runId),
+  );
+
+  const refresh = async () => {
+    onEdited();
+    await queryClient.invalidateQueries({ queryKey: ['payroll', 'adjustments', employeeId] });
+    await queryClient.invalidateQueries({ queryKey: ['payroll', 'preview'] });
+  };
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.post('/payroll/adjustments', {
+        employeeId,
+        kind,
+        label: label.trim(),
+        amount: Number(amount),
+        reason: reason.trim(),
+      }),
+    onSuccess: async () => {
+      reset();
+      toast.success('Adjustment added', {
+        description: 'The preview now includes it, and the next calculated run pays it.',
+      });
+      await refresh();
+    },
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && error.isValidation && error.details) {
+        const placed: Record<string, string> = {};
+        const unplaced: string[] = [];
+        for (const [field, messages] of Object.entries(error.details)) {
+          const message = messages[0] ?? 'Invalid value.';
+          if (ADJUSTMENT_FIELDS.has(field)) placed[field] = message;
+          else unplaced.push(message);
+        }
+        setErrors(placed);
+        setFormError(unplaced.length > 0 ? unplaced.join(' ') : null);
+        return;
+      }
+      setFormError(errorMessage(error));
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.delete(`/payroll/adjustments/${id}`),
+    onSuccess: async () => {
+      toast.success('Adjustment removed');
+      await refresh();
+    },
+    onError: (error: unknown) => toast.error(errorMessage(error)),
+  });
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const next: Record<string, string> = {};
+    if (label.trim().length < 2) next.label = 'Give the adjustment a label.';
+    if (!(Number(amount) > 0)) next.amount = 'Enter an amount above zero.';
+    if (reason.trim().length < 3) next.reason = 'Say why this adjustment is being made.';
+    setErrors(next);
+    setFormError(null);
+    if (Object.keys(next).length === 0) create.mutate();
+  };
+
+  return (
+    <section className="rounded-lg border border-border p-4">
+      <h3 className="mb-1 text-sm font-semibold">Edit pay</h3>
+      <p className="mb-3 text-[13px] text-muted-foreground">
+        Add a one-off earning (bonus, arrears) or deduction (recovery, fine). It is recorded with
+        your reason and paid by the next run that is calculated.
+      </p>
+
+      {pending.length > 0 ? (
+        <ul className="mb-4 space-y-1.5 text-[13px]">
+          {pending.map((a) => (
+            <li
+              key={a.id}
+              className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="font-medium">
+                  {a.label}{' '}
+                  <span className={a.kind === 'EARNING' ? 'text-success' : 'text-destructive'}>
+                    {a.kind === 'EARNING' ? '+' : '-'}
+                    {money(a.amount, currency)}
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground">{a.reason}</div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label={`Remove ${a.label}`}
+                loading={remove.isPending && remove.variables === a.id}
+                onClick={() => remove.mutate(a.id)}
+              >
+                <Trash2 className="size-3.5" aria-hidden />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <form onSubmit={submit} className="space-y-3" noValidate aria-label="Add adjustment">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FormField label="Type" htmlFor="preview-adjustment-kind">
+            <NativeSelect
+              value={kind}
+              onChange={(e) => setKind(e.target.value as PayrollComponentKind)}
+            >
+              <option value="EARNING">Earning (adds to pay)</option>
+              <option value="DEDUCTION">Deduction (takes from pay)</option>
+            </NativeSelect>
+          </FormField>
+          <FormField label="Amount" htmlFor="preview-adjustment-amount" error={errors.amount} required>
+            <Input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </FormField>
+        </div>
+        <FormField label="Label" htmlFor="preview-adjustment-label" error={errors.label} required>
+          <Input
+            maxLength={80}
+            placeholder="e.g. Performance bonus"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+        </FormField>
+        <FormField label="Reason" htmlFor="preview-adjustment-reason" error={errors.reason} required>
+          <Textarea rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+        </FormField>
+        {formError ? <p className="text-[13px] text-destructive">{formError}</p> : null}
+        <div className="flex justify-end">
+          <Button type="submit" size="sm" loading={create.isPending}>
+            Add adjustment
+          </Button>
+        </div>
+      </form>
+    </section>
   );
 }

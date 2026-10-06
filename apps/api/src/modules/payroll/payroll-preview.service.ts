@@ -150,10 +150,11 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
     companyId: scope.companyId,
     from,
     to,
-    // Null: a preview never claims an adjustment, so it only ever sees the
-    // ones still unspoken for. Passing the run id would make the preview look
-    // like the run for accounting purposes without being one.
-    runId: null,
+    // The run being previewed, so the adjustments and loan installments it has
+    // already claimed are still counted - without it, a calculated run's
+    // preview silently drops them and disagrees with the run. Passing it only
+    // widens what is read: claiming happens in `calculateRun`, never here.
+    runId,
     filter,
   });
 
