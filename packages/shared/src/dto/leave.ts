@@ -148,9 +148,60 @@ export interface LeaveRequestRecord {
   approvalRequestId: string | null;
   decidedAt: string | null;
   cancelledAt: string | null;
+  /**
+   * True when the system cancelled it - every day it covered was worked - as
+   * against the employee or HR withdrawing it.
+   */
+  cancelledBySystem: boolean;
+  cancellationReason: string | null;
+  /**
+   * Days given back because attendance was recorded on them. The request keeps
+   * its `totalDays`; the balance counts `totalDays - reversedDays` as used.
+   */
+  reversedDays: number;
+  reversals: LeaveReversalRecord[];
+  /**
+   * Days of this APPROVED request on which the employee nevertheless has
+   * attendance that has not been given back. Empty for any other status.
+   */
+  attendanceConflicts: LeaveAttendanceConflict[];
   createdAt: string;
   /** True when the caller may withdraw it. */
   canCancel: boolean;
+  /**
+   * True when the caller may cancel it because the employee attended work:
+   * `leave.conflict.resolve` (Super Admin) and at least one conflict.
+   */
+  canResolveConflict: boolean;
+}
+
+/** A day of approved leave with attendance on it. Times are ISO instants. */
+export interface LeaveAttendanceConflict {
+  date: string;
+  checkInAt: string;
+  checkOutAt: string | null;
+}
+
+/** What `POST /leave-requests/:id/cancel-for-attendance` answers. */
+export interface LeaveConflictCancellationResult {
+  id: string;
+  status: ApprovalStatus;
+  restoredDays: number;
+  reversedDates: string[];
+  /** True when nothing changed because it had already been resolved. */
+  alreadyResolved: boolean;
+}
+
+/** One day of approved leave returned by attendance reconciliation. */
+export interface LeaveReversalRecord {
+  date: string;
+  days: number;
+  reason: string;
+  checkInAt: string;
+  checkOutAt: string | null;
+  createdAt: string;
+  /** True when a Super Admin gave it back by hand rather than reconciliation. */
+  manual: boolean;
 }
 
 // ----------------------------------------------------------------- balances

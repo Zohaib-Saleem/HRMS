@@ -14,7 +14,7 @@ import {
   type TeamAttendanceRow,
   type RegularizationRecord,
   type TeamAttendanceSummaryRow,
-  ATTENDANCE_CORRECTION_ISSUE_LABELS,
+  ATTENDANCE_STATUS_LABELS,
   attendanceQuerySchema,
   attendanceSummaryQuerySchema,
   attendanceUpsertSchema,
@@ -67,6 +67,8 @@ import {
   resolveAttendancePolicy,
   resolvePolicyFor,
 } from './attendance-policy.js';
+import { reconcileAfterAttendanceWrite } from '../leave/leave-reconciliation.service.js';
+import { correctionNotice } from './correction-notice.js';
 import { markAbsencesForDate } from './absence.service.js';
 
 const displayName = (e: { firstName: string; lastName: string; displayName: string | null }) =>
@@ -335,6 +337,12 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         before: before ? { status: before.status, workedMinutes: before.workedMinutes } : undefined,
         after: { status: record.status, workedMinutes: record.workedMinutes },
         request,
+      });
+
+      await reconcileAfterAttendanceWrite({
+        companyId: auth.companyId,
+        employeeId: input.employeeId,
+        dayKey: date.toISOString().slice(0, 10),
       });
 
       return reply.status(before ? 200 : 201).send({ data: { id: record.id } });
@@ -1194,6 +1202,27 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    /*
+     * What the approver is told: the request itself, with what is on record
+     * now beside it, so they can decide from the notification. Read before the
+     * transaction; the record is only ever changed by an approved request.
+     */
+    const current = await prisma.attendanceRecord.findUnique({
+      where: { employeeId_date: { employeeId: self.id, date: attendanceDate } },
+      select: { checkInAt: true, checkOutAt: true },
+    });
+    const notice = correctionNotice({
+      employeeName: `${self.firstName} ${self.lastName}`.trim(),
+      dayKey,
+      timeZone: policy.timeZone,
+      issueType: input.issueType ?? null,
+      current,
+      requestedCheckInAt,
+      requestedCheckOutAt,
+      requestedStatusLabel: input.requestedStatus ? ATTENDANCE_STATUS_LABELS[input.requestedStatus] : null,
+      reason: input.reason,
+    });
+
     const { created, approval } = await prisma.$transaction(async (tx) => {
       const created = await tx.attendanceRegularizationRequest.create({
         data: {
@@ -1215,10 +1244,8 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         subjectId: created.id,
         requesterEmployeeId: self.id,
         requesterUserId: auth.userId,
-        title: `Attendance correction for ${dayKey}`,
-        summary: input.issueType
-          ? `${ATTENDANCE_CORRECTION_ISSUE_LABELS[input.issueType]} - ${input.reason}`
-          : input.reason,
+        title: notice.title,
+        summary: notice.summary,
         chain,
         request,
         client: tx,

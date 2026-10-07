@@ -130,6 +130,11 @@ export const PERMISSIONS = {
   LEAVE_REQUEST: 'leave.request',
   /// Configure leave types and adjust balances for others.
   LEAVE_MANAGE: 'leave.manage',
+  /// Cancel approved leave on a day the employee turned out to work, giving the
+  /// day back through the leave reversal ledger. Held by `SUPER_ADMIN` alone
+  /// unless a company grants it on purpose: it overrides an approval the chain
+  /// already made.
+  LEAVE_CONFLICT_RESOLVE: 'leave.conflict.resolve',
   HOLIDAY_READ: 'holiday.read',
   HOLIDAY_MANAGE: 'holiday.manage',
 
@@ -588,6 +593,7 @@ export const PERMISSION_GROUPS: ReadonlyArray<{
       { value: PERMISSIONS.LEAVE_READ, label: 'View leave', description: 'See leave requests and balances within your scope.' },
       { value: PERMISSIONS.LEAVE_REQUEST, label: 'Request leave', description: 'Raise and cancel your own leave.' },
       { value: PERMISSIONS.LEAVE_MANAGE, label: 'Manage leave', description: 'Configure leave types and adjust balances.' },
+      { value: PERMISSIONS.LEAVE_CONFLICT_RESOLVE, label: 'Cancel leave on worked days', description: 'Cancel approved leave on a day the employee has attendance, restoring the quota. The request and the attendance are both kept.' },
       { value: PERMISSIONS.HOLIDAY_READ, label: 'View holidays', description: 'See the holiday calendar.' },
       { value: PERMISSIONS.HOLIDAY_MANAGE, label: 'Manage holidays', description: 'Create and edit holidays.' },
     ],

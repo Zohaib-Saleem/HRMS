@@ -12,6 +12,31 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/feedback/states';
 import { cn } from '@/lib/utils';
 
+/**
+ * Where a notification leads, and what the link says.
+ *
+ * Keyed by the entity the server attached. Anything not listed opens nothing,
+ * which is what every notification did before it had a destination.
+ */
+export function notificationLink(
+  item: Pick<NotificationRecord, 'entityType' | 'entityId'>,
+): { to: string; label: string } | null {
+  if (!item.entityId) return null;
+  const id = encodeURIComponent(item.entityId);
+  switch (item.entityType) {
+    case 'ApprovalRequest':
+      return { to: `/approvals/${id}`, label: 'Review request' };
+    case 'AssetIncident':
+      return { to: `/assets/issues?issue=${id}`, label: 'View issue' };
+    case 'Asset':
+      return { to: `/assets/${id}`, label: 'View asset' };
+    case 'Case':
+      return { to: `/cases/${id}`, label: 'View case' };
+    default:
+      return null;
+  }
+}
+
 const UNREAD_KEY = ['notifications', 'unread-count'] as const;
 const LIST_KEY = ['notifications', 'list'] as const;
 
@@ -71,9 +96,8 @@ export function NotificationCenter() {
   const openNotification = (item: NotificationRecord) => {
     if (!item.readAt) markOne.mutate(item.id);
     setOpen(false);
-    if (item.entityType === 'ApprovalRequest' && item.entityId) {
-      navigate(`/approvals/${item.entityId}`);
-    }
+    const link = notificationLink(item);
+    if (link) navigate(link.to);
   };
 
   return (
@@ -152,9 +176,16 @@ export function NotificationCenter() {
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-medium">{item.title}</span>
-                        <span className="block text-[12.5px] text-muted-foreground">
+                        {/* Multi-line messages - an attendance correction
+                            or an asset issue - keep their line breaks. */}
+                        <span className="block whitespace-pre-line break-words text-[12.5px] text-muted-foreground">
                           {item.message}
                         </span>
+                        {notificationLink(item) ? (
+                          <span className="mt-1 block text-[12px] font-medium text-primary">
+                            {notificationLink(item)!.label} →
+                          </span>
+                        ) : null}
                         <span className="mt-0.5 block text-[11.5px] text-muted-foreground/80">
                           {formatRelative(item.createdAt)}
                         </span>

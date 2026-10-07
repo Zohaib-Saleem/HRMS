@@ -4,12 +4,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   ASSET_CONDITION_LABELS,
+  ASSET_STATUS_LABELS,
   EMPTY_MY_ASSETS,
   PERMISSIONS,
   type EmployeeAssetRow,
   type MyAssetsRecord,
 } from '@hrms/shared';
+import { ChevronRight } from 'lucide-react';
 import { ApiError, api, errorMessage } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -47,21 +50,27 @@ import { assetDate } from './assets-shared';
  */
 
 /**
- * How many issued items the card lists before it hands over to /assets.
+ * Past this many items the list scrolls inside the card rather than growing it.
  *
- * A dashboard card is a glance, and this one shares a row with lunch and cases:
- * an employee holding eight pieces of kit would otherwise set the height of
- * that whole row and push everything below it down the page. Three is what fits
- * beside a case card with its counts in it. The rest are not hidden - the
- * count in the header is the real total and the link goes to the full list,
- * which the server scopes to the reader's own assets.
+ * Every assigned item is listed - an employee holding five things sees five -
+ * but the card shares a dashboard row with lunch and cases, and a list that
+ * grew without limit would set the height of that whole row. So the list keeps
+ * to roughly this many rows and scrolls within its own box, which also keeps it
+ * from spilling out of the card.
  */
-const LISTED = 3;
+const VISIBLE_ROWS = 3;
+
+/** The register's own detail page for one asset. */
+const assetHref = (row: EmployeeAssetRow) => `/assets/${encodeURIComponent(row.assetId)}`;
+
+/** Lets the detail page offer the way back to where the employee came from. */
+const FROM_DASHBOARD = { from: 'dashboard' } as const;
 
 export function MyAssetsCard() {
   const { has } = usePermissions();
   const canRead = has(PERMISSIONS.ASSET_READ);
   const canAcknowledge = has(PERMISSIONS.ASSET_ACKNOWLEDGE);
+  const canRequest = has(PERMISSIONS.ASSET_REQUEST_READ);
 
   const [reporting, setReporting] = React.useState<EmployeeAssetRow | null>(null);
 
@@ -101,25 +110,20 @@ export function MyAssetsCard() {
     totalAssigned: answer?.totalAssigned ?? EMPTY_MY_ASSETS.totalAssigned,
   };
 
-  /*
-   * Listed, and what is left over. Sliced for DISPLAY only: `totalAssigned` in
-   * the header is the server's own figure and is untouched by this.
-   */
-  const listed = data.assigned.slice(0, LISTED);
-  const beyond = data.assigned.length - listed.length;
+  const scrolls = data.assigned.length > VISIBLE_ROWS;
 
   return (
     <>
       {/* A column filling the height its dashboard row gives it - see
           `DashboardGrid`. */}
-      <Card className="flex h-full flex-col">
+      <Card className="flex h-full min-w-0 flex-col">
         <CardHeader className="flex-row items-center justify-between gap-2">
           <CardTitle>My assets</CardTitle>
           {data.totalAssigned > 0 ? (
             <Badge variant="neutral">{data.totalAssigned}</Badge>
           ) : null}
         </CardHeader>
-        <CardContent className="flex flex-1 flex-col gap-3">
+        <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
           {query.isLoading ? (
             <>
               <Skeleton className="h-4 w-48" />
@@ -130,9 +134,17 @@ export function MyAssetsCard() {
               Your assets could not be loaded just now.
             </p>
           ) : data.assigned.length === 0 ? (
-            <p className="text-[13px] text-muted-foreground">
-              You have not been issued any company equipment.
-            </p>
+            <>
+              <p className="text-[13px] text-muted-foreground">No assets assigned</p>
+              {canRequest ? (
+                <Link
+                  to="/assets/requests"
+                  className="self-start text-[12.5px] font-medium text-primary hover:underline"
+                >
+                  View asset requests →
+                </Link>
+              ) : null}
+            </>
           ) : (
             <>
               {/* The prompt. Anything needing the employee's answer comes first
@@ -146,7 +158,7 @@ export function MyAssetsCard() {
                   <p className="text-[13.5px] font-medium text-primary">
                     You have received a company asset.
                   </p>
-                  <p className="mt-1 text-[13px]">
+                  <p className="mt-1 break-words text-[13px]">
                     {row.name} ({row.assetTag})
                   </p>
                   <dl className="mt-1 space-y-0.5 text-[12.5px] text-muted-foreground">
@@ -165,6 +177,13 @@ export function MyAssetsCard() {
                     </div>
                     <div>Assigned: {assetDate(row.assignedAt.slice(0, 10))}</div>
                   </dl>
+                  <Link
+                    to={assetHref(row)}
+                    state={FROM_DASHBOARD}
+                    className="mt-1.5 inline-block text-[12.5px] font-medium text-primary hover:underline"
+                  >
+                    View details →
+                  </Link>
                   {canAcknowledge ? (
                     <div className="mt-2.5 flex flex-wrap gap-2">
                       <Button
@@ -182,36 +201,67 @@ export function MyAssetsCard() {
                 </div>
               ))}
 
-              <ul className="space-y-2">
-                {listed.map((row) => (
-                  <li key={row.assignmentId} className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-[13.5px] font-medium">{row.name}</p>
-                      <p className="font-mono text-[11.5px] text-muted-foreground">
-                        {row.assetTag}
-                        {row.serialNumber ? ` · ${row.serialNumber}` : ''}
-                      </p>
-                      <p className="text-[12px] text-muted-foreground">
-                        Assigned {assetDate(row.assignedAt.slice(0, 10))}
-                        {row.conditionAtAssignment
-                          ? ` · ${ASSET_CONDITION_LABELS[row.conditionAtAssignment]}`
-                          : ''}
-                      </p>
-                    </div>
-                    {row.acknowledgementStatus === 'ISSUE_REPORTED' ? (
-                      <Badge variant="warning">Issue reported</Badge>
-                    ) : row.acknowledgementStatus === 'ACKNOWLEDGED' ? (
-                      <Badge variant="success">Confirmed</Badge>
-                    ) : null}
+              {/* Each row is a link to THAT asset - keyed by its own id, never
+                  by its position - so two laptops cannot open each other. The
+                  detail page is the register's own, and the server narrows it
+                  to what this employee holds.
+
+                  The name gets the full width of the row and up to two lines
+                  before it is cut; the badges sit on the line below it rather
+                  than beside it, where they used to squeeze a long name down to
+                  a few words. */}
+              <ul
+                aria-label="Assets assigned to you"
+                tabIndex={scrolls ? 0 : undefined}
+                className={cn(
+                  '-mx-2 min-w-0 space-y-0.5',
+                  scrolls &&
+                    'max-h-[19rem] overflow-y-auto overscroll-contain pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                )}
+              >
+                {data.assigned.map((row) => (
+                  <li key={row.assignmentId} className="min-w-0">
+                    <Link
+                      to={assetHref(row)}
+                      state={FROM_DASHBOARD}
+                      title={row.name}
+                      className="group flex min-w-0 items-start gap-2 rounded-md px-2 py-2 transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:bg-muted"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="line-clamp-2 break-words text-[13.5px] font-medium leading-snug">
+                          {row.name}
+                        </p>
+                        <p className="truncate font-mono text-[11.5px] text-muted-foreground">
+                          {row.assetTag}
+                        </p>
+                        <p className="text-[12px] text-muted-foreground">
+                          Assigned {assetDate(row.assignedAt.slice(0, 10))}
+                          {row.conditionAtAssignment
+                            ? ` · ${ASSET_CONDITION_LABELS[row.conditionAtAssignment]}`
+                            : ''}
+                        </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <Badge variant="neutral">{ASSET_STATUS_LABELS[row.assetStatus]}</Badge>
+                          {row.acknowledgementStatus === 'ISSUE_REPORTED' ? (
+                            <Badge variant="warning">Issue reported</Badge>
+                          ) : row.acknowledgementStatus === 'ACKNOWLEDGED' ? (
+                            <Badge variant="success">Confirmed</Badge>
+                          ) : (
+                            <Badge variant="primary">Awaiting your confirmation</Badge>
+                          )}
+                        </div>
+                        <p className="mt-1 text-[12px] font-medium text-primary sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-visible:opacity-100">
+                          View details →
+                        </p>
+                      </div>
+                      <ChevronRight
+                        aria-hidden
+                        className="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+                      />
+                    </Link>
                   </li>
                 ))}
               </ul>
-
-              {beyond > 0 ? (
-                <Button variant="ghost" size="sm" className="-mx-2 self-start" asChild>
-                  <Link to="/assets">View all {data.assigned.length} assets</Link>
-                </Button>
-              ) : null}
             </>
           )}
         </CardContent>
@@ -229,7 +279,7 @@ export function MyAssetsCard() {
  * condition, no status, no value. The employee reports what they see; somebody
  * holding `asset.update` decides what the register says.
  */
-function ReportIssueDialog({
+export function ReportIssueDialog({
   row,
   onClose,
 }: {
@@ -258,7 +308,7 @@ function ReportIssueDialog({
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['assets'] });
-      toast.success('Reported. Somebody will look at it.');
+      toast.success('Reported. The IT / asset team has been notified.');
       onClose();
     },
     onError: (error) => {
@@ -280,8 +330,8 @@ function ReportIssueDialog({
         <DialogHeader>
           <DialogTitle>Report a problem</DialogTitle>
           <DialogDescription>
-            {row ? `${row.name} (${row.assetTag})` : ''} — tell HR what is wrong. Nothing you write
-            here changes the asset record.
+            {row ? `${row.name} (${row.assetTag})` : ''} — tell the IT / asset team what is wrong.
+            Nothing you write here changes the asset record.
           </DialogDescription>
         </DialogHeader>
 

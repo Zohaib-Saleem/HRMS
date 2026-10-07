@@ -6,6 +6,7 @@ import { syncPermissionCatalogueAtBoot } from './core/permission-catalogue.js';
 import { pruneExpiredSessions } from './auth/session.js';
 import { pruneExpiredResetTokens } from './auth/password-reset.service.js';
 import { markAbsencesForPreviousDay } from './modules/time/absence.service.js';
+import { reconcileRecentLeaveForAllCompanies } from './modules/leave/leave-reconciliation.service.js';
 import { syncDueDevices } from './modules/attendance-device/sync.service.js';
 import { verifyEmailProvider } from './core/mail/index.js';
 
@@ -49,6 +50,13 @@ async function main(): Promise<void> {
       for (const run of await markAbsencesForPreviousDay()) {
         if (run.marked > 0) app.log.info({ ...run }, 'marked absences');
       }
+
+      // Approved leave on a recent day that has attendance is given back.
+      // Idempotent, and bounded to the last couple of days on purpose.
+      const reversed = (await reconcileRecentLeaveForAllCompanies()).filter(
+        (o) => o.result === 'REVERSED',
+      );
+      if (reversed.length > 0) app.log.info({ reversed }, 'reconciled leave against attendance');
     } catch (error) {
       app.log.error({ err: error }, 'housekeeping prune failed');
     }

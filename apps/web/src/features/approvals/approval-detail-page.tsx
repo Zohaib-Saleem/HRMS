@@ -118,7 +118,7 @@ export function ApprovalDetailPage() {
                     {approval.requesterName} · {formatRelative(approval.createdAt)}
                   </p>
                   {approval.summary ? (
-                    <p className="mt-3 text-[13.5px]">{approval.summary}</p>
+                    <p className="mt-3 whitespace-pre-line text-[13.5px]">{approval.summary}</p>
                   ) : null}
                 </div>
               </div>

@@ -42,6 +42,7 @@ import {
   assetOrThrow,
   assetScopeFilter,
   dateColumn,
+  forAssetReader,
   resolveAssetActor,
   toAssetAssignmentRecord,
   toAssetRecord,
@@ -67,6 +68,30 @@ import {
  * every assignment filed against the asset, and a DELETE would quietly dispose
  * of the answer to "who had the laptop that went missing".
  */
+
+/**
+ * The caller's own handovers of one asset, for a reader who may not see the
+ * whole register.
+ *
+ * Bound to the employee record behind the session, never to anything in the
+ * request: an employee sees when THEY were given this asset and in what state,
+ * and not which colleague had it before them. A login with no employee record
+ * has held nothing, and a manager opening a report's laptop sees no history -
+ * the same answer that reader got before this existed.
+ */
+async function ownHandovers(auth: { companyId: string; userId: string }, assetId: string) {
+  const self = await prisma.employee.findFirst({
+    where: { companyId: auth.companyId, userId: auth.userId },
+    select: { id: true },
+  });
+  if (!self) return [];
+
+  return prisma.assetAssignment.findMany({
+    where: { assetId, companyId: auth.companyId, employeeId: self.id },
+    orderBy: { assignedAt: 'desc' },
+    include: ASSET_ASSIGNMENT_INCLUDE,
+  });
+}
 
 export const assetRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
@@ -160,7 +185,7 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     return reply.send({
-      data: rows.map(toAssetRecord),
+      data: rows.map((row) => forAssetReader(toAssetRecord(row), actor)),
       meta: buildMeta(query.page, query.limit, total),
     });
   });
@@ -189,6 +214,10 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
      * colleague had it before them, what state that colleague handed it back
      * in, or what the repair cost. Three separate queries rather than includes,
      * so a narrow reader's request never fetches the rows at all.
+     *
+     * A narrow reader gets their OWN handovers of this asset instead: when they
+     * were given it, in what condition, with what, and whether they confirmed
+     * it. Never a colleague's.
      */
     const [assignments, repairs, incidents, approver] = actor.canReadAll
       ? await Promise.all([
@@ -214,9 +243,9 @@ export const assetRoutes: FastifyPluginAsync = async (app) => {
               })
             : Promise.resolve(null),
         ])
-      : [[], [], [], null];
+      : [await ownHandovers(auth, row.id), [], [], null];
 
-    const base = toAssetRecord(row);
+    const base = forAssetReader(toAssetRecord(row), actor);
 
     const detail: AssetDetailRecord = {
       ...base,

@@ -80,6 +80,7 @@ import { assetEmployeeLookupRoutes } from './assets/asset-employee-lookup.routes
 import { assetRequestRoutes } from './assets/asset-requests.routes.js';
 import { assetDashboardRoutes } from './assets/asset-dashboard.routes.js';
 import { assetReportRoutes } from './assets/asset-reports.routes.js';
+import { assetIssueRoutes } from './assets/asset-issues.routes.js';
 import {
   payrollDashboardRoutes,
   payrollReconciliationRoutes,
@@ -319,6 +320,8 @@ export const modules: ModuleDefinition[] = [
   { prefix: '/assets', plugin: assetDashboardRoutes },
   { prefix: '/assets', plugin: assetReportRoutes },
   { prefix: '/assets', plugin: assetSelfRoutes },
+  // `/assets/issues` - employee reports, as the queue the asset manager works.
+  { prefix: '/assets', plugin: assetIssueRoutes },
   { prefix: '/assets', plugin: assetLifecycleRoutes },
   { prefix: '/assets', plugin: assetDocumentRoutes },
   { prefix: '/assets', plugin: assetRoutes },

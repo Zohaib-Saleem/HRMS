@@ -404,3 +404,103 @@ describe('GET /attendance/regularizations', () => {
     expect(row.attendanceDate).toBe('2026-01-12');
   });
 });
+
+describe('what the approver is told about a correction', () => {
+  /** The step the engine reads back to notify, built from the approval actually created. */
+  function wireApproverStep() {
+    db.approvalStep.findFirst.mockImplementation(async () => {
+      const created = db.approvalRequest.create.mock.calls[0]?.[0] as {
+        data: { subjectType: string; title: string; summary: string };
+      };
+      return {
+        approvers: [
+          { employee: { id: 'emp-manager', userId: 'user-manager', user: { email: 'manager@example.com' } } },
+        ],
+        approvalRequest: {
+          id: 'appr-1',
+          companyId: 'company-1',
+          subjectType: created.data.subjectType,
+          title: created.data.title,
+          summary: created.data.summary,
+        },
+      };
+    });
+    db.notification.create.mockResolvedValue({ id: 'n-1' });
+  }
+
+  it('names the employee, the date, the correction, current and requested times and the reason', async () => {
+    // On record: in at 09:05 Karachi, no check-out.
+    db.attendanceRecord.findUnique.mockResolvedValue({
+      checkInAt: new Date('2026-01-12T04:05:00.000Z'),
+      checkOutAt: null,
+    });
+    wireApproverStep();
+    app = await appAs(EMPLOYEE);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/attendance/regularizations',
+      payload: {
+        attendanceDate: PAST_DAY,
+        issueType: 'MISSING_PUNCH',
+        requestedCheckOutAt: '18:02',
+        reason: 'Forgot to punch out',
+      },
+    });
+    expect(response.statusCode).toBe(201);
+
+    const approval = db.approvalRequest.create.mock.calls[0]?.[0] as {
+      data: { title: string; summary: string };
+    };
+    expect(approval.data.title).toBe('Attendance Correction Request: Ayesha Khan, 12-Jan-2026');
+    expect(approval.data.summary).toBe(
+      [
+        'Employee: Ayesha Khan',
+        'Date: 12-Jan-2026',
+        'Correction: Missing check-out',
+        'Current: Missing',
+        'Requested: 06:02 PM',
+        'Reason: Forgot to punch out',
+      ].join('\n'),
+    );
+
+    // Sent at submission, to the approver the chain resolved - the manager.
+    expect(db.notification.create).toHaveBeenCalledTimes(1);
+    const sent = db.notification.create.mock.calls[0]?.[0]?.data;
+    expect(sent).toMatchObject({
+      userId: 'user-manager',
+      type: 'APPROVAL_REQUESTED',
+      title: 'Attendance Correction Request',
+      message: approval.data.summary,
+      entityType: 'ApprovalRequest',
+      entityId: 'appr-1',
+    });
+    expect(sent.message).not.toBe('Attendance correction requested');
+  });
+
+  it('shows the time on record beside the one asked for', async () => {
+    db.attendanceRecord.findUnique.mockResolvedValue({
+      checkInAt: new Date('2026-01-12T04:40:00.000Z'),
+      checkOutAt: new Date('2026-01-12T13:00:00.000Z'),
+    });
+    app = await appAs(EMPLOYEE);
+
+    await app.inject({
+      method: 'POST',
+      url: '/attendance/regularizations',
+      payload: {
+        attendanceDate: PAST_DAY,
+        issueType: 'INCORRECT_CHECK_IN',
+        requestedCheckInAt: '09:00',
+        reason: 'The device was slow to read my finger.',
+      },
+    });
+
+    const summary = (db.approvalRequest.create.mock.calls[0]?.[0] as { data: { summary: string } }).data
+      .summary;
+    expect(summary).toContain('Correction: Incorrect check-in');
+    expect(summary).toContain('Current: 09:40 AM');
+    expect(summary).toContain('Requested: 09:00 AM');
+  });
+});
+

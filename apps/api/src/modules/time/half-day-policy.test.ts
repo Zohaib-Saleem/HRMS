@@ -293,3 +293,82 @@ describe('the deriver reads the verdict from the active policy, not from the sto
     expect(policy.halfDayMinutes).toBe(CONFIGURED.halfDayMinutes);
   });
 });
+
+/**
+ * "30 minutes early is a half day" - where that came from, and where it goes.
+ *
+ * There is no early-departure rule in the engine that makes a half day. A day
+ * is scored on how much of the shift it covered against the saved full-day
+ * threshold, less the saved full-day tolerance. With 540 and 0 - the values
+ * saved since 12 Sep 2026 - ANY early departure past the grace falls short of
+ * a full day, 17:59 as much as 17:30. The Settings preview's "Early departure"
+ * example happens to use 17:30, which is why it read as a 30-minute rule.
+ *
+ * The lever is the existing Full-day tolerance setting, and its value is the
+ * company's to choose. These cases pin that the engine follows whatever is
+ * saved - at the current value and at the two values discussed - and that
+ * lateness, overtime, early arrival and missing punches do not move with it.
+ */
+describe('early departure follows the saved full-day tolerance, not a fixed rule', () => {
+  const withTolerance = (minutes: number) => ({
+    ...CONFIGURED,
+    fullDayToleranceMinutes: minutes,
+    overtimeEnabled: true,
+    overtimeFromShiftEnd: true,
+    overtimeAfterMinutes: 540,
+  });
+
+  it('09:00 -> 18:00 is a full day at any tolerance', () => {
+    for (const t of [0, 30, 60]) expect(score(withTolerance(t), '09:00', '18:00').status).toBe('PRESENT');
+  });
+
+  it('at the saved tolerance of 0, a minute short is as short as thirty: no 30-minute rule exists', () => {
+    expect(score(withTolerance(0), '09:00', '17:59').status).toBe('HALF_DAY');
+    expect(score(withTolerance(0), '09:00', '17:30').status).toBe('HALF_DAY');
+  });
+
+  it('09:00 -> 17:30 is NOT a half day once the tolerance covers it, and the early departure is still recorded', () => {
+    const day = score(withTolerance(30), '09:00', '17:30');
+    expect(day.status).toBe('PRESENT');
+    expect(day.earlyLeaveMinutes).toBe(30);
+    expect(score(withTolerance(60), '09:00', '17:30').status).toBe('PRESENT');
+  });
+
+  it('09:00 -> 17:00 follows the saved tolerance, whatever it is', () => {
+    expect(score(withTolerance(0), '09:00', '17:00').status).toBe('HALF_DAY');
+    expect(score(withTolerance(30), '09:00', '17:00').status).toBe('HALF_DAY');
+    expect(score(withTolerance(60), '09:00', '17:00').status).toBe('PRESENT');
+    expect(score(withTolerance(60), '09:00', '16:59').status).toBe('HALF_DAY');
+  });
+
+  it('09:00 -> 18:30 keeps the configured overtime, whatever the tolerance', () => {
+    for (const t of [0, 30, 60]) {
+      const day = score(withTolerance(t), '09:00', '18:30');
+      expect(day.status).toBe('PRESENT');
+      expect(day.overtimeMinutes).toBe(30);
+    }
+  });
+
+  it('lateness, early arrival and a missing check-out do not move with the tolerance', () => {
+    for (const t of [0, 30, 60]) {
+      const p = withTolerance(t);
+      expect(score(p, '09:14', '18:00').lateMinutes).toBe(score(withTolerance(0), '09:14', '18:00').lateMinutes);
+      const early = score(p, '08:43', '18:00');
+      expect(early.status).toBe('PRESENT');
+      expect(early.overtimeMinutes).toBe(0);
+      expect(score(p, '09:00', null).status).toBe('PRESENT');
+      // Past the irregular cutoff the day is scored on elapsed time, untouched
+      // by a tolerance meant for the shift.
+      expect(score(p, '14:00', '18:00').irregular).toBe(true);
+      expect(score(p, '14:00', '18:00').status).toBe('HALF_DAY');
+    }
+  });
+
+  it('never stretches far enough to swallow the half-day threshold', () => {
+    // A tolerance of 600 would put "full day" below zero; it stops at the
+    // saved half-day minimum, so half days are never silently retired.
+    expect(score(withTolerance(600), '09:00', '12:59').status).toBe('ABSENT');
+    expect(score(withTolerance(600), '09:00', '13:00').status).toBe('PRESENT');
+  });
+});
+

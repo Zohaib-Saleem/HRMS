@@ -15,7 +15,6 @@ import { useDebounced } from '@/lib/use-debounced';
 import { formatDate } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
 import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input, NativeSelect } from '@/components/ui/field';
 import { ListToolbar } from '@/components/ui/list-toolbar';
@@ -23,7 +22,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
-import { LEAVE_STATUS_TONE } from './my-leave-page';
+import { LeaveStatusCell } from './leave-status-cell';
 
 const INITIAL = {
   q: '',
@@ -211,9 +210,7 @@ export function LeaveRequestsPage() {
                           {days(row.totalDays)}
                         </TD>
                         <TD>
-                          <Badge variant={LEAVE_STATUS_TONE[row.status]}>
-                            {APPROVAL_STATUS_LABELS[row.status]}
-                          </Badge>
+                          <LeaveStatusCell row={row} />
                         </TD>
                         <TD>
                           <div className="flex justify-end">

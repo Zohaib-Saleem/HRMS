@@ -559,15 +559,14 @@ model Location {
 }
 
 model Team {
-  id        String  @id @default(cuid())
-  companyId String
-  name      String
+  id          String  @id @default(cuid())
+  companyId   String
+  name        String
   description String?
   isActive    Boolean @default(true)
 
   /**
    * LEGACY, and no longer part of the organisation model.
-   *
    * Teams used to be children of departments: this column was NOT NULL and the
    * only way to create a team was to name a department for it. That is not the
    * shape this company works in. Department and Team are two INDEPENDENT
@@ -575,7 +574,6 @@ model Team {
    * is not a sub-unit of Development. Somebody who wanted a team the old form
    * could not place ended up inventing a department to hold it, which is how
    * `T-A` and `Team Clan` came to be departments.
-   *
    * The column is kept, nullable, holding exactly what it held, so that this
    * release can be rolled back without losing the old association. NOTHING
    * READS IT: the API does not select it, the forms do not offer it, and the
@@ -1710,10 +1708,11 @@ model AttendanceRecord {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company     Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee    Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  shift       Shift?                 @relation(fields: [shiftId], references: [id], onDelete: SetNull)
-  adjustments AttendanceAdjustment[]
+  company        Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee       Employee               @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift          Shift?                 @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  adjustments    AttendanceAdjustment[]
+  leaveReversals LeaveReversal[]
 
   @@unique([employeeId, date])
   @@index([companyId, date])
@@ -2053,17 +2052,63 @@ model LeaveRequest {
   decidedAt   DateTime?
   cancelledAt DateTime?
 
+  /// Set when the system, not a person, cancelled the request: every day it
+  /// covered turned out to be worked. A person's cancellation leaves both
+  /// empty, so the leave screens never present one as the other.
+  cancelledBySystem  Boolean @default(false)
+  cancellationReason String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee  Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType       @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+  reversals LeaveReversal[]
 
   @@index([companyId, status])
   @@index([employeeId, startDate])
   @@index([employeeId, status])
   @@map("leave_requests")
+}
+
+/// One day of approved leave given back because attendance was recorded on it.
+///
+/// The leave request is never edited or deleted: its `totalDays` stays the
+/// figure the approval was made on, and the balance subtracts these rows from
+/// it. The (leaveRequestId, date) key is what makes reconciliation idempotent -
+/// a second run for the same day collides here and restores nothing.
+///
+/// The attendance that triggered it is copied, not only linked, so the reason
+/// survives a later correction or deletion of that record.
+model LeaveReversal {
+  id             String   @id @default(cuid())
+  companyId      String
+  employeeId     String
+  leaveRequestId String
+  date           DateTime @db.Date
+
+  /// Leave days restored: 1 for a full day, 0.5 for a half day.
+  days   Decimal @db.Decimal(6, 2)
+  reason String
+
+  /// The person who gave the day back - a Super Admin resolving the conflict
+  /// by hand. Null when attendance reconciliation did it automatically.
+  reversedById String?
+
+  attendanceRecordId String?
+  attendanceSource   AttendanceSource
+  checkInAt          DateTime
+  checkOutAt         DateTime?
+
+  createdAt DateTime @default(now())
+
+  leaveRequest     LeaveRequest      @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  attendanceRecord AttendanceRecord? @relation(fields: [attendanceRecordId], references: [id], onDelete: SetNull)
+
+  @@unique([leaveRequestId, date])
+  @@index([employeeId, date])
+  @@map("leave_reversals")
 }
 
 /// A non-working day. `locationId` null means the holiday applies company-wide;

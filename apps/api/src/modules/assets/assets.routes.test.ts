@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ROLE_PERMISSIONS } from '@hrms/shared';
 
 /**
  * The asset register.
@@ -35,10 +36,13 @@ const {
   EMPLOYEE,
   HR,
   MANAGER,
+  NOW,
+  SANA,
   activeAssignment,
   andClauses,
   appAs,
   assetRow,
+  assignmentRow,
   auditActions,
   wirePeople,
 } = kit;
@@ -181,7 +185,8 @@ describe('who sees which assets', () => {
 
   /*
    * Section 12's last item, and the reason the history is a separate query
-   * rather than an include: a narrow reader's request never fetches the rows.
+   * rather than an include. A narrow reader's history query is bound to their
+   * own employee record, so a colleague's handover is never fetched at all.
    */
   it('never shows an employee who held the asset before them', async () => {
     db.asset.findFirst.mockResolvedValue(
@@ -197,8 +202,15 @@ describe('who sees which assets', () => {
     const response = await app.inject({ method: 'GET', url: `${PREFIX}/asset-1` });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().data.assignments).toEqual([]);
-    expect(db.assetAssignment.findMany).not.toHaveBeenCalled();
+    expect(db.assetAssignment.findMany).toHaveBeenCalledTimes(1);
+    expect(db.assetAssignment.findMany.mock.calls[0]?.[0]?.where).toEqual({
+      assetId: 'asset-1',
+      companyId: COMPANY,
+      employeeId: AHMED.id,
+    });
+    // Repairs and incidents stay the register's business.
+    expect(db.assetRepair.findMany).not.toHaveBeenCalled();
+    expect(db.assetIncident.findMany).not.toHaveBeenCalled();
   });
 
   it('shows the whole handover history to a reader who runs the register', async () => {
@@ -232,6 +244,170 @@ describe('who sees which assets', () => {
     expect(summary.byStatus.UNDER_REPAIR).toBe(1);
     // A status nothing is in is zero rather than absent, so the tile renders.
     expect(summary.byStatus.DISPOSED).toBe(0);
+  });
+});
+
+/**
+ * An employee opening an asset from the My Assets card on their dashboard.
+ *
+ * The same `GET /assets/:id` the register uses - there is no second detail
+ * endpoint - with what a narrow reader receives pinned here: their own asset
+ * and nobody else's, their own handovers of it, and none of the asset
+ * manager's figures. The readers who run the register are pinned beside them
+ * so that narrowing the employee's view is seen not to narrow theirs.
+ */
+describe('an employee opening their own asset', () => {
+  const ROLE = (key: keyof typeof DEFAULT_ROLE_PERMISSIONS) => [...DEFAULT_ROLE_PERMISSIONS[key]];
+
+  const employeeApp = () =>
+    appAs(assetRoutes, {
+      prefix: PREFIX,
+      permissions: ROLE('EMPLOYEE'),
+      userId: AHMED.userId,
+      dataScope: 'OWN',
+    });
+
+  const held = () =>
+    assetRow({
+      status: 'ASSIGNED',
+      vendor: 'Computer Marketing',
+      notes: 'Bought on the Q1 budget; supplier invoice INV-881',
+      assignments: [activeAssignment(AHMED)],
+    });
+
+  it('opens the asset they hold, through the narrowed query', async () => {
+    db.asset.findFirst.mockResolvedValue(held());
+    db.assetAssignment.findMany.mockResolvedValue([assignmentRow(AHMED)]);
+
+    const response = await (await employeeApp()).inject({ method: 'GET', url: `${PREFIX}/asset-1` });
+
+    expect(response.statusCode).toBe(200);
+    const data = response.json().data;
+    expect(data).toMatchObject({
+      id: 'asset-1',
+      assetTag: 'IT-LAP-0042',
+      name: 'Dell Latitude 5440',
+      serialNumber: 'SN-ABC-123',
+      brand: 'Dell',
+      model: 'Latitude 5440',
+      status: 'ASSIGNED',
+      condition: 'GOOD',
+      warrantyEnd: '2029-01-15',
+      holder: { employeeId: AHMED.id },
+    });
+
+    // The id came from the URL; the scope came from the session.
+    const where = db.asset.findFirst.mock.calls[0]?.[0]?.where;
+    expect(andClauses(where)).toContainEqual({
+      assignments: { some: { status: 'ACTIVE', employee: { id: AHMED.id } } },
+    });
+  });
+
+  it('shows them their own handover history of it', async () => {
+    db.asset.findFirst.mockResolvedValue(held());
+    db.assetAssignment.findMany.mockResolvedValue([
+      assignmentRow(AHMED, { acknowledgementStatus: 'ACKNOWLEDGED', acknowledgedAt: NOW }),
+    ]);
+
+    const response = await (await employeeApp()).inject({ method: 'GET', url: `${PREFIX}/asset-1` });
+
+    const history = response.json().data.assignments;
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      employee: { id: AHMED.id },
+      conditionAtAssignment: 'GOOD',
+      acknowledgementStatus: 'ACKNOWLEDGED',
+      status: 'ACTIVE',
+    });
+  });
+
+  it('withholds what it cost, what it is worth, who sold it and the internal notes', async () => {
+    db.asset.findFirst.mockResolvedValue(held());
+
+    const response = await (await employeeApp()).inject({ method: 'GET', url: `${PREFIX}/asset-1` });
+
+    const data = response.json().data;
+    expect(data.purchasePrice).toBeNull();
+    expect(data.currentValue).toBeNull();
+    expect(data.vendor).toBeNull();
+    expect(data.notes).toBeNull();
+    expect(JSON.stringify(data)).not.toContain('INV-881');
+    expect(JSON.stringify(data)).not.toContain('Computer Marketing');
+  });
+
+  it('withholds them from the list as well, so the API cannot be asked around the page', async () => {
+    db.asset.count.mockResolvedValue(1);
+    db.asset.findMany.mockResolvedValue([held()]);
+
+    const response = await (await employeeApp()).inject({ method: 'GET', url: PREFIX });
+
+    const [row] = response.json().data;
+    expect(row).toMatchObject({ purchasePrice: null, currentValue: null, vendor: null, notes: null });
+  });
+
+  it('answers 404 for a colleague’s asset reached by editing the id', async () => {
+    // What the narrowed query returns for an asset Sana holds: nothing.
+    db.asset.findFirst.mockResolvedValue(null);
+
+    const response = await (await employeeApp()).inject({ method: 'GET', url: `${PREFIX}/asset-sana` });
+
+    expect(response.statusCode).toBe(404);
+    expect(JSON.stringify(response.json())).not.toContain('asset-sana');
+    expect(db.assetAssignment.findMany).not.toHaveBeenCalled();
+  });
+
+  it('offers them no action on it', async () => {
+    db.asset.findFirst.mockResolvedValue(held());
+
+    const response = await (await employeeApp()).inject({ method: 'GET', url: `${PREFIX}/asset-1` });
+
+    expect(Object.values(response.json().data.can).every((allowed) => allowed === false)).toBe(true);
+  });
+
+  it('changes nothing by being opened', async () => {
+    db.asset.findFirst.mockResolvedValue(held());
+    db.assetAssignment.findMany.mockResolvedValue([assignmentRow(AHMED)]);
+
+    await (await employeeApp()).inject({ method: 'GET', url: `${PREFIX}/asset-1` });
+
+    for (const model of [db.asset, db.assetAssignment, db.assetRepair]) {
+      expect(model.create).not.toHaveBeenCalled();
+      expect(model.update).not.toHaveBeenCalled();
+      expect(model.updateMany).not.toHaveBeenCalled();
+    }
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Super Admin', 'SUPER_ADMIN'],
+    ['HR Admin', 'HR_ADMIN'],
+    ['IT Asset Manager', 'IT_ASSET_MANAGER'],
+  ] as const)('%s keeps the whole record and the whole history', async (_label, key) => {
+    db.asset.findFirst.mockResolvedValue(held());
+    db.assetAssignment.findMany.mockResolvedValue([
+      assignmentRow(SANA, { status: 'RETURNED', returnedAt: NOW }),
+      assignmentRow(AHMED),
+    ]);
+
+    const app = await appAs(assetRoutes, { prefix: PREFIX, permissions: ROLE(key), dataScope: 'ALL' });
+    const response = await app.inject({ method: 'GET', url: `${PREFIX}/asset-1` });
+
+    expect(response.statusCode).toBe(200);
+    const data = response.json().data;
+    expect(data).toMatchObject({
+      purchasePrice: 250000,
+      currentValue: 200000,
+      vendor: 'Computer Marketing',
+      notes: 'Bought on the Q1 budget; supplier invoice INV-881',
+    });
+    expect(data.assignments).toHaveLength(2);
+    expect(db.assetAssignment.findMany.mock.calls[0]?.[0]?.where).toEqual({
+      assetId: 'asset-1',
+      companyId: COMPANY,
+    });
+    // The register's reach is unnarrowed for them.
+    const where = db.asset.findFirst.mock.calls[0]?.[0]?.where;
+    expect(andClauses(where).filter((c) => 'assignments' in (c as object))).toHaveLength(0);
   });
 });
 

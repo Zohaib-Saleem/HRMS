@@ -899,8 +899,10 @@ function leaveEvents(rows: LeaveRow[]): Draft[] {
         type: 'LEAVE_CANCELLED',
         at: row.cancelledAt,
         dateOnly: false,
-        title: 'Leave cancelled',
-        description: summary,
+        // Attendance reconciliation cancels leave nobody withdrew; the
+        // timeline says so rather than reading like a person's decision.
+        title: row.cancelledBySystem ? 'Leave cancelled automatically' : 'Leave cancelled',
+        description: row.cancelledBySystem && row.cancellationReason ? row.cancellationReason : summary,
         details,
         link: 'Leave',
       });
@@ -1342,6 +1344,8 @@ interface LeaveRow {
   createdAt: Date;
   decidedAt: Date | null;
   cancelledAt: Date | null;
+  cancelledBySystem?: boolean;
+  cancellationReason?: string | null;
   leaveType: { name: string };
 }
 
@@ -1720,6 +1724,8 @@ export async function employeeTimeline(
             createdAt: true,
             decidedAt: true,
             cancelledAt: true,
+            cancelledBySystem: true,
+            cancellationReason: true,
             leaveType: { select: { name: true } },
           },
         }) as Promise<LeaveRow[]>)

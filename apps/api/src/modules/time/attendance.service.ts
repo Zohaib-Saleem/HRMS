@@ -9,6 +9,7 @@ import { prisma } from '../../core/db.js';
 import { ForbiddenError, ValidationError } from '../../core/errors.js';
 import { toDateOnly } from '../leave/leave.service.js';
 import { todayInZone } from '../../core/zoned-time.js';
+import { reconcileAfterAttendanceWrite } from '../leave/leave-reconciliation.service.js';
 import {
   EMPLOYMENT_WINDOW_SELECT,
   isEmployeeInAttendancePopulation,
@@ -43,7 +44,8 @@ export { isWeekendFor } from './attendance-policy.js';
  *   1. weekend / off day - from the company's weekendDays, or the working days
  *                          of the shift in force when the shift lists any
  *   2. holiday            - from the employee's location calendar plus company-wide days
- *   3. on leave           - from approved leave covering the date
+ *   3. on leave           - from approved leave covering the date, less any
+ *                          day reconciliation gave back because it was worked
  *   4. the stored record, or ABSENT when there is none
  *
  * Weekend and holiday win over leave deliberately: booking leave across a
@@ -266,7 +268,10 @@ export async function deriveRangeForEmployees(
         startDate: { lte: to },
         endDate: { gte: from },
       },
-      include: { leaveType: { select: { name: true, isPaid: true, isDeductible: true } } },
+      include: {
+        leaveType: { select: { name: true, isPaid: true, isDeductible: true } },
+        reversals: { select: { date: true } },
+      },
     }),
     prisma.holiday.findMany({
       where: { companyId, isActive: true, date: { gte: from, lte: to } },
@@ -325,8 +330,13 @@ export async function deriveRangeForEmployees(
       const holidayName = holidayByDate.get(key) ?? null;
       const assigned = assignmentOn(employeeShifts, key)?.shift ?? null;
 
+      // A day given back because the person worked it is not leave; the
+      // stored record decides it below like any other working day.
       const onLeave = employeeLeave.find(
-        (l) => dateKey(l.startDate) <= key && dateKey(l.endDate) >= key,
+        (l) =>
+          dateKey(l.startDate) <= key &&
+          dateKey(l.endDate) >= key &&
+          !(l.reversals ?? []).some((r) => dateKey(r.date) === key),
       );
 
       /**
@@ -797,6 +807,12 @@ export async function applyRegularization(regularizationId: string): Promise<voi
     where: { employeeId_date: { employeeId: req.employeeId, date } },
     create: { companyId: req.companyId, employeeId: req.employeeId, date, ...values },
     update: values,
+  });
+
+  await reconcileAfterAttendanceWrite({
+    companyId: req.companyId,
+    employeeId: req.employeeId,
+    dayKey: date.toISOString().slice(0, 10),
   });
 }
 

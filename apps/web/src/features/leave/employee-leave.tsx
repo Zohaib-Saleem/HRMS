@@ -18,6 +18,7 @@ import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { usePermissions } from '@/features/auth/session-context';
 import { LEAVE_STATUS_TONE } from './my-leave-page';
+import { LeaveStatusCell } from './leave-status-cell';
 import { LeaveAdjustmentDialog } from './leave-adjustment-dialog';
 
 /**
@@ -316,9 +317,7 @@ export function EmployeeLeave({
                         {row.reason}
                       </TD>
                       <TD>
-                        <Badge variant={LEAVE_STATUS_TONE[row.status]}>
-                          {APPROVAL_STATUS_LABELS[row.status]}
-                        </Badge>
+                        <LeaveStatusCell row={row} />
                       </TD>
                       <TD className="whitespace-nowrap text-muted-foreground">
                         {row.decidedAt ? formatDate(row.decidedAt) : '—'}

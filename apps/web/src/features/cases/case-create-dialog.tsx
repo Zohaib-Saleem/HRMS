@@ -229,7 +229,12 @@ export function CaseCreateDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={submit}>
+        {/* `contents`, so DialogBody and DialogFooter stay children of the
+            dialog's column as far as layout goes. A plain form box grew with
+            its fields: once a category added the subcategory field it was
+            taller than the height-capped dialog, which clipped the footer -
+            and the Raise case button with it - off the bottom. */}
+        <form onSubmit={submit} className="contents" noValidate>
           <DialogBody className="space-y-4">
             {formError ? <p className={ERROR_BOX}>{formError}</p> : null}
 

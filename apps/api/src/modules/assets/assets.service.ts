@@ -89,6 +89,21 @@ export async function assetScopeFilter(
   return { assignments: { some: { status: 'ACTIVE', employee: people } } };
 }
 
+/**
+ * An asset as a narrow reader may see it.
+ *
+ * `asset.read` without `asset.read.all` is the employee looking at the laptop
+ * on their own desk, or a manager looking at their team's kit. What the company
+ * paid for it, what it is worth now, who sold it and the register's internal
+ * notes are the asset manager's business, not theirs, and they are removed
+ * here - on the server, before the record leaves - rather than hidden by the
+ * page, so the API answers the same question the screen does.
+ */
+export function forAssetReader<T extends AssetRecord>(record: T, actor: AssetActor): T {
+  if (actor.canReadAll) return record;
+  return { ...record, purchasePrice: null, currentValue: null, vendor: null, notes: null };
+}
+
 /** Fetches one asset the caller may read, or 404s. */
 export async function assetOrThrow(actor: AssetActor, id: string) {
   const scope = await assetScopeFilter(actor);

@@ -162,10 +162,12 @@ describe('SalaryDialog: Add mode', () => {
   it('posts a new record for the employee and closes only after the API answers', async () => {
     const user = userEvent.setup();
     const { onClose, onSaved, invalidate } = renderDialog();
+    // Always in the future, so the status reads Scheduled whatever today is.
+    const effectiveFrom = `${new Date().getFullYear() + 1}-10-01`;
 
     await user.clear(amount());
     await user.type(amount(), '150000');
-    setDate(from(), '2026-10-01');
+    setDate(from(), effectiveFrom);
     await user.type(note(), 'Promotion');
 
     expect(within(dialog()).getByTestId('salary-status').textContent).toContain('Scheduled');
@@ -178,7 +180,7 @@ describe('SalaryDialog: Add mode', () => {
       salaryType: 'MONTHLY',
       amount: 150000,
       currency: 'PKR',
-      effectiveFrom: '2026-10-01',
+      effectiveFrom,
       effectiveTo: null,
       note: 'Promotion',
     });

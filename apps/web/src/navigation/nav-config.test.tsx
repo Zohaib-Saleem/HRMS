@@ -271,11 +271,12 @@ describe('the IT asset manager', () => {
     }
   });
 
-  it('gets the three asset screens, which are the job', () => {
+  it('gets the four asset screens, which are the job', () => {
     const links = sidebarFor(IT_ASSET_MANAGER);
 
     expect(links).toContain('Asset dashboard');
     expect(links).toContain('Assets');
+    expect(links).toContain('Asset issues');
     expect(links).toContain('Asset reports');
   });
 
@@ -310,13 +311,13 @@ describe('the IT asset manager', () => {
     }
   });
 
-  it('is an employee’s sidebar plus three rows, and no other difference', () => {
+  it('is an employee’s sidebar plus four rows, and no other difference', () => {
     const employeeLinks = sidebarFor(EMPLOYEE);
     cleanup();
     const itLinks = sidebarFor(IT_ASSET_MANAGER);
 
     const extra = itLinks.filter((label) => !employeeLinks.includes(label));
-    expect(extra.sort()).toEqual(['Asset dashboard', 'Asset reports', 'Assets']);
+    expect(extra.sort()).toEqual(['Asset dashboard', 'Asset issues', 'Asset reports', 'Assets']);
 
     const missing = employeeLinks.filter((label) => !itLinks.includes(label));
     expect(missing).toEqual([]);

@@ -1130,6 +1130,36 @@ export interface AssetIncidentRecord {
   createdAt: string;
 }
 
+/**
+ * An employee-reported asset issue, as the IT / asset queue lists it.
+ *
+ * The incident row is the issue: `resolvedAt` empty is OPEN, set is RESOLVED.
+ * There is no separate status column to drift from it.
+ */
+export const ASSET_ISSUE_STATUSES = ['OPEN', 'RESOLVED'] as const;
+export type AssetIssueStatus = (typeof ASSET_ISSUE_STATUSES)[number];
+
+export const ASSET_ISSUE_STATUS_LABELS: Record<AssetIssueStatus, string> = {
+  OPEN: 'Open',
+  RESOLVED: 'Resolved',
+};
+
+export interface AssetIssueQueueItem extends AssetIncidentRecord {
+  status: AssetIssueStatus;
+  asset: { id: string; assetTag: string; name: string };
+  resolvedBy: { id: string; fullName: string } | null;
+}
+
+export const assetIssueQuerySchema = z.object({
+  status: z.enum([...ASSET_ISSUE_STATUSES, 'ALL']).default('OPEN'),
+});
+
+export const assetIssueResolveSchema = z.object({
+  resolutionNotes: z.string().trim().min(1, 'Say what was done about it.').max(2000),
+});
+
+export type AssetIssueResolveInput = z.infer<typeof assetIssueResolveSchema>;
+
 export interface AssetDocumentRecord {
   id: string;
   type: AssetDocumentType;

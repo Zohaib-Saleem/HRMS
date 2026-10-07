@@ -5,7 +5,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { toast } from 'sonner';
 import { CalendarDays, CalendarPlus, Plane, CircleAlert } from 'lucide-react';
 import {
-  APPROVAL_STATUS_LABELS,
   LEAVE_DAY_PARTS,
   LEAVE_DAY_PART_LABELS,
   PERMISSIONS,
@@ -40,6 +39,7 @@ import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { Can } from '@/features/auth/session-context';
 import { cn } from '@/lib/utils';
+import { LeaveStatusCell } from './leave-status-cell';
 
 export const LEAVE_STATUS_TONE: Record<
   ApprovalStatus,
@@ -226,9 +226,7 @@ function MyLeavePageInner() {
                         {row.reason}
                       </TD>
                       <TD>
-                        <Badge variant={LEAVE_STATUS_TONE[row.status]}>
-                          {APPROVAL_STATUS_LABELS[row.status]}
-                        </Badge>
+                        <LeaveStatusCell row={row} />
                       </TD>
                       <TD>
                         <div className="flex justify-end">

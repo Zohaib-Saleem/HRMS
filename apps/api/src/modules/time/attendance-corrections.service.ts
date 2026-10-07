@@ -10,6 +10,7 @@ import { prisma } from '../../core/db.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { dayKeyToDateColumn, dateColumnToDayKey, dayBoundsInZone } from '../../core/zoned-time.js';
 import { pairPunches } from '../attendance-device/attendance-import.service.js';
+import { reconcileAfterAttendanceWrite } from '../leave/leave-reconciliation.service.js';
 import {
   attendanceFlags,
   computeAttendance,
@@ -576,6 +577,10 @@ export async function applyCorrection(input: {
 
     return { record, adjustment };
   });
+
+  // A corrected day that now shows the person at work gives back any approved
+  // leave on it. Runs after the commit; never fails the correction.
+  await reconcileAfterAttendanceWrite({ companyId, employeeId: employee.id, dayKey });
 
   return {
     recordId: written.record.id,

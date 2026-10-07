@@ -68,6 +68,13 @@ interface Outcome {
   early: number | null;
   irregular: boolean;
   status: 'Full day' | 'Half day' | 'Absent';
+  /**
+   * Why a worked day is not a full one: what it was worth against what a full
+   * day needs. Shown with the status, because "Half day · 30 min early
+   * departure" reads as if the early departure itself made it a half day, when
+   * what decided it was the full-day threshold and its tolerance.
+   */
+  shortfall: { worth: number; fullDayFrom: number } | null;
 }
 
 /**
@@ -89,7 +96,7 @@ function preview(
   const arrive = toMinutes(inAt);
   const leave = toMinutes(outAt);
   if (start === null || end === null || arrive === null || leave === null) {
-    return { late: null, overtime: null, early: null, irregular: false, status: 'Absent' };
+    return { late: null, overtime: null, early: null, irregular: false, status: 'Absent', shortfall: null };
   }
 
   const irregular = rules.irregularCheckInEnabled && cutoff !== null && arrive > cutoff;
@@ -128,7 +135,9 @@ function preview(
   const status: Outcome['status'] =
     worth >= fullDayFrom ? 'Full day' : worth >= thresholds.halfDayMinutes ? 'Half day' : 'Absent';
 
-  return { late, overtime, early, irregular, status };
+  const shortfall = status === 'Half day' ? { worth, fullDayFrom } : null;
+
+  return { late, overtime, early, irregular, status, shortfall };
 }
 
 const EXAMPLES: Array<{ label: string; in: string; out: string }> = [
@@ -187,6 +196,13 @@ function Examples({
                 <span className="font-semibold">{o.status}</span>
                 {parts.length > 0 ? ` \u00b7 ${parts.join(' \u00b7 ')}` : null}
               </p>
+              {o.shortfall ? (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Worth {o.shortfall.worth} min; a full day needs {o.shortfall.fullDayFrom} (full
+                  day {thresholds.fullDayMinutes} min less {thresholds.fullDayMinutes - o.shortfall.fullDayFrom}{' '}
+                  min tolerance). Raise the full-day tolerance to credit it as a full day.
+                </p>
+              ) : null}
             </div>
           );
         })}

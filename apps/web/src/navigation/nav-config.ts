@@ -24,6 +24,7 @@ import {
   PencilLine,
   Receipt,
   Boxes,
+  TriangleAlert,
   Briefcase,
   PackagePlus,
   CalendarSearch,
@@ -484,6 +485,18 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         /*
+         * What employees have reported about the kit they hold. The same
+         * grant as the register: an issue is a fact about an asset.
+         */
+        label: 'Asset issues',
+        to: '/assets/issues',
+        icon: TriangleAlert,
+        permission: PERMISSIONS.ASSET_READ_ALL,
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        /*
          * Its own grant, and deliberately not `asset.read.all`. Reading the
          * register on screen and taking it away as a file are different
          * decisions - a company may well want the second to be rarer - so the
@@ -643,6 +656,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/settings/medical-policy': 'Medical policy',
   '/assets': 'Assets',
   '/assets/dashboard': 'Asset dashboard',
+  '/assets/issues': 'Asset issues',
   '/assets/reports': 'Asset reports',
   '/assets/requests': 'Equipment requests',
   '/assets/:id': 'Asset',

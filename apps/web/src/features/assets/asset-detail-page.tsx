@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Boxes } from 'lucide-react';
 import {
@@ -11,7 +11,10 @@ import {
   ASSET_REPAIR_STATUS_LABELS,
   ASSET_STATUS_DESCRIPTIONS,
   ASSET_STATUS_LABELS,
+  PERMISSIONS,
   type AssetDetailRecord,
+  type EmployeeAssetRow,
+  type MyAssetsRecord,
 } from '@hrms/shared';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
@@ -21,7 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TBody, TD, TH, THead, TR, Table, TableWrapper } from '@/components/ui/table';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
-import { useSession } from '@/features/auth/session-context';
+import { usePermissions, useSession } from '@/features/auth/session-context';
 import {
   ASSET_CONDITION_TONE,
   ASSET_STATUS_TONE,
@@ -31,6 +34,7 @@ import {
 import { AssetFormDrawer } from './asset-form-drawer';
 import { AssetDocuments } from './asset-documents';
 import { AssetActivity } from './asset-activity';
+import { ReportIssueDialog } from './my-assets-card';
 import {
   AssignAssetDialog,
   CompleteRepairDialog,
@@ -62,10 +66,24 @@ import {
 const TABS = ['Overview', 'Assignment history', 'Repairs', 'Documents', 'Activity'] as const;
 type Tab = (typeof TABS)[number];
 
+/**
+ * What somebody who does not run the register is shown: the asset itself and
+ * their own handovers of it. The other three tabs are the register's - their
+ * endpoints answer only to `asset.read.all` - and offering them to an employee
+ * would be offering three tabs of errors. The server has already removed the
+ * cost, the value, the vendor and the internal notes from what it sent.
+ */
+const HOLDER_TABS: readonly Tab[] = ['Overview', 'Assignment history'];
+
 export function AssetDetailPage() {
   const { id = '' } = useParams();
   const { session } = useSession();
+  const { has } = usePermissions();
+  const location = useLocation();
   const currency = session?.company.currency ?? 'USD';
+  const runsRegister = has(PERMISSIONS.ASSET_READ_ALL);
+  const tabs = runsRegister ? TABS : HOLDER_TABS;
+  const fromDashboard = (location.state as { from?: string } | null)?.from === 'dashboard';
 
   const [tab, setTab] = React.useState<Tab>('Overview');
   const [dialog, setDialog] = React.useState<
@@ -81,6 +99,22 @@ export function AssetDetailPage() {
     queryFn: () => api.get<AssetDetailRecord>(`/assets/${id}`),
     enabled: id !== '',
   });
+
+  /*
+   * Whether the reader holds this asset, from their own list rather than from
+   * the detail: `/assets/my` is bound to the session's employee, so a row for
+   * this asset there is the server saying "yours". It is what offers Report
+   * issue, which posts against that handover and nothing else.
+   */
+  const canReport = has(PERMISSIONS.ASSET_ACKNOWLEDGE);
+  const mine = useQuery({
+    queryKey: ['assets', 'mine'],
+    queryFn: () => api.get<MyAssetsRecord>('/assets/my'),
+    enabled: canReport && id !== '',
+    retry: false,
+  });
+  const myHandover = mine.data?.assigned?.find((row) => row.assetId === id) ?? null;
+  const [reporting, setReporting] = React.useState<EmployeeAssetRow | null>(null);
 
   if (query.isLoading) {
     return (
@@ -114,11 +148,23 @@ export function AssetDetailPage() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" asChild>
-              <Link to="/assets">
-                <ArrowLeft />
-                Assets
-              </Link>
+              {fromDashboard ? (
+                <Link to="/">
+                  <ArrowLeft />
+                  Dashboard
+                </Link>
+              ) : (
+                <Link to="/assets">
+                  <ArrowLeft />
+                  Assets
+                </Link>
+              )}
             </Button>
+            {myHandover ? (
+              <Button variant="outline" size="sm" onClick={() => setReporting(myHandover)}>
+                Report issue
+              </Button>
+            ) : null}
             {can.assign ? (
               <Button size="sm" onClick={() => setDialog({ kind: 'assign' })}>
                 Assign
@@ -232,7 +278,7 @@ export function AssetDetailPage() {
 
       <div className="mb-5 overflow-x-auto border-b border-border">
         <nav className="flex min-w-max gap-1" aria-label="Asset sections">
-          {TABS.map((item) => (
+          {tabs.map((item) => (
             <button
               key={item}
               type="button"
@@ -249,13 +295,17 @@ export function AssetDetailPage() {
         </nav>
       </div>
 
-      {tab === 'Overview' ? <OverviewTab asset={asset} currency={currency} /> : null}
-      {tab === 'Assignment history' ? <AssignmentsTab asset={asset} /> : null}
-      {tab === 'Repairs' ? <RepairsTab asset={asset} currency={currency} /> : null}
-      {tab === 'Documents' ? (
+      {tab === 'Overview' ? (
+        <OverviewTab asset={asset} currency={currency} runsRegister={runsRegister} />
+      ) : null}
+      {tab === 'Assignment history' ? (
+        <AssignmentsTab asset={asset} runsRegister={runsRegister} />
+      ) : null}
+      {runsRegister && tab === 'Repairs' ? <RepairsTab asset={asset} currency={currency} /> : null}
+      {runsRegister && tab === 'Documents' ? (
         <AssetDocuments assetId={asset.id} canManage={can.manageDocuments} />
       ) : null}
-      {tab === 'Activity' ? <AssetActivity assetId={asset.id} /> : null}
+      {runsRegister && tab === 'Activity' ? <AssetActivity assetId={asset.id} /> : null}
 
       {/* One dialog is mounted at a time, keyed off the requested action. Each
           resets its own fields on open, so reopening never shows the last go. */}
@@ -287,6 +337,7 @@ export function AssetDetailPage() {
           onClose={() => setDialog(null)}
         />
       ) : null}
+      <ReportIssueDialog row={reporting} onClose={() => setReporting(null)} />
       {dialog?.kind === 'incident' ? (
         <ReportIncidentDialog
           open
@@ -305,11 +356,16 @@ export function AssetDetailPage() {
         asset={asset}
         onClose={() => setDialog(null)}
       />
-      <AssetFormDrawer
-        open={dialog?.kind === 'edit'}
-        asset={asset}
-        onClose={() => setDialog(null)}
-      />
+      {/* Mounted only for somebody who may edit: the drawer loads the
+          department and category lookups as it mounts, and a reader who cannot
+          edit has no use for them. */}
+      {can.update ? (
+        <AssetFormDrawer
+          open={dialog?.kind === 'edit'}
+          asset={asset}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
     </>
   );
 }
@@ -318,12 +374,22 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
       <dt className="text-[12.5px] text-muted-foreground">{label}</dt>
-      <dd className="text-[13.5px]">{value ?? <span className="text-muted-foreground">--</span>}</dd>
+      <dd className="break-words text-[13.5px]">
+        {value ?? <span className="text-muted-foreground">--</span>}
+      </dd>
     </div>
   );
 }
 
-function OverviewTab({ asset, currency }: { asset: AssetDetailRecord; currency: string }) {
+function OverviewTab({
+  asset,
+  currency,
+  runsRegister,
+}: {
+  asset: AssetDetailRecord;
+  currency: string;
+  runsRegister: boolean;
+}) {
   const warranty =
     asset.warrantyStart || asset.warrantyEnd
       ? `${assetDate(asset.warrantyStart)} - ${assetDate(asset.warrantyEnd)}`
@@ -363,14 +429,18 @@ function OverviewTab({ asset, currency }: { asset: AssetDetailRecord; currency: 
 
       <Card>
         <CardHeader>
-          <CardTitle>What it cost and where it is</CardTitle>
+          <CardTitle>{runsRegister ? 'What it cost and where it is' : 'Warranty and where it is'}</CardTitle>
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
             <Field label="Purchase date" value={assetDate(asset.purchaseDate)} />
-            <Field label="Purchase price" value={assetMoney(asset.purchasePrice, currency)} />
-            <Field label="Current value" value={assetMoney(asset.currentValue, currency)} />
-            <Field label="Vendor" value={asset.vendor} />
+            {runsRegister ? (
+              <>
+                <Field label="Purchase price" value={assetMoney(asset.purchasePrice, currency)} />
+                <Field label="Current value" value={assetMoney(asset.currentValue, currency)} />
+                <Field label="Vendor" value={asset.vendor} />
+              </>
+            ) : null}
             <Field label="Warranty" value={warranty} />
             <Field label="Office" value={asset.site?.name ?? null} />
             <Field label="Location" value={asset.location} />
@@ -455,21 +525,40 @@ function OverviewTab({ asset, currency }: { asset: AssetDetailRecord; currency: 
   );
 }
 
-function AssignmentsTab({ asset }: { asset: AssetDetailRecord }) {
+function AssignmentsTab({
+  asset,
+  runsRegister,
+}: {
+  asset: AssetDetailRecord;
+  runsRegister: boolean;
+}) {
   if (asset.assignments.length === 0) {
     return (
       <Card>
-        <EmptyState
-          icon={Boxes}
-          title="Never issued"
-          description="Nobody has been given this asset yet."
-        />
+        {runsRegister ? (
+          <EmptyState
+            icon={Boxes}
+            title="Never issued"
+            description="Nobody has been given this asset yet."
+          />
+        ) : (
+          <EmptyState
+            icon={Boxes}
+            title="No handovers to you"
+            description="No handover of this asset to you is recorded."
+          />
+        )}
       </Card>
     );
   }
 
   return (
     <Card>
+      {runsRegister ? null : (
+        <p className="border-b border-border px-4 py-2.5 text-[12.5px] text-muted-foreground">
+          Your own handovers of this asset. Only HR or the asset manager can change them.
+        </p>
+      )}
       <TableWrapper>
         <Table>
           <THead>

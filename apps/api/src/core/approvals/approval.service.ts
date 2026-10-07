@@ -15,6 +15,7 @@ import {
 } from './hierarchy.service.js';
 import { applyRegularization, applyShiftChange } from '../../modules/time/attendance.service.js';
 import { applyLoanDecision } from '../../modules/loans/loans.routes.js';
+import { reconcileLeaveRequest } from '../../modules/leave/leave-reconciliation.service.js';
 
 /**
  * Approval engine.
@@ -260,11 +261,15 @@ export async function notifyApprover(
           employee: { select: { id: true, userId: true, user: { select: { email: true } } } },
         },
       },
-      approvalRequest: { select: { id: true, companyId: true, title: true, summary: true } },
+      approvalRequest: {
+        select: { id: true, companyId: true, subjectType: true, title: true, summary: true },
+      },
     },
   });
 
   if (!step) return;
+
+  const notice = approverNotice(step.approvalRequest);
 
   const seen = new Set<string>();
   for (const seat of step.approvers) {
@@ -276,20 +281,41 @@ export async function notifyApprover(
       companyId: step.approvalRequest.companyId,
       userId,
       type: 'APPROVAL_REQUESTED',
-      title: 'Approval needed',
-      message: step.approvalRequest.title,
+      title: notice.title,
+      message: notice.message,
       entityType: 'ApprovalRequest',
       entityId: step.approvalRequest.id,
       logger: request?.log,
       email: seat.employee.user?.email
         ? {
             to: seat.employee.user.email,
-            subject: `Approval needed: ${step.approvalRequest.title}`,
+            subject: step.approvalRequest.title.startsWith(notice.title)
+              ? step.approvalRequest.title
+              : `${notice.title}: ${step.approvalRequest.title}`,
             text: `A request is waiting for your decision.\n\n${step.approvalRequest.title}\n${step.approvalRequest.summary ?? ''}`.trim(),
           }
         : undefined,
     });
   }
+}
+
+/**
+ * The notification an approver receives.
+ *
+ * An attendance correction carries the request itself - employee, date,
+ * correction, current and requested times, reason - because the approver has
+ * to know exactly what they are approving, and the approval's summary is where
+ * the submitting route wrote it. Other subjects keep the short form.
+ */
+export function approverNotice(approval: {
+  subjectType: string;
+  title: string;
+  summary: string | null;
+}): { title: string; message: string } {
+  if (approval.subjectType === 'ATTENDANCE_REGULARIZATION' && approval.summary) {
+    return { title: 'Attendance Correction Request', message: approval.summary };
+  }
+  return { title: 'Approval needed', message: approval.title };
 }
 
 /**
@@ -770,6 +796,13 @@ export async function syncSubjectStatus(
           ...(status === 'APPROVED' || status === 'REJECTED' ? { decidedAt: new Date() } : {}),
         },
       });
+      // Leave approved for a day the person has already been seen at work is
+      // reconciled at once, not at the next import. Never fails the decision.
+      if (status === 'APPROVED') {
+        await reconcileLeaveRequest(subjectId).catch((error: unknown) => {
+          console.error('leave reconciliation on approval failed', { subjectId, error });
+        });
+      }
       return;
     default:
       return;

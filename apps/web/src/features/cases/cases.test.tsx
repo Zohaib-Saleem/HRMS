@@ -95,6 +95,15 @@ const CATALOGUE = [
       },
       // No subcategories, so the form must not draw an empty control for it.
       { id: 'cat-misc', name: 'Something else', description: null, subcategories: [] },
+      {
+        id: 'cat-hardware',
+        name: 'Hardware',
+        description: 'Laptops, monitors, printers and the rest.',
+        subcategories: [
+          { id: 'sub-laptop', name: 'Laptop', description: null },
+          { id: 'sub-printer', name: 'Printer', description: null },
+        ],
+      },
     ],
   },
 ];
@@ -465,6 +474,64 @@ describe('raising a case', () => {
     // The two fields that would raise a case as somebody else. Neither exists.
     expect(body).not.toHaveProperty('employeeId');
     expect(body).not.toHaveProperty('requesterEmployeeId');
+  });
+
+  /*
+   * The production bug: choosing IT and then a category made "Raise case"
+   * vanish. Nothing hid the button - the form wrapping the body and footer was
+   * an ordinary box, so once the subcategory field appeared it grew past the
+   * dialog's height cap and the footer was clipped off. jsdom does no layout,
+   * so what is pinned is the cause (the form is `contents`, leaving body and
+   * footer in the dialog's column, where only the body scrolls) and the
+   * behaviour: the button is there and usable at every step, and submits.
+   */
+  it('keeps Raise case through IT, every category and every subcategory, and submits', async () => {
+    const user = userEvent.setup();
+    const form = await openForm(user);
+    const button = () => form.getByRole('button', { name: 'Raise case' });
+
+    expect(button().closest('form')).toHaveClass('contents');
+
+    await user.selectOptions(await form.findByLabelText(/Department/), 'dep-it');
+    expect(button()).toBeEnabled();
+
+    for (const category of ['cat-email', 'cat-misc', 'cat-hardware']) {
+      await user.selectOptions(form.getByLabelText(/^Category/), category);
+      expect(button()).toBeVisible();
+      expect(button()).toBeEnabled();
+    }
+    for (const sub of ['sub-laptop', 'sub-printer', '']) {
+      await user.selectOptions(await form.findByLabelText(/Subcategory/), sub);
+      expect(button()).toBeEnabled();
+    }
+    await user.selectOptions(form.getByLabelText(/Subcategory/), 'sub-printer');
+
+    await user.type(form.getByLabelText(/Subject/), 'Printer jams on every page');
+    await user.type(form.getByLabelText(/Description/), 'The second floor printer jams on every page since Monday.');
+    await user.click(button());
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(true),
+    );
+    const post = fetchMock.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === 'POST');
+    expect(JSON.parse(String((post?.[1] as RequestInit).body))).toMatchObject({
+      departmentId: 'dep-it',
+      categoryId: 'cat-hardware',
+      subcategoryId: 'sub-printer',
+    });
+  });
+
+  it('switching category clears a subcategory that no longer belongs to it', async () => {
+    const user = userEvent.setup();
+    const form = await openForm(user);
+
+    await user.selectOptions(await form.findByLabelText(/Department/), 'dep-it');
+    await user.selectOptions(form.getByLabelText(/^Category/), 'cat-hardware');
+    await user.selectOptions(await form.findByLabelText(/Subcategory/), 'sub-laptop');
+    await user.selectOptions(form.getByLabelText(/^Category/), 'cat-email');
+
+    expect(await form.findByLabelText(/Subcategory/)).toHaveValue('');
+    expect(form.getByRole('button', { name: 'Raise case' })).toBeEnabled();
   });
 
   it('defaults the priority to Normal', async () => {

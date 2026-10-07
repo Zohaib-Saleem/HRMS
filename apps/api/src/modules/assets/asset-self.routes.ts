@@ -18,6 +18,7 @@ import {
   toAssetIncidentRecord,
 } from './asset-lifecycle.service.js';
 import { EMPLOYEE_ASSET_INCLUDE, toEmployeeAssetRow } from './asset-people.service.js';
+import { notifyAssetIssue } from './asset-issues.service.js';
 
 /**
  * The employee's own asset screen, and the two things they may write.
@@ -76,7 +77,11 @@ export const assetSelfRoutes: FastifyPluginAsync = async (app) => {
         include: EMPLOYEE_ASSET_INCLUDE,
       });
 
-      const assigned = rows.map(toEmployeeAssetRow);
+      // What the kit is worth is the asset manager's figure, not the holder's.
+      const canReadAll = auth.permissions.has(PERMISSIONS.ASSET_READ_ALL);
+      const assigned = rows
+        .map(toEmployeeAssetRow)
+        .map((row) => (canReadAll ? row : { ...row, currentValue: null }));
       const data: MyAssetsRecord = {
         assigned,
         awaitingAcknowledgement: assigned.filter(
@@ -181,6 +186,14 @@ export const assetSelfRoutes: FastifyPluginAsync = async (app) => {
 
       const assignment = await ownAssignmentOrThrow(auth.companyId, employeeId, assignmentId);
 
+      // Only what they are holding now. A laptop handed back last month is the
+      // register's to look at, not the former holder's to report on.
+      if (assignment.status !== 'ACTIVE') {
+        throw new ValidationError({
+          assignmentId: ['You can only report a problem with an asset you currently hold.'],
+        });
+      }
+
       const incident = await prisma.$transaction(async (tx) => {
         const created = await tx.assetIncident.create({
           data: {
@@ -205,6 +218,24 @@ export const assetSelfRoutes: FastifyPluginAsync = async (app) => {
         return created;
       });
 
+      /*
+       * The people who act on it, told now. Before this the report was written
+       * and nobody heard about it: the incident sat on the asset's own page
+       * until somebody happened to open that asset.
+       */
+      const reporter = incident.reportedByEmployee;
+      const notified = await notifyAssetIssue({
+        companyId: auth.companyId,
+        reporterUserId: auth.userId,
+        incidentId: incident.id,
+        employeeName: reporter ? `${reporter.firstName} ${reporter.lastName}`.trim() : 'An employee',
+        assetName: assignment.asset.name,
+        assetTag: assignment.asset.assetTag,
+        reason: input.reason,
+        description: input.description ?? null,
+        logger: request.log,
+      });
+
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
@@ -216,6 +247,8 @@ export const assetSelfRoutes: FastifyPluginAsync = async (app) => {
           assignmentId: assignment.id,
           incidentId: incident.id,
           reason: input.reason,
+          status: 'OPEN',
+          notifiedUserIds: notified,
         },
         request,
       });

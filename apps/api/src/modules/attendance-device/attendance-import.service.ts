@@ -8,6 +8,7 @@ import {
 } from '../time/attendance-policy.js';
 import { shiftOnDate } from '../time/attendance.service.js';
 import { reattributeOvernightPunches } from './overnight-attribution.js';
+import { reconcileAfterAttendanceWrite } from '../leave/leave-reconciliation.service.js';
 
 /**
  * Turning raw punches into attendance.
@@ -297,6 +298,12 @@ export async function recalculateFromPunches(input: {
   });
 
   await markProcessed(punches.map((p) => p.id));
+
+  // Attendance now exists for the day; approved leave on it is given back.
+  // Only reached with a check-in the pairing produced from this employee's own
+  // punches - an unmapped or unusable punch returned above.
+  await reconcileAfterAttendanceWrite({ companyId, employeeId, dayKey });
+
   return { employeeId, dayKey, status: computed.status, skipped: null };
 }
 

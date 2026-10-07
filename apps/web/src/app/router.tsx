@@ -230,6 +230,10 @@ const AssetDashboardPage = lazyPage(
   () => import('@/features/assets/asset-dashboard-page'),
   'AssetDashboardPage',
 );
+const AssetIssuesPage = lazyPage(
+  () => import('@/features/assets/asset-issues-page'),
+  'AssetIssuesPage',
+);
 const AssetReportsPage = lazyPage(
   () => import('@/features/assets/asset-reports-page'),
   'AssetReportsPage',
@@ -583,6 +587,10 @@ export function AppRoutes() {
             order they are written in. */}
         <Route element={<RequirePermission permission={PERMISSIONS.ASSET_READ_ALL} />}>
           <Route path="assets/dashboard" element={<AssetDashboardPage />} />
+          {/* Employee-reported issues. Reading is the register's gate; the
+              Resolve button is shown with `asset.update`, which the endpoint
+              re-checks. */}
+          <Route path="assets/issues" element={<AssetIssuesPage />} />
         </Route>
         {/* Equipment requests: `asset.request.read`, which every member of
             staff holds for their own. The queue tab inside needs

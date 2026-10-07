@@ -146,7 +146,12 @@ export async function balancesForEmployee(
           lte: new Date(Date.UTC(year, 11, 31)),
         },
       },
-      select: { leaveTypeId: true, status: true, totalDays: true },
+      select: {
+        leaveTypeId: true,
+        status: true,
+        totalDays: true,
+        reversals: { select: { days: true } },
+      },
     }),
   ]);
 
@@ -162,9 +167,11 @@ export async function balancesForEmployee(
     const accrued = Math.min(monthly * months, annual);
 
     const mine = requests.filter((r) => r.leaveTypeId === type.id);
+    // Days given back because attendance was recorded on them were not taken.
+    // A request cancelled outright is already excluded by its status.
     const used = mine
       .filter((r) => r.status === 'APPROVED')
-      .reduce((sum, r) => sum + toNumber(r.totalDays), 0);
+      .reduce((sum, r) => sum + toNumber(r.totalDays) - reversedDays(r), 0);
     const pending = mine
       .filter((r) => r.status === 'PENDING')
       .reduce((sum, r) => sum + toNumber(r.totalDays), 0);
@@ -194,6 +201,11 @@ export async function balancesForEmployee(
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Days of a request given back by attendance reconciliation. */
+export function reversedDays(request: { reversals?: ReadonlyArray<{ days: Prisma.Decimal | number }> }): number {
+  return round2((request.reversals ?? []).reduce((sum, r) => sum + toNumber(r.days), 0));
+}
 
 /**
  * Rejects a request that would overlap leave the employee already has.

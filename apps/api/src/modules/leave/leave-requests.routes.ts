@@ -5,6 +5,7 @@ import {
   PERMISSIONS,
   type ApprovalStatus,
   type LeaveBalanceRecord,
+  type LeaveConflictCancellationResult,
   type LeaveDayPart,
   type LeaveRequestRecord,
   balanceAdjustmentSchema,
@@ -38,13 +39,31 @@ import {
   balancesForEmployee,
   carryForwardYear,
   countWorkingDays,
+  reversedDays,
   toDateOnly,
   toNumber,
 } from './leave.service.js';
+import {
+  attendanceConflictsFor,
+  cancelLeaveForAttendanceConflict,
+  type AttendanceConflictDay,
+} from './leave-reconciliation.service.js';
 
 const INCLUDE = {
   employee: { select: { id: true, firstName: true, lastName: true, displayName: true } },
   leaveType: { select: { id: true, name: true, isPaid: true, isDeductible: true } },
+  reversals: {
+    select: {
+      date: true,
+      days: true,
+      reason: true,
+      checkInAt: true,
+      checkOutAt: true,
+      createdAt: true,
+      reversedById: true,
+    },
+    orderBy: { date: 'asc' },
+  },
 } satisfies Prisma.LeaveRequestInclude;
 
 type Row = Prisma.LeaveRequestGetPayload<{ include: typeof INCLUDE }>;
@@ -52,7 +71,17 @@ type Row = Prisma.LeaveRequestGetPayload<{ include: typeof INCLUDE }>;
 const displayName = (e: { firstName: string; lastName: string; displayName: string | null }) =>
   e.displayName ?? `${e.firstName} ${e.lastName}`.trim();
 
-function toRecord(row: Row, callerEmployeeId: string | null, isAdmin: boolean): LeaveRequestRecord {
+interface RecordContext {
+  callerEmployeeId: string | null;
+  isAdmin: boolean;
+  /** `leave.conflict.resolve`: may cancel approved leave on a worked day. */
+  canResolveConflicts: boolean;
+  conflicts: Map<string, AttendanceConflictDay[]>;
+}
+
+function toRecord(row: Row, ctx: RecordContext): LeaveRequestRecord {
+  const { callerEmployeeId, isAdmin } = ctx;
+  const conflicts = ctx.conflicts.get(row.id) ?? [];
   return {
     id: row.id,
     employeeId: row.employeeId,
@@ -72,10 +101,28 @@ function toRecord(row: Row, callerEmployeeId: string | null, isAdmin: boolean): 
     approvalRequestId: row.approvalRequestId,
     decidedAt: row.decidedAt?.toISOString() ?? null,
     cancelledAt: row.cancelledAt?.toISOString() ?? null,
+    cancelledBySystem: row.cancelledBySystem ?? false,
+    cancellationReason: row.cancellationReason ?? null,
+    reversedDays: reversedDays(row),
+    reversals: (row.reversals ?? []).map((r) => ({
+      date: r.date.toISOString().slice(0, 10),
+      days: toNumber(r.days),
+      reason: r.reason,
+      checkInAt: r.checkInAt.toISOString(),
+      checkOutAt: r.checkOutAt?.toISOString() ?? null,
+      createdAt: r.createdAt.toISOString(),
+      manual: r.reversedById !== null,
+    })),
+    attendanceConflicts: conflicts.map((c) => ({
+      date: c.dayKey,
+      checkInAt: c.checkInAt.toISOString(),
+      checkOutAt: c.checkOutAt?.toISOString() ?? null,
+    })),
     createdAt: row.createdAt.toISOString(),
     // Only a live request can be withdrawn, and only by its owner or an admin.
     canCancel:
       row.status === 'PENDING' && (isAdmin || (callerEmployeeId !== null && row.employeeId === callerEmployeeId)),
+    canResolveConflict: ctx.canResolveConflicts && row.status === 'APPROVED' && conflicts.length > 0,
   };
 }
 
@@ -137,9 +184,14 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
       }),
     ]);
 
-    const isAdmin = auth.permissions.has(PERMISSIONS.LEAVE_MANAGE);
+    const ctx: RecordContext = {
+      callerEmployeeId: self?.id ?? null,
+      isAdmin: auth.permissions.has(PERMISSIONS.LEAVE_MANAGE),
+      canResolveConflicts: auth.permissions.has(PERMISSIONS.LEAVE_CONFLICT_RESOLVE),
+      conflicts: await attendanceConflictsFor(rows),
+    };
     return reply.send({
-      data: rows.map((row) => toRecord(row, self?.id ?? null, isAdmin)),
+      data: rows.map((row) => toRecord(row, ctx)),
       meta: buildMeta(query.page, query.limit, total),
     });
   });
@@ -162,7 +214,12 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return reply.send({
-      data: toRecord(row, self?.id ?? null, auth.permissions.has(PERMISSIONS.LEAVE_MANAGE)),
+      data: toRecord(row, {
+        callerEmployeeId: self?.id ?? null,
+        isAdmin: auth.permissions.has(PERMISSIONS.LEAVE_MANAGE),
+        canResolveConflicts: auth.permissions.has(PERMISSIONS.LEAVE_CONFLICT_RESOLVE),
+        conflicts: await attendanceConflictsFor([row]),
+      }),
     });
   });
 
@@ -363,6 +420,57 @@ export const leaveRequestRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return reply.send({ data: { id: leave.id, status: updated.status } });
+    },
+  );
+
+  /**
+   * Cancel approved leave because the employee attended work.
+   *
+   * Super Admin only (`leave.conflict.resolve`). Nothing is deleted: the leave
+   * request keeps its history and the attendance keeps its punches. Each
+   * conflicting day is given back through the leave reversal ledger - the same
+   * row automatic reconciliation writes, keyed on (request, date) - so the
+   * quota is restored by the balance arithmetic rather than by editing a
+   * balance, and a second click, a race or an earlier automatic reversal
+   * restores nothing more. The audit row is written per day by the service,
+   * with the Super Admin as the actor.
+   */
+  app.post(
+    '/:id/cancel-for-attendance',
+    { preHandler: requirePermission(PERMISSIONS.LEAVE_CONFLICT_RESOLVE) },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+
+      const leave = await prisma.leaveRequest.findFirst({
+        where: { id, companyId: auth.companyId },
+        select: { id: true, employeeId: true },
+      });
+      if (!leave) throw new NotFoundError('Leave request');
+      await assertEmployeeInTeamScope(auth, leave.employeeId);
+
+      const actor = await prisma.user.findUnique({
+        where: { id: auth.userId },
+        select: { firstName: true, lastName: true },
+      });
+
+      const result = await cancelLeaveForAttendanceConflict({
+        companyId: auth.companyId,
+        leaveRequestId: leave.id,
+        actor: {
+          userId: auth.userId,
+          name: actor ? `${actor.firstName} ${actor.lastName}`.trim() : 'unknown',
+        },
+      });
+
+      const data: LeaveConflictCancellationResult = {
+        id: result.leaveRequestId,
+        status: result.status as ApprovalStatus,
+        restoredDays: result.restoredDays,
+        reversedDates: result.reversedDayKeys,
+        alreadyResolved: result.alreadyResolved,
+      };
+      return reply.send({ data });
     },
   );
 };

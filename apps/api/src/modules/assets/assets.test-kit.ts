@@ -178,7 +178,16 @@ export function assetDb() {
       update: vi.fn(),
       updateMany: vi.fn(),
     },
-    assetIncident: { findMany: vi.fn(), create: vi.fn() },
+    assetIncident: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      findFirstOrThrow: vi.fn(),
+      create: vi.fn(),
+      updateMany: vi.fn(),
+    },
+    // Who an employee's issue report is sent to. Empty unless a test says
+    // otherwise - see `useAssetDb`.
+    user: { findMany: vi.fn() },
     assetDocument: { findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), create: vi.fn(), delete: vi.fn() },
     auditLog: { create: vi.fn(), findMany: vi.fn() },
     notification: { create: vi.fn() },
@@ -202,6 +211,7 @@ let assetDbRef: any = null;
 export function useAssetDb(db: any): void {
   assetDbRef = db;
   db.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  db.user?.findMany?.mockResolvedValue([]);
 }
 
 /**
