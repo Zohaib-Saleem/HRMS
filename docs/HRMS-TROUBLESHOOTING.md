@@ -157,6 +157,25 @@ Changing it does not rescore existing records.
 | Not actually approved | Still pending shows nothing |
 | Weekend or holiday | Both outrank leave in precedence, deliberately — booking leave across a public holiday should not report the holiday as leave |
 | Dates do not cover the day | Leave is inclusive of start and end |
+| The day was given back | Attendance was recorded on it, so it is scored on that attendance — see the next entry |
+
+### Approved leave was cancelled, or a day came back to the balance
+
+*Data, working as designed.* When attendance is recorded on a day of approved
+leave, that day is given back. A request with every day given back shows
+**Cancelled · Automatic** (or **Super Admin**, when one cancelled it by hand)
+with the reason under the badge. The employee did not withdraw it.
+
+To see exactly why, open **Settings → Audit log** and filter for
+`leave.request.auto_reverse` or `leave.request.conflict_cancel`. Each row holds
+the check-in and check-out, the attendance record, the device punch ids, and
+the balance before and after.
+
+| Symptom | Cause |
+|---|---|
+| A half day of leave was not given back | It is given back only when the day is closed and scores **Present**. An open day, or one scored Half day, keeps the leave |
+| An old conflict was never given back | The automatic daily pass covers only today − 2 to today + 1. A Super Admin uses **Cancel leave** on the request |
+| The punch was wrong (someone else's thumb, a test punch) | Correct the attendance. The reversal stays; it is a ledger row, not a derived figure. If the leave should stand, re-apply it as a new request or an adjustment |
 
 ---
 

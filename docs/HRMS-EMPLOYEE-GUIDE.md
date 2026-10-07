@@ -133,7 +133,7 @@ available = opening + accrued + adjustment − used − pending
 - **Opening** — carried forward from last year
 - **Accrued** — earned so far this year, capped at the annual entitlement
 - **Adjustment** — a manual correction by HR, up or down
-- **Used** — approved leave
+- **Used** — approved leave, less any days given back because you worked them
 - **Pending** — requested but not yet decided; held against your balance
 
 ### Requesting leave
@@ -159,6 +159,20 @@ You can cancel your own request while it is still pending.
 Approved leave overrides your attendance for those days — they show as **On
 leave** and you cannot check in. Whether they are paid depends on the leave
 type; unpaid leave is deducted by payroll.
+
+**If you come in anyway**, and your punch or attendance is recorded on a day of
+approved leave, that day is given back to your balance automatically. You will
+see it on *My leave*:
+
+- if you worked every day of the request, it shows **Cancelled · Automatic**
+  with the reason, for example *Automatically cancelled because attendance was
+  recorded on 06-Oct-2026*;
+- if you worked only some of the days, the request stays **Approved** and says
+  which days were returned.
+
+For a **half day** of leave, the day is given back only if you worked the whole
+day. Coming in for the other half is what a half day means, and changes
+nothing.
 
 ---
 
@@ -274,9 +288,13 @@ issued and what state it was in is the only thing either side has to point at.
 **Report a problem** on the same card, if it arrived with a cracked lid, a
 missing charger, or anything else wrong with it.
 
-This raises the issue with HR. It does **not** mark the asset damaged — that is
-HR's decision, and they make it after looking at what you reported. Say what is
-actually wrong rather than what you think the status should be.
+This raises the issue with the people who look after equipment, who get a
+notification straight away. It does **not** mark the asset damaged — that is
+their decision, and they make it after looking at what you reported. Say what
+is actually wrong rather than what you think the status should be.
+
+You can report a problem only with something you hold now. Once an asset has
+been handed back, it is the register's to look at, not yours to report on.
 
 ### Asking for something
 

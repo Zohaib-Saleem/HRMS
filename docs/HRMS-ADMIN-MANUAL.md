@@ -557,7 +557,9 @@ available = opening + accrued + adjustment − used − pending
 ```
 
 Only two things are stored: the opening balance carried in from last year, and
-any manual adjustment. `used` and `pending` come from the request rows.
+any manual adjustment. `used` and `pending` come from the request rows. `used`
+counts each approved request's days **less any days given back** because the
+person worked them (see below).
 
 ### Adjustments and carry-forward
 
@@ -572,10 +574,75 @@ any manual adjustment. `used` and `pending` come from the request rows.
 - **Carry forward** (`leave.manage`) — moves the remaining balance into the next
   year, capped per type.
 
+### Leave given back for days worked
+
+Approved leave on a day the employee turned out to be at work is leave they did
+not take, and the system gives it back. Each day given back is a **leave
+reversal**: one row per request and date, with the attendance it was based on.
+Nothing is deleted or edited. The request keeps its original days, and the
+balance counts `days − days given back` as used. If every day of a request is
+given back, the request becomes **Cancelled**, marked as done by the system,
+with the reason on it.
+
+**What counts as attendance.** A stored record with a check-in, made by the
+device or by self check-in. A record entered by an administrator counts only
+when its status is Present or Half day. An absence marker never counts, and
+neither does an unmapped device punch, since it never reaches anybody's record.
+
+**Full day and half day.**
+- A **full day** of leave is given back on any qualifying check-in. The day is
+  then scored like any other day: present, late, half day or absent.
+- A **half day** of leave is given back only when the day is **closed** (there
+  is a check-out) and the attendance engine scores it **Present**. Working the
+  other half is exactly what a half day of leave means, and changes nothing.
+- Weekends and holidays inside a request were never counted as leave, so they
+  are never given back.
+
+**When it happens.** Automatically, whenever attendance is written: a device
+import or recalculation, a manual record in the Correction Centre, an approved
+correction request, or an attendance entry made by an administrator. It also
+runs the moment leave is **approved**, so leave approved after the person was
+already seen at work is caught at once. A daily pass, at boot and every 24h
+alongside absence marking, sweeps **today − 2 to today + 1** for anything else.
+That window is short on purpose, because older conflicts are a decision for a
+person. Every run is idempotent: the unique key on (request, date) means a day
+is never given back twice.
+
+**What it looks like.** On *Leave requests*, *My leave* and the profile's Leave
+section:
+- a fully given-back request shows **Cancelled · Automatic** and the reason,
+  e.g. *Automatically cancelled because attendance was recorded on
+  06-Oct-2026.*;
+- a partly given-back request stays **Approved** and says how many days were
+  returned and on which dates.
+
+Each reversal is audited as `leave.request.auto_reverse`, with the actor
+*SYSTEM / Attendance Reconciliation*. The audit row holds the balance before
+and after, the attendance record, the check-in and check-out times, and the
+device punch ids.
+
+**Conflicts a person resolves (Super Admin).** An approved request that still
+has attendance on one of its days shows **Attendance recorded on leave**, with
+the date and check-in time. That happens with an older day outside the daily
+window, or a half day the rules above kept. Holders of `leave.conflict.resolve`
+(Super Admin only, by default) see **Cancel leave**. The confirmation shows the
+employee, leave type, dates and the attendance. **Cancel Leave** gives every
+conflicting day back through the same reversal rows, and this skips the
+half-day rule, because a person has looked at the day. The request is cancelled
+if nothing is left, with *Super Admin cancellation / attendance conflict: the
+employee attended work on …* as the reason, and the badge reads **Super
+Admin**. It is audited as `leave.request.conflict_cancel` with the Super Admin
+as the actor. Clicking it twice, or after the automatic pass, restores nothing
+more (*Already resolved - nothing was restored twice.*). The endpoint is
+`POST /leave-requests/:id/cancel-for-attendance`, and it also checks the
+caller's team scope.
+
 ### How leave affects everything else
 
 - **Attendance** — an approved leave day derives as `ON_LEAVE`, below weekend
-  and holiday in precedence. Check-in on such a day is refused.
+  and holiday in precedence, unless it has been given back, in which case it is
+  scored on its attendance. Self check-in on such a day is refused; device
+  punches still arrive.
 - **Payroll** — a paid leave day is payable; an unpaid one is a deduction if
   `deductUnpaidLeave` is on. Half-day leave counts as 0.5.
 
@@ -1619,8 +1686,26 @@ missing row.
 ### What employees can do
 
 Two things, and only to their own handover: **acknowledge** it, and **report a
-problem** with it. Reporting a problem raises an incident for you; it does not
-mark the asset damaged. That decision is yours.
+problem** with it. A problem can be reported only on an asset they currently
+hold. Reporting one raises an incident and notifies you; it does not mark the
+asset damaged. That decision is yours.
+
+### Asset issues
+
+**Assets → Asset issues** (`asset.read.all`) is the queue of what employees have
+reported. Everyone who holds `asset.update`, plus every Super Admin, gets an
+in-app *Asset Issue Reported* notification when a report comes in. The
+notification lists employee, asset, tag and issue, and clicking it opens the
+queue on that issue.
+
+The queue shows **Open** issues, oldest first. Switch the filter to **Resolved**
+or **All** to see closed ones. **Resolve** (`asset.update`) asks what was done,
+and the note is compulsory. It records who resolved it and when, and it is
+audited against the asset.
+
+Resolving an issue does not change the asset. If the laptop really is broken,
+mark it **Damaged** or **Send for repair** as a separate step. Full detail is
+in the [asset guide §7a](HRMS-ASSET-GUIDE.md#7a-reported-issues).
 
 They cannot see the register, what anything cost, who had their laptop before
 them, or any asset sitting in a cupboard. A manager sees their reporting line's

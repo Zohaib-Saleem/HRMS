@@ -52,8 +52,11 @@ These predate this manual and are written for developers rather than operators.
 
 Everything here is also available from **Help & Documentation** in the sidebar,
 with search and cross-links. The files in this directory are the source: the
-application reads them at request time, so editing one changes what staff see
-without a rebuild or a redeploy.
+application reads them at request time, and the frontend never bundles them.
+In development, editing one changes what staff see immediately. In production,
+the API image carries its own copy (`COPY docs ./docs` in
+`deploy/Dockerfile.api`), so an edit reaches staff on the next
+`deploy/update.sh`.
 
 ### Adding a document
 

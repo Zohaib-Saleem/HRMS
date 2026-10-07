@@ -125,9 +125,9 @@ Thirteen grants, and the gaps between them are the design.
 | Grant | What it opens |
 |---|---|
 | `asset.read` | The assets currently out with the people your **data scope** reaches. For most people, their own |
-| `asset.read.all` | The whole register, including assets nobody is holding |
+| `asset.read.all` | The whole register, including assets nobody is holding, and the **Asset issues** queue |
 | `asset.create` | Put a new asset on the register |
-| `asset.update` | Correct an asset's details and condition. Cannot assign or return one |
+| `asset.update` | Correct an asset's details and condition, and resolve a reported issue. Cannot assign or return one |
 | `asset.assign` | Hand an asset to an employee |
 | `asset.transfer` | Move one straight from one employee to another |
 | `asset.return` | Take one back, recording the condition it came back in |
@@ -343,12 +343,15 @@ An employee holding `asset.acknowledge` can do exactly two things, and both
 reach only their own handover:
 
 - **Acknowledge** — "yes, I have it".
-- **Report an issue** — "it arrived with a cracked lid".
+- **Report an issue** — "it arrived with a cracked lid". Only on an asset they
+  **currently hold**: a handover that has ended is refused with *You can only
+  report a problem with an asset you currently hold.*
 
 Neither writes anything about the asset: not its condition, not its value, not
-its status, not its assignment. Reporting an issue raises an incident for HR to
-act on and marks the handover *Issue reported*; it does not mark the laptop
-damaged. That is HR's decision, made with `asset.update`.
+its status, not its assignment. Reporting an issue raises an incident, marks
+the handover *Issue reported*, notifies the people who act on it, and puts it
+in the **Asset issues** queue (§7a). It does not mark the laptop damaged. That
+is the asset manager's decision, made with `asset.update`.
 
 ---
 
@@ -366,6 +369,54 @@ claim on it — Lost can go back to Available, because things turn up.
 
 Every one of these is readable on the asset's page, and only to somebody holding
 `asset.read.all`.
+
+---
+
+## 7a. Reported issues
+
+An employee's report is an incident of kind `ISSUE_REPORTED`, and the incident
+**is** the issue. There is no separate status column: `resolvedAt` empty is
+**Open**, set is **Resolved**.
+
+**Who is told.** The moment it is reported, an in-app notification titled
+*Asset Issue Reported* goes to every active account that holds `asset.update`
+through any role, plus every Super Admin. Recipients come from grants, not from
+names, so the IT Asset Manager role, a hand-made IT role and any role built for
+the job later are all included without anyone editing a list. Each account is
+told once, even when it qualifies twice. The reporter is never told about their
+own report, and suspended or invited accounts are skipped. The message reads,
+one fact per line:
+
+```
+Employee: Ahmed Khan
+Asset: Dell Latitude
+Asset Tag: IT-LAP-0042
+Issue: Charger does not work
+```
+
+Clicking it in the bell opens the queue on that issue. The same notice is also
+handed to the mail provider. Production runs the console provider, so in
+practice no email is delivered (see §16).
+
+**The queue.** *Assets → Asset issues* (`/assets/issues`, `asset.read.all`)
+lists employee reports with the asset, the employee, the reason and the
+details. It shows Open by default, oldest first, because that is the order the
+work gets done. The filter also offers Resolved and All, which list newest
+first.
+
+**Resolving.** **Resolve** (`asset.update`) asks what was done about it. The
+note is compulsory, up to 2000 characters. Resolving stamps who and when,
+records `asset.issue.resolved` in the audit log against the asset, and shows
+*Resolved by …* in the queue. Two people resolving the same issue at once get
+one resolution and one refusal (*That issue has already been resolved.*), never
+a second note written over the first.
+
+Resolving changes nothing about the asset. If the report turns out to mean the
+asset is damaged, needs repair or should be swapped, that is a separate act:
+**Damaged**, **Send for repair**, or a return and a new handover.
+
+Only employee reports are queued. **Damaged** and **Lost** are recorded by the
+asset manager themselves, so they are already with the right person.
 
 ---
 
@@ -670,7 +721,10 @@ All under `/api/v1`.
 | GET · DELETE | `/assets/:id/documents/:documentId` | read: `asset.read.all` · delete: `asset.update` |
 | GET | `/assets/my` | `asset.read` |
 | POST | `/assets/assignments/:id/acknowledge` | `asset.acknowledge` |
-| POST | `/assets/assignments/:id/report-issue` | `asset.acknowledge` |
+| POST | `/assets/assignments/:id/report-issue` | `asset.acknowledge`, and only on your own ACTIVE handover |
+| GET | `/assets/issues?status=OPEN\|RESOLVED\|ALL` | `asset.read.all`. Default OPEN |
+| GET | `/assets/issues/:id` | `asset.read.all` |
+| POST | `/assets/issues/:id/resolve` | `asset.update`. Body `{ resolutionNotes }`, compulsory |
 | GET | `/assets/employee-lookup` | any one of `asset.assign`, `asset.transfer`, `asset.dispose`. **Not** `employee.read` |
 | GET | `/employees/:id/assets` | `asset.read` + the employee must be in your data scope (or on a team you manage) |
 | GET · POST | `/asset-requests` | read: `asset.request.read` · write: `asset.request.create` |
@@ -699,9 +753,12 @@ not exist:
 - **No barcode or QR scanning.** The asset tag is typed or searched for.
 - **No stock levels or reorder points.** This is a register of individual
   things, not an inventory of quantities.
-- **No email.** The two handover notifications are in-app only, in line with the
-  rest of the product — see the [troubleshooting guide](HRMS-TROUBLESHOOTING.md)
-  on the mail provider.
+- **No email, in practice.** The two handover notifications are in-app only.
+  The *Asset Issue Reported* notice also asks for an email, but production's
+  mail provider is the console provider, which delivers nothing. See the
+  [troubleshooting guide](HRMS-TROUBLESHOOTING.md) on the mail provider.
+- **No reopening an issue.** A resolved issue stays resolved. A problem that
+  comes back is reported again.
 - **No bulk import.** Assets are added one at a time.
 - **Nothing reaches payroll.** An asset's purchase price is a number on an
   asset. Issuing somebody a laptop creates no salary row, no deduction and no

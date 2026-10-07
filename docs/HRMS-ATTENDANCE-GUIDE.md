@@ -199,7 +199,8 @@ The stored record is only one input. Precedence, highest first:
 ```
 1. WEEKEND    the day is in the company's weekend days
 2. HOLIDAY    a holiday applies to that employee's location
-3. ON_LEAVE   approved leave covers the date
+3. ON_LEAVE   approved leave covers the date, and that date has not been
+              given back because the person worked it (see §7a)
 4. the stored record, RE-SCORED under the policy in force for that employee
               on that date (the same computeAttendance call that produces the
               hours, lateness and overtime); an ADMIN-corrected record keeps
@@ -293,6 +294,43 @@ Anyone with no attendance record on a working day is recorded absent.
 > **Limitation.** Because the schedule is tied to process uptime rather than a
 > cron, a server restarted repeatedly runs it repeatedly (harmless), and a
 > server down across a day boundary marks that day late — on the next boot.
+
+---
+
+## 7a. Leave on a day that was worked
+
+Approved leave on a day with real attendance is given back: a `LeaveReversal`
+row per (leave request, date), unique on that pair. Once a date has a reversal,
+the deriver stops treating it as `ON_LEAVE` and scores the stored record like
+any other day. The leave balance stops counting it as used.
+
+Qualifying attendance is a record with a check-in whose source is `DEVICE` or
+`SELF`, or `ADMIN` with status PRESENT or HALF_DAY. A `SYSTEM` absence marker
+never qualifies.
+
+- **Full-day leave:** given back on any qualifying check-in.
+- **Half-day leave:** given back only when the day has a check-out and
+  `computeAttendance`, under the policy in force for that person and date,
+  scores it PRESENT. Note that a half-day arrival scores PRESENT unless the
+  irregular-arrival cutoff is enabled (production: 09:15), so that setting
+  decides whether a 13:00–18:00 day reverses a morning off.
+
+**Triggers.** Every attendance write calls it after the record is stored:
+
+| Trigger | Where |
+|---|---|
+| Device import, recalculation, re-attribution | `recalculateFromPunches` |
+| Approved correction request | applied by the approval |
+| Correction Centre | manual record or edit |
+| Admin attendance entry | `POST /attendance` |
+| Leave approved | runs over every date of the request |
+| Daily pass | at boot and every 24h, today − 2 … today + 1 |
+
+None of these ever fail the write that triggered them. A failed run is retried
+by the next trigger for that day, and the unique key makes a retry harmless.
+Conflicts older than the daily window are only listed, not reversed; a Super
+Admin resolves them from the leave screens. The full behaviour is in the
+[admin manual](HRMS-ADMIN-MANUAL.md#leave-given-back-for-days-worked).
 
 ---
 

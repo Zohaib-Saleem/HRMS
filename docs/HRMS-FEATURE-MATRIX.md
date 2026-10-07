@@ -102,6 +102,8 @@ it holds the permission by default.
 | Leave balance adjustment | IMPLEMENTED | SA, HR | leave balance | Profile → Leave → Adjust. Reason compulsory; audited with old and new value; calculated columns stay read-only |
 | Leave request | IMPLEMENTED | all | approval engine | Half-day supported for single-day requests |
 | Leave cancellation | IMPLEMENTED | all (own) | — | |
+| Leave given back for days worked | IMPLEMENTED | — | attendance, leave balance | Automatic. One `LeaveReversal` per (request, date); balance counts `totalDays − reversed`; a fully reversed request is CANCELLED by the system with its reason. Half day only when the day is closed and scores PRESENT |
+| Cancel leave for an attendance conflict | IMPLEMENTED | SA | leave reversal | `leave.conflict.resolve`. *Cancel leave* on an approved request flagged *Attendance recorded on leave*; same reversal rows, nothing restored twice |
 | Balance adjustment | IMPLEMENTED | SA, HR | — | `leave.manage`, positive or negative, with a note |
 | Carry-forward | IMPLEMENTED | SA, HR | leave types | Capped per type |
 | Holidays | IMPLEMENTED | SA, HR | — | Company-wide or per location |
@@ -165,7 +167,9 @@ it holds the permission by default.
 | Return | IMPLEMENTED | SA, HR | — | Records the condition it came back in, on the handover; missing accessories derived and stored |
 | Accessories on a handover | IMPLEMENTED | SA, HR | — | Label list, suggestions not a closed set |
 | Acknowledge a handover | IMPLEMENTED | all | — | `asset.acknowledge`. Reaches only the caller's own handover |
-| Report a problem with your asset | IMPLEMENTED | all | — | Raises an incident. Writes nothing about the asset itself |
+| Report a problem with your asset | IMPLEMENTED | all | — | Raises an incident, only on an ACTIVE handover. Writes nothing about the asset itself |
+| Asset issue notification | IMPLEMENTED | SA, HR, IT Asset Manager | — | In-app to every `asset.update` holder and every Super Admin, never the reporter. Opens the issue |
+| Asset issues queue | IMPLEMENTED | SA, HR, IT Asset Manager | — | `/assets/issues`, `asset.read.all`. Open / Resolved / All; Resolve needs `asset.update` and a note. Changes nothing about the asset |
 | Handover notification | IMPLEMENTED | all | — | In-app only, on assign and transfer. Skipped when the holder has no login |
 | Repairs | IMPLEMENTED | SA, HR | — | Remembers the status held before, and restores it on completion or cancellation |
 | Mark damaged / lost | IMPLEMENTED | SA, HR | — | `asset.update`. Records an incident. Lost can return to Available |
