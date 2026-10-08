@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { clockBoundary } from '../../core/zoned-time.js';
 import {
+  closesPreviousDay,
   punchesBelongingToPreviousDay,
   type OvernightSettings,
 } from './overnight-attribution.js';
@@ -120,5 +121,33 @@ describe('only a leading run moves', () => {
     ];
 
     expect(decide(monday, tuesday)).toEqual(['a', 'b']);
+  });
+});
+
+describe('a single departure, as the self-service check-out asks it', () => {
+  const ask = (hhmm: string, settings: Partial<OvernightSettings> = {}) =>
+    closesPreviousDay({
+      dayKey: TUESDAY,
+      openedAt: at(MONDAY, '09:00'),
+      at: at(TUESDAY, hhmm),
+      windowMinutes: settings.windowMinutes ?? SETTINGS.windowMinutes,
+      cutoff: settings.cutoff ?? SETTINGS.cutoff,
+      timeZone: ZONE,
+    });
+
+  it('closes Monday at 01:00 after a 09:00 arrival', () => {
+    expect(ask('01:00')).toBe(true);
+  });
+
+  it('does not at or after the cutoff', () => {
+    expect(ask('06:00')).toBe(false);
+  });
+
+  it('does not beyond the window', () => {
+    expect(ask('01:00', { windowMinutes: 900 })).toBe(false);
+  });
+
+  it('does not when the rule is off', () => {
+    expect(ask('01:00', { windowMinutes: 0 })).toBe(false);
   });
 });

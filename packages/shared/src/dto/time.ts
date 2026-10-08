@@ -707,7 +707,10 @@ export interface AttendanceTotals {
 }
 
 export interface AttendanceTodayState {
+  /** The day the widget is about - yesterday while it is still open after midnight. */
   date: string;
+  /** True when `date` is yesterday, still waiting for a check-out. */
+  carriedOver: boolean;
   status: DerivedAttendanceStatus;
   checkedIn: boolean;
   checkedOut: boolean;

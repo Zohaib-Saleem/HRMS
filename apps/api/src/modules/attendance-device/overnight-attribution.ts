@@ -95,6 +95,32 @@ export function punchesBelongingToPreviousDay(input: {
   return moving;
 }
 
+/**
+ * Whether a departure at `at`, on `dayKey`, can still close a day that opened
+ * at `openedAt` the day before.
+ *
+ * The same two limits the punch rule applies - the cutoff and the window from
+ * the arrival - asked of a single instant, for the self-service check-out,
+ * which has no punches to read. Whether the previous day is open is the
+ * caller's question: a record answers it directly.
+ */
+export function closesPreviousDay(input: {
+  dayKey: DayKey;
+  openedAt: Date;
+  at: Date;
+  windowMinutes: number;
+  cutoff: string;
+  timeZone: string;
+}): boolean {
+  const { dayKey, openedAt, at, windowMinutes, cutoff, timeZone } = input;
+  if (windowMinutes <= 0) return false;
+
+  const cutoffAt = clockBoundary(dayKey, cutoff, timeZone);
+  if (!cutoffAt || at.getTime() >= cutoffAt.getTime()) return false;
+
+  return at.getTime() <= openedAt.getTime() + windowMinutes * 60_000;
+}
+
 /** The calendar day before `dayKey`, as a day key. */
 export function previousDayKey(dayKey: DayKey): DayKey {
   const [year, month, day] = dayKey.split('-').map(Number);

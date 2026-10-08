@@ -148,7 +148,7 @@ export function AttendanceToday({ className }: { className?: string } = {}) {
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-[15px] font-semibold">Today</p>
+            <p className="text-[15px] font-semibold">{state.carriedOver ? 'Yesterday' : 'Today'}</p>
             {state.shiftName ? (
               <Badge variant="outline">
                 {state.shiftName} {state.shiftStartTime}–{state.shiftEndTime}

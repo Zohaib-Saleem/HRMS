@@ -48,6 +48,7 @@ import {
   attendancePopulationWhere,
 } from './employment-window.js';
 import { clockBoundary, dayKeyToDateColumn, todayInZone } from '../../core/zoned-time.js';
+import { closesPreviousDay } from '../attendance-device/overnight-attribution.js';
 import {
   assertCheckInIpAllowed,
   assertCheckInLocationAllowed,
@@ -175,6 +176,35 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
   const localToday = async (companyId: string): Promise<Date> => {
     const { timeZone } = await resolveAttendancePolicy(companyId);
     return dayKeyToDateColumn(todayInZone(timeZone));
+  };
+
+  /**
+   * The caller's previous day, while it is still waiting for them to leave.
+   *
+   * Somebody who checks in at 09:00 and leaves at 01:00 is leaving the day
+   * they arrived on, but at 01:00 "today" is already the next one. Without
+   * this the check-out found no check-in, the widget offered a check-in
+   * instead, and the long day stayed open while the next one was opened by an
+   * arrival nobody made. The limits are the company's own overnight settings,
+   * the ones the device import already applies to punches.
+   */
+  const openPreviousDay = async (companyId: string, employeeId: string, today: Date, now: Date) => {
+    const yesterday = new Date(today.getTime() - 86_400_000);
+    const record = await prisma.attendanceRecord.findUnique({
+      where: { employeeId_date: { employeeId, date: yesterday } },
+    });
+    if (!record?.checkInAt || record.checkOutAt) return null;
+
+    const policy = await resolvePolicyFor(companyId, employeeId, yesterday);
+    const closes = closesPreviousDay({
+      dayKey: today.toISOString().slice(0, 10),
+      openedAt: record.checkInAt,
+      at: now,
+      windowMinutes: policy.overnightCheckOutWindowMinutes,
+      cutoff: policy.overnightCheckOutCutoff,
+      timeZone: policy.timeZone,
+    });
+    return closes ? record : null;
   };
 
   app.addHook('preHandler', requirePermission(PERMISSIONS.ATTENDANCE_READ));
@@ -361,21 +391,33 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const self = await callerEmployeeOrThrow(auth);
 
     const today = await localToday(auth.companyId);
+    const todays = await prisma.attendanceRecord.findUnique({
+      where: { employeeId_date: { employeeId: self.id, date: today } },
+      select: { checkInAt: true },
+    });
+    // Until the previous day is closed, it is the day the widget is about.
+    const carried = todays?.checkInAt
+      ? null
+      : await openPreviousDay(auth.companyId, self.id, today, new Date());
+    const date = carried?.date ?? today;
+
     const [[day], shift, policy] = await Promise.all([
-      deriveRange(auth.companyId, self.id, today, today),
-      shiftOnDate(self.id, today),
-      resolvePolicyFor(auth.companyId, self.id, today),
+      deriveRange(auth.companyId, self.id, date, date),
+      shiftOnDate(self.id, date),
+      resolvePolicyFor(auth.companyId, self.id, date),
     ]);
 
     const workingDay =
-      day !== undefined &&
+      carried !== null ||
+      (day !== undefined &&
       day.status !== 'WEEKEND' &&
       day.status !== 'OFF_DAY' &&
       day.status !== 'HOLIDAY' &&
-      day.status !== 'ON_LEAVE';
+      day.status !== 'ON_LEAVE');
 
     const state: AttendanceTodayState = {
-      date: today.toISOString().slice(0, 10),
+      date: date.toISOString().slice(0, 10),
+      carriedOver: carried !== null,
       status: day?.status ?? 'ABSENT',
       checkedIn: Boolean(day?.checkInAt),
       checkedOut: Boolean(day?.checkOutAt),
@@ -434,6 +476,9 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     });
     if (existing?.checkInAt) {
       throw new ConflictError('You have already checked in today.');
+    }
+    if (await openPreviousDay(auth.companyId, self.id, today, new Date())) {
+      throw new ConflictError('You are still checked in from yesterday. Check out first.');
     }
 
     // Both restrictions are enforced here, on the server. The network check
@@ -495,16 +540,20 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
     const input = parseOrThrow(checkOutSchema, request.body ?? {});
     const self = await callerEmployeeOrThrow(auth);
 
+    const now = new Date();
     const today = await localToday(auth.companyId);
-    const existing = await prisma.attendanceRecord.findUnique({
+    const todays = await prisma.attendanceRecord.findUnique({
       where: { employeeId_date: { employeeId: self.id, date: today } },
     });
+    // After midnight, the departure may still belong to yesterday.
+    const existing = todays?.checkInAt
+      ? todays
+      : ((await openPreviousDay(auth.companyId, self.id, today, now)) ?? todays);
 
     if (!existing?.checkInAt) throw new ConflictError('You have not checked in today.');
     if (existing.checkOutAt) throw new ConflictError('You have already checked out today.');
 
-    const now = new Date();
-    const policy = await resolvePolicyFor(auth.companyId, self.id, today);
+    const policy = await resolvePolicyFor(auth.companyId, self.id, existing.date);
 
     // The shift captured at check-in is the one scored, so a shift reassignment
     // made during the day cannot change how the day is measured after the fact.
@@ -513,7 +562,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
           where: { id: existing.shiftId },
           select: { startTime: true, endTime: true },
         })
-      : await shiftOnDate(self.id, today);
+      : await shiftOnDate(self.id, existing.date);
 
     const computed = computeAttendance({
       // The record's own day, not today's: an overnight shift checks out after
