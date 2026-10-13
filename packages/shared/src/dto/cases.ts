@@ -662,6 +662,8 @@ export interface CaseRecord {
   /** Null until somebody on the desk picks it up. */
   assignedUserId: string | null;
   assignedToName: string | null;
+  /** When the current assignee was given the case. Null while unassigned. */
+  assignedAt: string | null;
 
   /** How many replies the caller can actually see. Internal notes excluded. */
   messageCount: number;

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import {
+  CASE_PRIORITY_LABELS,
   CASE_SORT_FIELDS,
   CASE_STATUS_LABELS,
   PERMISSIONS,
@@ -34,6 +35,7 @@ import {
   toCaseDetail,
   toCaseRecord,
 } from './cases.service.js';
+import { caseQueueOwners, caseResponsible, notifyDesk } from './case-notify.service.js';
 
 /**
  * Cases: the employee's side of the helpdesk.
@@ -283,6 +285,27 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
         logger: request.log,
       });
 
+      /*
+       * And the desk. A new case has nobody holding it, so the department's
+       * queue owners are told - its own desk members and head, or the
+       * company-wide dispatchers when the department has neither. See
+       * `caseQueueOwners`: it is never everybody in the department.
+       */
+      await notifyDesk({
+        companyId: auth.companyId,
+        caseId: created.id,
+        userIds: await caseQueueOwners(auth.companyId, created.departmentId),
+        actorUserId: auth.userId,
+        title: `New case ${created.caseNumber} for ${created.department.name}`,
+        message: `${created.subject} - ${created.category.name}${
+          created.subcategory ? ` · ${created.subcategory.name}` : ''
+        }, ${CASE_PRIORITY_LABELS[created.priority].toLowerCase()} priority, raised by ${
+          created.requester.displayName ??
+          `${created.requester.firstName} ${created.requester.lastName}`.trim()
+        }. Unassigned.`,
+        logger: request.log,
+      });
+
       return reply.status(201).send({ data: toCaseRecord(created, callerContext(auth)) });
     },
   );
@@ -427,6 +450,17 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
         request,
       });
 
+      // The requester answered: whoever holds the case, or its queue, acts next.
+      await notifyDesk({
+        companyId: auth.companyId,
+        caseId: row.id,
+        userIds: await caseResponsible(row),
+        actorUserId: auth.userId,
+        title: `Requester replied on case ${row.caseNumber}`,
+        message: `${row.subject} - a new reply is waiting.`,
+        logger: request.log,
+      });
+
       return reply.status(201).send({ data: { id: message.id } });
     },
   );
@@ -497,6 +531,16 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
         before: { status: row.status, resolvedAt: row.resolvedAt, closedAt: row.closedAt },
         after: { status: 'REOPENED', reason: input.reason },
         request,
+      });
+
+      await notifyDesk({
+        companyId: auth.companyId,
+        caseId: row.id,
+        userIds: await caseResponsible(row),
+        actorUserId: auth.userId,
+        title: `Case ${row.caseNumber} reopened`,
+        message: `${row.subject} - the requester says it is not settled.`,
+        logger: request.log,
       });
 
       return reply.send({ data: toCaseRecord(updated, callerContext(auth)) });

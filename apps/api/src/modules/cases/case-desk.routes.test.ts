@@ -170,6 +170,26 @@ function caseRow(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/**
+ * A desk member as both user lookups read them: the assignable-agents list
+ * (name, department name) and `caseQueueOwners` (department id, grants).
+ */
+function deskUser(
+  who: { userId: string; employeeId: string; departmentId: string | null },
+  firstName: string,
+  lastName: string,
+  departmentName: string,
+  grants: Permission[] = DESK,
+) {
+  return {
+    id: who.userId,
+    firstName,
+    lastName,
+    employee: { id: who.employeeId, departmentId: who.departmentId, department: { name: departmentName } },
+    userRoles: [{ role: { rolePermissions: grants.map((key) => ({ permission: { key } })) } }],
+  };
+}
+
 /** The agents' own employee records, which is where their department comes from. */
 const AGENT_EMPLOYEES = [IT_AGENT, FIN_AGENT, ROVING, REQUESTER];
 
@@ -215,8 +235,8 @@ beforeEach(() => {
    * route ASKS, and refuses anybody the answer does not contain.
    */
   const deskUsers = [
-    { id: IT_AGENT.userId, firstName: 'Bilal', lastName: 'Ahmed', employee: { department: { name: 'IT' } } },
-    { id: FIN_AGENT.userId, firstName: 'Sana', lastName: 'Iqbal', employee: { department: { name: 'Finance' } } },
+    deskUser(IT_AGENT, 'Bilal', 'Ahmed', 'IT'),
+    deskUser(FIN_AGENT, 'Sana', 'Iqbal', 'Finance'),
   ];
   db.user.findMany.mockResolvedValue(deskUsers);
   db.user.findFirst.mockImplementation((args: { where: { id?: string } }) =>

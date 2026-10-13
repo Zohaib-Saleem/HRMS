@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
 
 /**
  * The bell: a count, a list, and each notification opening what it is about.
@@ -64,16 +64,38 @@ const ISSUE = {
   createdAt: '2026-10-05T13:00:00.000Z',
 };
 
-function serve() {
+const ASSIGNED = {
+  id: 'n-3',
+  type: 'CASE_UPDATE',
+  title: 'Case CASE-2026-000021 assigned to you',
+  message: 'Laptop screen flickers - normal priority, filed with IT.',
+  entityType: 'CaseDesk',
+  entityId: 'case-21',
+  readAt: null,
+  createdAt: '2026-10-05T12:00:00.000Z',
+};
+
+let requests: Array<{ method: string; path: string }> = [];
+
+/** Stateful: reading a notification takes it off the unread count. */
+function serve(items: Array<typeof CORRECTION> = [CORRECTION, ISSUE]) {
+  requests = [];
+  const unread = new Set(items.filter((n) => !n.readAt).map((n) => n.id));
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), 'http://localhost').pathname.replace('/api/v1', '');
+      requests.push({ method: init?.method ?? 'GET', path });
+      const readOne = path.match(/^\/notifications\/([^/]+)\/read$/);
+      if (readOne && init?.method === 'POST') unread.delete(readOne[1]!);
       const body =
         path === '/notifications/unread-count'
-          ? { data: { count: 2 } }
+          ? { data: { count: unread.size } }
           : path === '/notifications'
-            ? { data: [CORRECTION, ISSUE], meta: { page: 1, limit: 12, total: 2, totalPages: 1 } }
+            ? {
+                data: items.map((n) => ({ ...n, readAt: unread.has(n.id) ? null : n.createdAt })),
+                meta: { page: 1, limit: 12, total: items.length, totalPages: 1 },
+              }
             : init?.method === 'POST'
               ? { data: { ok: true } }
               : { data: null };
@@ -86,15 +108,23 @@ function serve() {
   );
 }
 
+function CaseWorkStub() {
+  const { id } = useParams();
+  return <p>Desk case {id}</p>;
+}
+
 function renderBell() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/']}>
+        {/* Outside the routes, as in the shell, so it survives navigation. */}
+        <NotificationCenter />
         <Routes>
-          <Route path="/" element={<NotificationCenter />} />
+          <Route path="/" element={null} />
           <Route path="/approvals/:id" element={<p>Approval page</p>} />
           <Route path="/assets/issues" element={<p>Issue queue</p>} />
+          <Route path="/case-queue/:id" element={<CaseWorkStub />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -123,6 +153,11 @@ describe('where a notification leads', () => {
     });
     expect(notificationLink({ entityType: 'Asset', entityId: 'x' })?.to).toBe('/assets/x');
     expect(notificationLink({ entityType: 'Case', entityId: 'c' })?.to).toBe('/cases/c');
+    // Desk notifications open the desk's view, never the requester's.
+    expect(notificationLink({ entityType: 'CaseDesk', entityId: 'c' })).toEqual({
+      to: '/case-queue/c',
+      label: 'Open case',
+    });
     expect(notificationLink({ entityType: 'Unknown', entityId: 'u' })).toBeNull();
     expect(notificationLink({ entityType: 'ApprovalRequest', entityId: null })).toBeNull();
   });
@@ -150,6 +185,23 @@ describe('the dropdown', () => {
     fireEvent.click(await screen.findByText(/Employee: Hassan Ali/));
 
     await waitFor(() => expect(screen.getByText('Approval page')).toBeInTheDocument());
+  });
+
+  it('an assigned case opens that case on the desk, is marked read, and the count drops', async () => {
+    serve([CORRECTION, ISSUE, ASSIGNED]);
+    renderBell();
+
+    open(await screen.findByRole('button', { name: 'Notifications, 3 unread' }));
+    expect(await screen.findByText('Open case →')).toBeInTheDocument();
+    fireEvent.click(screen.getByText(ASSIGNED.title));
+
+    await waitFor(() => expect(screen.getByText('Desk case case-21')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Notifications, 2 unread' })).toBeInTheDocument(),
+    );
+    expect(requests).toContainEqual({ method: 'POST', path: '/notifications/n-3/read' });
+    // Reading the notification is all that happened: nothing touched the case.
+    expect(requests.some((r) => r.path.startsWith('/cases'))).toBe(false);
   });
 
   it('an asset issue opens the issue queue on that issue', async () => {

@@ -33,7 +33,9 @@ export function useCaseCatalogue(enabled = true) {
   });
 
   return {
-    catalogue: query.data ?? EMPTY,
+    // Shared by every consumer of this key, so one unexpected payload must
+    // read as an empty catalogue rather than crash each of them.
+    catalogue: Array.isArray(query.data) ? query.data : EMPTY,
     isLoading: query.isLoading,
     isError: query.isError,
     error: query.error,

@@ -67,6 +67,7 @@ const CATEGORIES = [
 
 const db = vi.hoisted(() => ({
   employee: { findFirst: vi.fn() },
+  user: { findMany: vi.fn() },
   department: { findFirst: vi.fn(), findMany: vi.fn() },
   caseCategory: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
   case: {
@@ -242,6 +243,8 @@ beforeEach(() => {
 
   db.auditLog.create.mockResolvedValue({ id: 'audit-1' });
   db.notification.create.mockResolvedValue({ id: 'notification-1' });
+  // Nobody holds a desk grant unless a test says so.
+  db.user.findMany.mockResolvedValue([]);
 });
 
 /** Removes `department: {...}`, which is a join rather than a column. */

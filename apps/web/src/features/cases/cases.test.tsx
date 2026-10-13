@@ -125,6 +125,7 @@ const caseRecord = (overrides: Record<string, unknown> = {}) => ({
   requesterEmployeeNumber: '1001',
   assignedUserId: null,
   assignedToName: null,
+  assignedAt: null,
   messageCount: 0,
   attachmentCount: 0,
   createdAt: '2026-09-01T09:00:00.000Z',

@@ -21,6 +21,7 @@ import { MyCorrectionsCard } from '@/features/time/my-corrections-card';
 import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
 import { MyCasesCard } from '@/features/cases/my-cases-card';
+import { MyAssignedWorkCard } from '@/features/cases/my-assigned-work-card';
 import { MyAssetsCard } from '@/features/assets/my-assets-card';
 import { AssetOperationsCard } from '@/features/assets/asset-operations-card';
 import { LunchTodayCard } from '@/features/lunch/lunch-today-card';
@@ -291,6 +292,12 @@ export function EmployeeDashboard() {
               this module an employee is asked to answer. */}
           <MyAssetsCard />
         </DashboardGrid>
+
+        {/* What is waiting on THIS person to act - cases handed to them and,
+            for whoever works the register, open asset issues. Full width,
+            because it is a table; renders itself away for everybody who
+            staffs no desk. */}
+        <MyAssignedWorkCard />
 
         {/* Leave, as one number, full width beneath the service row - the same
             shape as the attendance band above it, and the same left and right

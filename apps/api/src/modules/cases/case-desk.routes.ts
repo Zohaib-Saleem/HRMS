@@ -47,6 +47,7 @@ import {
   toDeskDetail,
   type CaseDeskAgent,
 } from './case-desk.service.js';
+import { caseQueueOwners, notifyDesk } from './case-notify.service.js';
 
 /**
  * The desk: the people who answer cases.
@@ -392,7 +393,11 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
       const [updated] = await prisma.$transaction([
         prisma.case.update({
           where: { id: row.id },
-          data: { assignedUserId: input.assignedUserId, lastMessageAt: new Date() },
+          data: {
+            assignedUserId: input.assignedUserId,
+            assignedAt: input.assignedUserId ? new Date() : null,
+            lastMessageAt: new Date(),
+          },
           include: CASE_INCLUDE,
         }),
         eventMessage(auth.companyId, row.id, event, true),
@@ -413,17 +418,29 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
       /*
        * The new owner is told, unless they are the person who just took it -
        * a notification about your own click is noise, and noise is what makes
-       * people stop reading the inbox the real ones arrive in.
+       * people stop reading the inbox the real ones arrive in. A case put back
+       * on the queue goes to the queue's owners instead, so "nobody's" never
+       * means "nobody knows". The old assignee is not told either way: they
+       * are no longer the person who has to act.
        */
-      if (input.assignedUserId && input.assignedUserId !== auth.userId) {
-        await notify({
+      if (input.assignedUserId) {
+        await notifyDesk({
           companyId: auth.companyId,
-          userId: input.assignedUserId,
-          type: 'CASE_UPDATE',
+          caseId: row.id,
+          userIds: [input.assignedUserId],
+          actorUserId: auth.userId,
           title: `Case ${row.caseNumber} assigned to you`,
           message: `${row.subject} - ${CASE_PRIORITY_LABELS[row.priority as CasePriority].toLowerCase()} priority, filed with ${row.department.name}.`,
-          entityType: 'Case',
-          entityId: row.id,
+          logger: request.log,
+        });
+      } else if (row.assignedUserId) {
+        await notifyDesk({
+          companyId: auth.companyId,
+          caseId: row.id,
+          userIds: await caseQueueOwners(auth.companyId, row.departmentId),
+          actorUserId: auth.userId,
+          title: `Case ${row.caseNumber} is unassigned`,
+          message: `${row.subject} - put back on the ${row.department.name} queue and waiting for somebody to pick it up.`,
           logger: request.log,
         });
       }
@@ -528,14 +545,29 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
 
       await tellRequester(
         row,
-        `Case ${row.caseNumber} is now ${CASE_STATUS_LABELS[input.status].toLowerCase()}`,
+        input.status === 'PENDING'
+          ? `Case ${row.caseNumber} is waiting on you`
+          : `Case ${row.caseNumber} is now ${CASE_STATUS_LABELS[input.status].toLowerCase()}`,
         // The note travels only when it was a public one. An internal note is
         // not sent, not summarised, and not hinted at.
         input.note && !input.internal
           ? `${row.subject} - ${input.note}`
-          : `${row.subject} - ${CASE_STATUS_LABELS[input.status]}.`,
+          : input.status === 'PENDING'
+            ? `${row.subject} - the desk needs more information from you. Reply on the case.`
+            : `${row.subject} - ${CASE_STATUS_LABELS[input.status]}.`,
         request.log,
       );
+
+      // Somebody else moved the assignee's case: they are the one who acts on it.
+      await notifyDesk({
+        companyId: auth.companyId,
+        caseId: row.id,
+        userIds: [row.assignedUserId],
+        actorUserId: auth.userId,
+        title: `Case ${row.caseNumber} moved to ${CASE_STATUS_LABELS[input.status].toLowerCase()}`,
+        message: `${row.subject} - ${CASE_STATUS_LABELS[from]} to ${CASE_STATUS_LABELS[input.status]}.`,
+        logger: request.log,
+      });
 
       return reply.send({ data: toCaseRecord(updated, callerContext(auth, false)) });
     },
@@ -591,6 +623,16 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
         before: { priority: from },
         after: { priority: input.priority },
         request,
+      });
+
+      await notifyDesk({
+        companyId: auth.companyId,
+        caseId: row.id,
+        userIds: [row.assignedUserId],
+        actorUserId: auth.userId,
+        title: `Case ${row.caseNumber} is now ${CASE_PRIORITY_LABELS[input.priority].toLowerCase()} priority`,
+        message: `${row.subject} - priority changed from ${CASE_PRIORITY_LABELS[from]} to ${CASE_PRIORITY_LABELS[input.priority]}.`,
+        logger: request.log,
       });
 
       return reply.send({ data: toCaseRecord(updated, callerContext(auth, false)) });
@@ -662,6 +704,7 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
              * it now needs to be seen.
              */
             assignedUserId: null,
+            assignedAt: null,
             lastMessageAt: now,
           },
           include: CASE_INCLUDE,
@@ -709,6 +752,17 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
         input.note ? `${row.subject} - ${input.note}` : `${row.subject} - ${moved}`,
         request.log,
       );
+
+      // The case arrives on the new department's queue with nobody holding it.
+      await notifyDesk({
+        companyId: auth.companyId,
+        caseId: row.id,
+        userIds: await caseQueueOwners(auth.companyId, routing.departmentId),
+        actorUserId: auth.userId,
+        title: `Case ${row.caseNumber} routed to ${destination?.department.name ?? 'your queue'}`,
+        message: `${row.subject} - ${moved.replace(/\.$/, '')}, unassigned.`,
+        logger: request.log,
+      });
 
       return reply.send({ data: toCaseRecord(updated, callerContext(auth, false)) });
     },
@@ -796,6 +850,19 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
           request.log,
         );
       }
+
+      // A colleague wrote on the assignee's case. The text stays on the case.
+      await notifyDesk({
+        companyId: auth.companyId,
+        caseId: row.id,
+        userIds: [row.assignedUserId],
+        actorUserId: auth.userId,
+        title: input.internal
+          ? `Internal note on case ${row.caseNumber}`
+          : `Reply sent on case ${row.caseNumber}`,
+        message: `${row.subject} - a colleague added to the case you hold.`,
+        logger: request.log,
+      });
 
       return reply.status(201).send({ data: { id: message.id, internal: input.internal } });
     },

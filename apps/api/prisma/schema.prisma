@@ -4375,8 +4375,11 @@ model Case {
   priority CasePriority @default(NORMAL)
   status   CaseStatus   @default(OPEN)
 
-  /// Null until somebody picks it up. Nothing in phase 1 writes it.
+  /// Null until somebody picks it up.
   assignedUserId String?
+  /// When the current assignee was given it. Cleared with the assignee; the
+  /// full history of hand-overs is the `case.assign` audit trail.
+  assignedAt     DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

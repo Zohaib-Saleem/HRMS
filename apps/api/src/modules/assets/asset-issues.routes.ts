@@ -12,6 +12,7 @@ import { parseOrThrow } from '../../core/validate.js';
 import { recordAudit } from '../../core/audit.js';
 import { NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuth, requireAuthContext, requirePermission } from '../../auth/guards.js';
+import { notify } from '../../core/notifications/notification.service.js';
 import { ASSET_INCIDENT_INCLUDE, toAssetIncidentRecord } from './asset-lifecycle.service.js';
 
 /**
@@ -136,6 +137,24 @@ export const assetIssueRoutes: FastifyPluginAsync = async (app) => {
         after: { incidentId: existing.id, status: 'RESOLVED', resolutionNotes: input.resolutionNotes },
         request,
       });
+
+      /*
+       * The employee who reported it is told what was done - the one update on
+       * an issue that needs their attention. It opens their own view of the
+       * asset, which `GET /assets/:id` already scopes to what they hold.
+       */
+      if (existing.reportedById && existing.reportedById !== auth.userId) {
+        await notify({
+          companyId: auth.companyId,
+          userId: existing.reportedById,
+          type: 'SYSTEM',
+          title: 'Asset issue resolved',
+          message: `${existing.asset.assetTag} - ${existing.asset.name}\nIssue: ${existing.reason}\nResolution: ${input.resolutionNotes}`,
+          entityType: 'Asset',
+          entityId: existing.asset.id,
+          logger: request.log,
+        });
+      }
 
       const row = await prisma.assetIncident.findFirstOrThrow({
         where: { id: existing.id },

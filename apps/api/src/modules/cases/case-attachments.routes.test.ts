@@ -63,6 +63,7 @@ vi.mock('../../core/storage/object-store.js', () => ({
   deleteObject: vi.fn(async (key: string) => store.objects.delete(key)),
 }));
 
+const { matches } = await import('./case-store.test-kit.js');
 const { caseAttachmentRoutes } = await import('./case-attachments.routes.js');
 const { registerErrorHandler } = await import('../../core/error-handler.js');
 
@@ -192,15 +193,10 @@ beforeEach(() => {
     const where = args.where;
 
     if (Array.isArray(where.AND)) {
-      const [byId, scope] = where.AND as [{ id: string }, Record<string, never>];
-      const departments = (scope.departmentId as { in?: string[] } | undefined)?.in;
+      // The desk's scope clause is evaluated as written, OR and all.
       return Promise.resolve(
-        CASES.find(
-          (row) =>
-            row.id === byId.id &&
-            row.companyId === (scope.companyId as unknown as string) &&
-            (departments === undefined || departments.includes(row.departmentId)),
-        ) ?? null,
+        CASES.map((row) => ({ assignedUserId: null, ...row })).find((row) => matches(row, where)) ??
+          null,
       );
     }
 

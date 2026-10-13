@@ -432,6 +432,7 @@ export function toCaseRecord(row: CaseRow, caller: CaseCallerContext): CaseRecor
 
     assignedUserId: row.assignedUserId,
     assignedToName: row.assignedTo ? personName(row.assignedTo) : null,
+    assignedAt: row.assignedAt?.toISOString() ?? null,
 
     messageCount: row._count.messages,
     attachmentCount: row._count.attachments,

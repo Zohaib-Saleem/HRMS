@@ -60,7 +60,8 @@ export interface CaseDeskAgent {
    * A list rather than one id, because the shape of the answer should not have
    * to change when somebody is on two desks - and because an empty list is the
    * meaningful case: a departmental grant with no department behind it sees
-   * nothing, which `deskScopeFilter` turns into no rows rather than no filter.
+   * only what is assigned to it, which `deskScopeFilter` turns into exactly
+   * those rows rather than no filter.
    */
   departmentIds: string[];
 }
@@ -102,11 +103,26 @@ export async function resolveDeskAgent(auth: AuthContext): Promise<CaseDeskAgent
  * Returns null for "no rows", which every caller must treat as no rows rather
  * than as no filter - the mistake that turns a departmental agent into a
  * company-wide one is exactly one `?? {}` away, so the type makes it explicit.
+ *
+ * A departmental agent also reaches the cases ASSIGNED to them, wherever they
+ * are filed. Assignment is the desk handing somebody a case on purpose, and an
+ * assignee who is notified and then meets a 404 is the failure this closes:
+ * `assertAssignable` accepts anybody holding a desk grant, so a case can
+ * rightly be handed across departments. The reach ends with the assignment -
+ * reassign the case and it leaves their scope unless their department holds it.
  */
 export function deskScopeFilter(agent: CaseDeskAgent): Prisma.CaseWhereInput | null {
   if (agent.scope === 'ALL') return { companyId: agent.companyId };
-  if (agent.scope === 'NONE' || agent.departmentIds.length === 0) return null;
-  return { companyId: agent.companyId, departmentId: { in: agent.departmentIds } };
+  if (agent.scope === 'NONE') return null;
+
+  const mine: Prisma.CaseWhereInput = { assignedUserId: agent.userId };
+  return {
+    companyId: agent.companyId,
+    OR:
+      agent.departmentIds.length > 0
+        ? [{ departmentId: { in: agent.departmentIds } }, mine]
+        : [mine],
+  };
 }
 
 /**

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ArrowLeft, LifeBuoy, Paperclip, RotateCcw, Send, X } from 'lucide-react';
@@ -11,12 +11,14 @@ import {
   CASE_PRIORITY_LABELS,
   CASE_STATUS_DESCRIPTIONS,
   CASE_STATUS_LABELS,
+  PERMISSIONS,
   caseAttachmentUrl,
   safeAttachmentName,
   type CaseAttachmentRecord,
   type CaseDetail,
 } from '@hrms/shared';
-import { api, errorMessage } from '@/lib/api';
+import { ApiError, api, errorMessage } from '@/lib/api';
+import { usePermissions } from '@/features/auth/session-context';
 import { cn } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
@@ -59,6 +61,8 @@ import { CASE_PRIORITY_TONE, CASE_STATUS_TONE, caseDay, caseTimestamp, fileSize 
 export function CaseDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
+  const { has } = usePermissions();
+  const onDesk = has(PERMISSIONS.CASE_READ_DEPARTMENT) || has(PERMISSIONS.CASE_READ_ALL);
 
   const [reply, setReply] = React.useState('');
   const [files, setFiles] = React.useState<File[]>([]);
@@ -157,6 +161,16 @@ export function CaseDetailPage() {
         </Card>
       </>
     );
+  }
+
+  /*
+   * Not the caller's own case, but they staff a desk: the case may be one they
+   * were assigned. "Assigned to you" notifications written before they carried
+   * the desk's link point here, so they are sent on to the desk's view, which
+   * makes its own decision about whether this caller may read it.
+   */
+  if (query.error instanceof ApiError && query.error.status === 404 && onDesk) {
+    return <Navigate to={`/case-queue/${encodeURIComponent(id)}`} replace />;
   }
 
   if (query.isError || !detail) {

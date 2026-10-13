@@ -32,6 +32,9 @@ export function notificationLink(
       return { to: `/assets/${id}`, label: 'View asset' };
     case 'Case':
       return { to: `/cases/${id}`, label: 'View case' };
+    // The desk's view of a case: assigned to the reader, or on their queue.
+    case 'CaseDesk':
+      return { to: `/case-queue/${id}`, label: 'Open case' };
     default:
       return null;
   }
@@ -152,7 +155,7 @@ export function NotificationCenter() {
               <EmptyState
                 icon={Inbox}
                 title="Nothing yet"
-                description="Approvals and system messages will appear here."
+                description="Approvals, cases and system messages will appear here."
                 className="py-10"
               />
             ) : (

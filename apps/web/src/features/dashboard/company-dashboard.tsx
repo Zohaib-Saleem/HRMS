@@ -57,6 +57,7 @@ import {
   type PersonDay,
   type TrendRangeKey,
 } from './dashboard-data';
+import { MyAssignedWorkCard } from '@/features/cases/my-assigned-work-card';
 
 /**
  * The company dashboard.
@@ -282,6 +283,10 @@ export function CompanyDashboard() {
           />
         </div>
       </section>
+
+      {/* Above the company's figures: the cases and issues waiting on the
+          person reading this. Renders itself away without a desk grant. */}
+      <MyAssignedWorkCard />
 
       {canReadAttendance ? (
         <>

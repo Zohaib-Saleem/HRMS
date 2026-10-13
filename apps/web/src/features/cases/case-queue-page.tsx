@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Flame, Headset, Inbox, UserCheck, UserPlus } from 'lucide-react';
 import {
@@ -65,7 +65,12 @@ export function CaseQueuePage() {
   const { has } = usePermissions();
   const canAssign = has(PERMISSIONS.CASE_ASSIGN);
 
-  const [filters, setFilters] = React.useState(INITIAL);
+  // `?assignee=unassigned` (or `me`) is where the dashboard's links land.
+  const [params] = useSearchParams();
+  const [filters, setFilters] = React.useState(() => ({
+    ...INITIAL,
+    assignee: params.get('assignee') ?? INITIAL.assignee,
+  }));
   const debouncedQuery = useDebounced(filters.q, 350);
 
   const { catalogue } = useCaseCatalogue();

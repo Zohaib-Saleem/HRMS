@@ -53,6 +53,7 @@ beforeEach(() => {
   useAssetDb(db);
   wirePeople(db);
   db.auditLog.create.mockResolvedValue({ id: 'audit-1' });
+  db.notification.create.mockResolvedValue({ id: 'notification-1' });
   db.assetIncident.findMany.mockResolvedValue([issue()]);
   db.assetIncident.findFirst.mockResolvedValue(issue());
   db.assetIncident.updateMany.mockResolvedValue({ count: 1 });
@@ -136,6 +137,22 @@ describe('resolving an issue', () => {
     });
     expect(response.json().data).toMatchObject({ status: 'RESOLVED', resolvedBy: { fullName: 'IT Manager' } });
     expect(auditActions(db)).toContain('asset.issue.resolved');
+  });
+
+  it('tells the employee who reported it what was done, on their own view of the asset', async () => {
+    await resolve(IT);
+
+    expect(db.notification.create).toHaveBeenCalledTimes(1);
+    expect(db.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: AHMED.userId,
+        title: 'Asset issue resolved',
+        entityType: 'Asset',
+        entityId: 'asset-1',
+        message: expect.stringContaining('Replaced the charger'),
+      }),
+      select: { id: true },
+    });
   });
 
   it('a second resolution is refused, not written over the first', async () => {
