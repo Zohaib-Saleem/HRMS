@@ -346,6 +346,7 @@ model Company {
   // --- phase 3 ---
   approvalRequests      ApprovalRequest[]
   notifications         Notification[]
+  pushSubscriptions     PushSubscription[]
   attendanceRecords     AttendanceRecord[]
   attendanceAdjustments AttendanceAdjustment[]
   regularizations       AttendanceRegularizationRequest[]
@@ -1070,8 +1071,10 @@ model User {
   suspendedUsers User[] @relation("UserSuspendedBy")
 
   // --- phase 3 ---
-  notifications       Notification[]
-  passwordResetTokens PasswordResetToken[]
+  notifications          Notification[]
+  passwordResetTokens    PasswordResetToken[]
+  pushSubscriptions      PushSubscription[]
+  notificationPreference NotificationPreference?
 
   // --- cases (helpdesk) ---
   casesAssigned    Case[]           @relation("CaseAssignee")
@@ -1643,9 +1646,113 @@ model Notification {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  pushDeliveries PushDelivery[]
+
   @@index([userId, readAt])
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+// ------------------------------------------------------------ browser push
+
+/// Where one browser's push registration stands.
+enum PushSubscriptionStatus {
+  ACTIVE
+  /// The person turned notifications off for this browser.
+  DISABLED
+  /// The push service said the endpoint is gone (404/410), or rejected our
+  /// VAPID identity (403). The browser re-registers on its next visit.
+  EXPIRED
+}
+
+/// One browser a person has turned push notifications on in.
+///
+/// The endpoint is the browser's own address at its push service and is
+/// unique: when a different person signs in on the same browser and turns
+/// push on, the row moves to them, so the previous person's notifications
+/// stop appearing on a machine they no longer use.
+model PushSubscription {
+  id        String @id @default(cuid())
+  companyId String
+  userId    String
+
+  endpoint   String @unique
+  /// The browser's public key. Not secret.
+  p256dh     String
+  /// The browser's auth secret, encrypted with `core/secrets.ts`. Never logged
+  /// and never returned by the API.
+  authSecret String
+
+  userAgent String?
+  status    PushSubscriptionStatus @default(ACTIVE)
+
+  lastSuccessAt DateTime?
+  lastFailureAt DateTime?
+  /// A bare code - an HTTP status or NETWORK - never a response body.
+  lastErrorCode String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries PushDelivery[]
+
+  @@index([userId, status])
+  @@map("push_subscriptions")
+}
+
+enum PushDeliveryStatus {
+  PENDING
+  /// Claimed by the worker. A row stuck here past a few minutes is handed back.
+  SENDING
+  /// The push service accepted it. Not proof the person saw it.
+  SENT
+  /// Gave up: retries exhausted, too old to be worth showing, or rejected.
+  FAILED
+  /// The subscription turned out to be gone.
+  EXPIRED
+}
+
+/// One attempt-tracked push of one notification to one browser.
+///
+/// The outbox: rows are written next to the notification and a worker sends
+/// them, so a push service being down delays a push without failing the
+/// request that caused it. Unique per (notification, browser), which is what
+/// makes enqueueing twice harmless.
+model PushDelivery {
+  id             String @id @default(cuid())
+  notificationId String
+  subscriptionId String
+
+  status        PushDeliveryStatus @default(PENDING)
+  attempts      Int                @default(0)
+  nextAttemptAt DateTime           @default(now())
+  lastErrorCode String?
+  sentAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  notification Notification     @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  subscription PushSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, subscriptionId])
+  @@index([status, nextAttemptAt])
+  @@map("push_deliveries")
+}
+
+/// Per-person notification choices. Push only: the in-app inbox is not optional.
+model NotificationPreference {
+  userId              String   @id
+  /// `PushCategory` values from @hrms/shared the person has switched off.
+  pushMutedCategories String[] @default([])
+
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
 }
 
 // ------------------------------------------------------------ password resets

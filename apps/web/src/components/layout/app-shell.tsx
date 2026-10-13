@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ChevronRight, Menu, Search } from 'lucide-react';
 import { NAV_SECTIONS, ROUTE_TITLES } from '@/navigation/nav-config';
@@ -7,6 +7,7 @@ import { SidebarNav } from './sidebar';
 import { UserMenu } from './user-menu';
 import { NotificationCenter } from '@/features/notifications/notification-center';
 import { cn } from '@/lib/utils';
+import { onPushClick, syncPush } from '@/lib/push';
 import { BreadcrumbTitleProvider } from './breadcrumb-title';
 
 const COLLAPSE_KEY = 'hrms.sidebar.collapsed';
@@ -47,6 +48,15 @@ export function AppShell() {
       return next;
     });
   }, []);
+
+  const navigate = useNavigate();
+
+  // Browser push: refresh this browser's registration once per visit (never
+  // prompts), and route in place when a clicked push focuses this tab.
+  React.useEffect(() => {
+    void syncPush().catch(() => undefined);
+    return onPushClick((path) => navigate(path));
+  }, [navigate]);
 
   // Close the mobile drawer whenever the route changes.
   React.useEffect(() => setMobileOpen(false), [location.pathname]);

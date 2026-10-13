@@ -138,6 +138,17 @@ export const DOC_ENTRIES: readonly DocEntry[] = [
     category: 'workforce',
     order: 3,
   },
+  {
+    // Everybody: turning notifications on is self-service, and the iPhone
+    // steps are the part people most need. Server setup is in the admin manual.
+    slug: 'browser-notifications',
+    file: 'HRMS-BROWSER-NOTIFICATIONS-GUIDE.md',
+    title: 'Browser notifications',
+    summary:
+      'Turning on pop-up notifications for approvals, cases and more, what they leave off a lock screen, and iPhone setup.',
+    category: 'workforce',
+    order: 4,
+  },
 
   // --- time ------------------------------------------------------------------
   {

@@ -35,6 +35,15 @@ export function notificationLink(
     // The desk's view of a case: assigned to the reader, or on their queue.
     case 'CaseDesk':
       return { to: `/case-queue/${id}`, label: 'Open case' };
+    case 'Payslip':
+      return { to: `/payslips/${id}`, label: 'View payslip' };
+    case 'PayrollRun':
+      return { to: `/payroll/runs/${id}`, label: 'Open payroll run' };
+    // The loans screen lists the employee's own; there is no single-loan page.
+    case 'EmployeeLoan':
+      return { to: '/loans', label: 'View loans' };
+    case 'Interview':
+      return { to: `/recruitment/interviews/${id}`, label: 'Open interview' };
     default:
       return null;
   }

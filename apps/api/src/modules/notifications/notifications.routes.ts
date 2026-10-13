@@ -11,6 +11,29 @@ import { parseOrThrow } from '../../core/validate.js';
 import { buildMeta, toSkipTake } from '../../core/pagination.js';
 import { NotFoundError } from '../../core/errors.js';
 import { requireAuth, requireAuthContext } from '../../auth/guards.js';
+import { pushRoutes } from './push.routes.js';
+
+function toRecord(row: {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  entityType: string | null;
+  entityId: string | null;
+  readAt: Date | null;
+  createdAt: Date;
+}): NotificationRecord {
+  return {
+    id: row.id,
+    type: row.type as NotificationType,
+    title: row.title,
+    message: row.message,
+    entityType: row.entityType,
+    entityId: row.entityId,
+    readAt: row.readAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
 
 /**
  * Notifications are always personal: every query is scoped to the caller's own
@@ -19,6 +42,9 @@ import { requireAuth, requireAuthContext } from '../../auth/guards.js';
  */
 export const notificationRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
+
+  // Browser push: this person's registrations and preferences.
+  await app.register(pushRoutes, { prefix: '/push' });
 
   app.get('/', async (request, reply) => {
     const auth = requireAuthContext(request);
@@ -40,16 +66,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       }),
     ]);
 
-    const data: NotificationRecord[] = rows.map((row) => ({
-      id: row.id,
-      type: row.type as NotificationType,
-      title: row.title,
-      message: row.message,
-      entityType: row.entityType,
-      entityId: row.entityId,
-      readAt: row.readAt?.toISOString() ?? null,
-      createdAt: row.createdAt.toISOString(),
-    }));
+    const data: NotificationRecord[] = rows.map(toRecord);
 
     return reply.send({ data, meta: buildMeta(query.page, query.limit, total) });
   });
@@ -60,6 +77,21 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       where: { userId: auth.userId, readAt: null },
     });
     return reply.send({ data: { count } });
+  });
+
+  /**
+   * One notification, for whoever is signed in. This is where a clicked
+   * browser push lands: the push carries only the notification's id, and the
+   * app reads it back here before deciding where to go. Another person's id is
+   * a 404 - which is also what a push shown in a browser somebody else has
+   * since signed in to will get.
+   */
+  app.get('/:id', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const { id } = parseOrThrow(idParamSchema, request.params);
+    const row = await prisma.notification.findFirst({ where: { id, userId: auth.userId } });
+    if (!row) throw new NotFoundError('Notification');
+    return reply.send({ data: toRecord(row) });
   });
 
   app.post('/:id/read', async (request, reply) => {

@@ -1,0 +1,10 @@
+{
+  "name": "HRMS",
+  "short_name": "HRMS",
+  "description": "People, time and payroll operations.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff"
+}

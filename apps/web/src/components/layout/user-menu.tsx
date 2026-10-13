@@ -8,6 +8,7 @@ import { cn, initials } from '@/lib/utils';
 import { useSession } from '@/features/auth/session-context';
 import { useTheme } from '@/app/theme';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
+import { releasePushOnSignOut } from '@/lib/push';
 
 const itemClass =
   'flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] outline-none transition-colors data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground';
@@ -32,6 +33,9 @@ export function UserMenu() {
 
     setSigningOut(true);
     try {
+      // Before the session ends: the next person on this browser must not
+      // receive this person's notifications.
+      await releasePushOnSignOut();
       await api.post('/auth/logout');
       clear();
       navigate('/login', { replace: true });

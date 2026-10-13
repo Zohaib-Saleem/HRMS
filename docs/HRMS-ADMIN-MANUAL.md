@@ -2038,3 +2038,78 @@ candidates are entered by you. No CV parsing. No email to candidates. No offer
 letter PDF. No automatic offer expiry. No scoring, ranking or automatic
 shortlisting. No approval workflow on opening a vacancy, making an offer or
 converting somebody. And nothing reaches payroll.
+
+## 19. Browser notifications
+
+Browser notifications (web push) are a second channel for the in-app notifications, never a
+replacement for them. Every notification is written to the bell first. A push is then queued for
+each browser the recipient has turned on. People turn it on themselves from **My profile**; the
+[Browser notifications guide](HRMS-BROWSER-NOTIFICATIONS-GUIDE.md) is written for them.
+
+### Switching it on for the server
+
+Push is off until the API has a VAPID key pair: the keys that identify this server to the browsers'
+push services. Without one, the profile card says notifications are not set up, and nothing else
+changes.
+
+1. Generate the pair **once**: `npx web-push generate-vapid-keys`.
+2. Add three variables to the production `.env`:
+   - `VAPID_PUBLIC_KEY`
+   - `VAPID_PRIVATE_KEY`
+   - `VAPID_SUBJECT` — a contact the push services can use, such as `mailto:it@yourcompany.com`
+3. Restart the API. The boot log says `browser push is configured`.
+
+Setting one or two of the three stops the boot with a message naming the missing ones. The private
+key is a secret: it stays in the server environment and is never sent to a browser. Only the public
+key is.
+
+**Keep the pair.** A new pair invalidates every browser's registration: each send comes back
+`403`, the browser is marked expired, and each person has to press Enable again.
+
+### Who is told what
+
+Push follows the in-app notification exactly. Whoever gets the bell entry gets the push, so
+recipients are resolved by the same code as before:
+
+- approvers from the approval chain;
+- the case desk from `case.read.department` plus an act grant, the department head, or the
+  dispatchers when neither exists (§15);
+- asset issues to Super Admin and every `asset.update` holder (§17).
+
+One person holding several of the qualifying roles gets one notification.
+
+Added with this feature, and so now in the bell too:
+
+| Event | Who is told |
+|---|---|
+| A request withdrawn or cancelled | The approvers it was still waiting on. The requester too, when somebody else cancelled it. |
+| Payslips published | Each employee whose payslip that publish released. |
+| A calculated payroll run with no blocking exceptions | Every `payroll.approve` holder except whoever ran the calculation. |
+| A loan or salary advance approved, declined or released from the Loans screen | The employee. Decisions made on the Approvals screen were already told. |
+
+### Delivery, retries and what "sent" means
+
+- A push is written to an outbox (`push_deliveries`) and sent by a worker in the API. The worker
+  starts immediately and re-checks every 30 seconds. A push service being down never fails the
+  request that caused the notification.
+- **Retried:** `429`, `5xx` and network errors, up to 5 attempts in total, after 30 s, 2 min,
+  10 min and 30 min.
+- **Expired:** `404`, `410` and `403` mark the browser's registration expired and stop sending to
+  it. The browser re-registers itself on its next visit.
+- **Dropped:** `400`/`413` and anything more than 24 hours old.
+- The same person told the same thing about the same record within two minutes gets one push. A
+  retried business event does not buzz twice.
+- **SENT** means the push service accepted the message. Whether the device was on and displayed
+  it is not reported back by any browser, so HRMS does not claim it.
+- Finished delivery rows are pruned after 30 days.
+
+Logs carry the delivery id, subscription id and a bare status code (`PUSH_SEND_FAILED`,
+`PUSH_RUN`). They never contain the endpoint, the browser's keys or the notification text. The
+browser's auth secret is encrypted at rest with the same key as device comm keys. Rotating
+`SESSION_SECRET` therefore expires every registration until each browser next visits.
+
+### What is not here
+
+- No company-wide switch to force push on for anybody. Each person opts in per browser.
+- No push for password resets. The request comes from somebody who is not signed in.
+- No email or SMS fallback from this feature. Email is the separate mail setting.

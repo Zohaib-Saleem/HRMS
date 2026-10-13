@@ -644,6 +644,12 @@ export async function cancel(
     throw new ForbiddenError('Only the person who raised a request can cancel it.');
   }
 
+  // Read before the seats close: these are the people it was waiting on.
+  const waitingOn = await prisma.approvalStepApprover.findMany({
+    where: { approvalStep: { approvalRequestId: approval.id }, status: 'PENDING' },
+    select: { employee: { select: { userId: true } } },
+  });
+
   const now = new Date();
   const updated = await prisma.$transaction(async (tx) => {
     /*
@@ -689,7 +695,67 @@ export async function cancel(
     request,
   });
 
+  await notifyCancelled(approval, {
+    actorUserId: auth.userId,
+    byOwner: isOwner,
+    reason,
+    approverUserIds: waitingOn.map((seat) => seat.employee.userId),
+    request,
+  });
+
   return updated;
+}
+
+/**
+ * Who hears that a request was withdrawn.
+ *
+ * The approvers it was still waiting on, so it does not sit in their bell as
+ * something to do; and the requester, when somebody other than them cancelled
+ * it. Never the person who cancelled it. Best-effort, like every notification.
+ */
+async function notifyCancelled(
+  approval: { id: string; companyId: string; title: string; requesterEmployeeId: string | null },
+  input: {
+    actorUserId: string;
+    byOwner: boolean;
+    reason: string | null;
+    approverUserIds: ReadonlyArray<string | null>;
+    request?: FastifyRequest;
+  },
+): Promise<void> {
+  const told = new Set<string>([input.actorUserId]);
+
+  for (const userId of input.approverUserIds) {
+    if (!userId || told.has(userId)) continue;
+    told.add(userId);
+    await notify({
+      companyId: approval.companyId,
+      userId,
+      type: 'APPROVAL_CANCELLED',
+      title: 'Request withdrawn',
+      message: `${approval.title} - no decision is needed any more.`,
+      entityType: 'ApprovalRequest',
+      entityId: approval.id,
+      logger: input.request?.log,
+    });
+  }
+
+  if (input.byOwner || !approval.requesterEmployeeId) return;
+  const requester = await prisma.employee.findUnique({
+    where: { id: approval.requesterEmployeeId },
+    select: { userId: true },
+  });
+  if (!requester?.userId || told.has(requester.userId)) return;
+  await notify({
+    companyId: approval.companyId,
+    userId: requester.userId,
+    type: 'APPROVAL_CANCELLED',
+    title: 'Request cancelled',
+    message: input.reason ? `${approval.title} - ${input.reason}` : approval.title,
+    entityType: 'ApprovalRequest',
+    entityId: approval.id,
+    logger: input.request?.log,
+  });
 }
 
 async function notifyRequester(

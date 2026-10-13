@@ -9,6 +9,11 @@ import { markAbsencesForPreviousDay } from './modules/time/absence.service.js';
 import { reconcileRecentLeaveForAllCompanies } from './modules/leave/leave-reconciliation.service.js';
 import { syncDueDevices } from './modules/attendance-device/sync.service.js';
 import { verifyEmailProvider } from './core/mail/index.js';
+import {
+  processPushQueue,
+  prunePushDeliveries,
+  pushConfigured,
+} from './core/notifications/push.service.js';
 
 async function main(): Promise<void> {
   await assertDatabaseConnection();
@@ -57,6 +62,9 @@ async function main(): Promise<void> {
         (o) => o.result === 'REVERSED',
       );
       if (reversed.length > 0) app.log.info({ reversed }, 'reconciled leave against attendance');
+
+      const pushes = await prunePushDeliveries();
+      if (pushes > 0) app.log.info({ removed: pushes }, 'pruned finished browser push deliveries');
     } catch (error) {
       app.log.error({ err: error }, 'housekeeping prune failed');
     }
@@ -86,10 +94,31 @@ async function main(): Promise<void> {
   const deviceTimer = setInterval(() => void syncDevices(), 60 * 1000);
   deviceTimer.unref();
 
+  /**
+   * Browser push.
+   *
+   * A notification kicks the worker the moment it is queued, so this tick is
+   * for what that cannot cover: retries whose backoff has elapsed, and anything
+   * queued just before a restart. Off entirely when no VAPID keys are set.
+   */
+  app.log.info(
+    { configured: pushConfigured() },
+    pushConfigured()
+      ? 'browser push is configured'
+      : 'browser push is off: VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT are not set',
+  );
+  const pushTimer = setInterval(() => {
+    processPushQueue().catch((error: unknown) =>
+      app.log.error({ err: error }, 'browser push tick failed'),
+    );
+  }, 30 * 1000);
+  pushTimer.unref();
+
   const shutdown = async (signal: string) => {
     app.log.info({ signal }, 'shutting down');
     clearInterval(pruneTimer);
     clearInterval(deviceTimer);
+    clearInterval(pushTimer);
     await app.close();
     await prisma.$disconnect();
     process.exit(0);

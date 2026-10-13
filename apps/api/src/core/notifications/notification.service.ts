@@ -2,6 +2,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { NotificationType } from '@prisma/client';
 import { prisma } from '../db.js';
 import { emailErrorCode, resolveEmailProvider } from '../mail/index.js';
+import { enqueuePush } from './push.service.js';
 
 /**
  * Notifications.
@@ -10,9 +11,12 @@ import { emailErrorCode, resolveEmailProvider } from '../mail/index.js';
  * decides which channels are used. Business code never touches an email
  * provider directly, so configuring SMTP later changes nothing above this line.
  *
- * In-app delivery is the source of truth and is always written. Email is
- * best-effort: a failing relay must never fail the user's request, because the
- * notification is already durable in the database.
+ * In-app delivery is the source of truth and is always written. Browser push
+ * (`push.service.ts`) is queued from the row once it exists, so every
+ * notification any module sends reaches the recipient's browsers without that
+ * module knowing push exists. Email is best-effort: a failing relay must never
+ * fail the user's request, because the notification is already durable in the
+ * database.
  *
  * Best-effort is not the same as unknown, and that distinction is the point of
  * `NotifyResult`. A caller that fires a notification off to the side does not
@@ -78,6 +82,10 @@ export async function notify(input: NotifyInput): Promise<NotifyResult> {
     },
     select: { id: true },
   });
+
+  // Queued, not sent: a worker delivers it. Never throws, and returns at once
+  // when push is not configured or the recipient has no browser registered.
+  await enqueuePush(notification.id);
 
   if (!input.email || !input.logger) return { id: notification.id, emailStatus: 'skipped' };
 

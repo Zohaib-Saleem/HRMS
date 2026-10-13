@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { FormField, Input } from '@/components/ui/field';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { SESSION_QUERY_KEY, useAuthenticatedSession } from '@/features/auth/session-context';
+import { NotificationSettings } from './notification-settings';
 
 interface SessionRow {
   id: string;
@@ -35,12 +36,13 @@ export function ProfilePage() {
 
   return (
     <>
-      <PageHeader title="My profile" description="Your account details and active sessions." />
+      <PageHeader title="My profile" description="Your account details, notifications and active sessions." />
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="space-y-5 lg:col-span-2">
           <ProfileForm />
           <PasswordForm />
+          <NotificationSettings />
         </div>
 
         <div className="space-y-5">

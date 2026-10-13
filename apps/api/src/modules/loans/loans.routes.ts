@@ -29,6 +29,7 @@ import {
   notifyApprover,
   resolveChain,
 } from '../../core/approvals/approval.service.js';
+import { notify } from '../../core/notifications/notification.service.js';
 import { callerEmployeeOrThrow } from '../time/helpers.js';
 import { evaluateLoanEligibility } from './loan-eligibility.service.js';
 import { currentLoanPolicy } from './loan-policy.service.js';
@@ -69,6 +70,37 @@ const employeeLabel = (e: { firstName: string; lastName: string; displayName: st
 
 /** "loan" or "salary advance", for sentences an audit row or a toast reads. */
 const nounFor = (kind: LoanKind) => LOAN_KIND_LABELS[kind].toLowerCase();
+
+/**
+ * Tells the employee what happened to their loan or advance when it is decided
+ * or released from this screen. A decision made from the Approvals screen is
+ * told by the approval engine instead; these are the routes that bypass it.
+ * Best-effort: `notify` never throws, and an employee without a login is
+ * skipped. Amounts stay in the in-app message - the browser push for an
+ * `EmployeeLoan` never carries them.
+ */
+async function notifyLoanHolder(
+  request: FastifyRequest,
+  loan: { id: string; companyId: string; employeeId: string },
+  title: string,
+  message: string,
+): Promise<void> {
+  const employee = await prisma.employee.findUnique({
+    where: { id: loan.employeeId },
+    select: { userId: true },
+  });
+  if (!employee?.userId) return;
+  await notify({
+    companyId: loan.companyId,
+    userId: employee.userId,
+    type: 'SYSTEM',
+    title,
+    message,
+    entityType: 'EmployeeLoan',
+    entityId: loan.id,
+    logger: request.log,
+  });
+}
 
 async function callerContext(auth: {
   companyId: string;
@@ -650,6 +682,15 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         request,
       });
 
+      await notifyLoanHolder(
+        request,
+        loan,
+        input.activate
+          ? `Your ${nounFor(loan.kind)} was approved and released`
+          : `Your ${nounFor(loan.kind)} was approved`,
+        `${loan.currency} ${principal}${retermed ? ', on revised terms' : ''}.${input.activate ? '' : ' It will be released before payroll starts recovering it.'}`,
+      );
+
       const updated = await prisma.employeeLoan.findUniqueOrThrow({
         where: { id: loan.id },
         include: LOAN_INCLUDE,
@@ -723,6 +764,13 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         request,
       });
 
+      await notifyLoanHolder(
+        request,
+        loan,
+        `Your ${nounFor(loan.kind)} request was declined`,
+        input.reason,
+      );
+
       return reply.send({ data: { id: loan.id, status: 'REJECTED' } });
     },
   );
@@ -764,6 +812,13 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         summary: `Released the ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)}; ${loan.kind === 'SALARY_ADVANCE' ? 'recovered from' : 'repayment starts'} ${day(loan.startMonth)}`,
         request,
       });
+
+      await notifyLoanHolder(
+        request,
+        loan,
+        `Your ${nounFor(loan.kind)} has been released`,
+        `${loan.currency} ${toNumber(loan.principalAmount)} - ${loan.kind === 'SALARY_ADVANCE' ? 'recovered in full from' : 'repayments start with'} the ${day(loan.startMonth)?.slice(0, 7)} payslip.`,
+      );
 
       const updated = await prisma.employeeLoan.findUniqueOrThrow({
         where: { id: loan.id },

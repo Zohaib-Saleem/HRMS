@@ -158,6 +158,15 @@ describe('where a notification leads', () => {
       to: '/case-queue/c',
       label: 'Open case',
     });
+    // The kinds a browser push can be about, added with it.
+    expect(notificationLink({ entityType: 'Payslip', entityId: 'p' })?.to).toBe('/payslips/p');
+    expect(notificationLink({ entityType: 'PayrollRun', entityId: 'r' })?.to).toBe('/payroll/runs/r');
+    expect(notificationLink({ entityType: 'EmployeeLoan', entityId: 'l' })?.to).toBe('/loans');
+    expect(notificationLink({ entityType: 'Interview', entityId: 'i' })?.to).toBe('/recruitment/interviews/i');
+    // An id is encoded, so it cannot add a path segment or a query string.
+    expect(notificationLink({ entityType: 'Asset', entityId: '../users?x=1' })?.to).toBe(
+      '/assets/..%2Fusers%3Fx%3D1',
+    );
     expect(notificationLink({ entityType: 'Unknown', entityId: 'u' })).toBeNull();
     expect(notificationLink({ entityType: 'ApprovalRequest', entityId: null })).toBeNull();
   });

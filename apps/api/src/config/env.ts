@@ -132,6 +132,18 @@ const schema = z.object({
   SMTP_PASSWORD: z.string().optional(),
 
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+
+  // --- Browser push ---------------------------------------------------------
+  // The VAPID key pair that identifies this server to browser push services.
+  // Generate once with `npx web-push generate-vapid-keys` and keep it: a new
+  // pair invalidates every browser registration, and each person has to turn
+  // notifications on again. All three unset means push is off and the profile
+  // screen says so; in-app notifications are unaffected either way. The
+  // private key never leaves the server - only the public one is served.
+  VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+  VAPID_PRIVATE_KEY: z.string().min(1).optional(),
+  /** Who the push services contact about this sender: `mailto:` or `https:`. */
+  VAPID_SUBJECT: z.string().min(1).optional(),
 });
 
 /**
@@ -182,6 +194,29 @@ const schemaWithMailRules = schema.superRefine((value, ctx) => {
       code: z.ZodIssueCode.custom,
       path: ['SMTP_USER'],
       message: 'SMTP_USER is required when SMTP_PASSWORD is set.',
+    });
+  }
+
+  // Push needs the whole key pair and a contact, or none of it. Half a pair
+  // would sign with a key the browsers were never given, and every push would
+  // come back 403 - which reads like expired subscriptions, not a typo.
+  const vapid = [value.VAPID_PUBLIC_KEY, value.VAPID_PRIVATE_KEY, value.VAPID_SUBJECT];
+  if (vapid.some(Boolean) && !vapid.every(Boolean)) {
+    for (const key of ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'] as const) {
+      if (!value[key]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `${key} is required when any VAPID_* variable is set.`,
+        });
+      }
+    }
+  }
+  if (value.VAPID_SUBJECT && !/^(mailto:|https:\/\/)/.test(value.VAPID_SUBJECT)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['VAPID_SUBJECT'],
+      message: 'VAPID_SUBJECT must be a mailto: address or an https:// URL.',
     });
   }
 

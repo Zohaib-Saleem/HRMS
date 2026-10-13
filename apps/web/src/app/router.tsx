@@ -31,6 +31,10 @@ const lazyPage = <K extends string>(
 ) => React.lazy(async () => ({ default: (await load())[name] }));
 
 const ProfilePage = lazyPage(() => import('@/features/profile/profile-page'), 'ProfilePage');
+const NotificationOpenPage = lazyPage(
+  () => import('@/features/notifications/notification-open-page'),
+  'NotificationOpenPage',
+);
 const SettingsLayout = lazyPage(
   () => import('@/features/settings/settings-layout'),
   'SettingsLayout',
@@ -377,6 +381,8 @@ export function AppRoutes() {
       <Route element={<ProtectedRoutes />}>
         <Route index element={<DashboardPage />} />
         <Route path="profile" element={<ProfilePage />} />
+        {/* A clicked browser push. Any signed-in user; it reads their own inbox. */}
+        <Route path="notifications/:id" element={<NotificationOpenPage />} />
 
         {/* Any signed-in user; the server decides which documents they get. */}
         <Route path="help" element={<HelpHomePage />} />

@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import {
   PERMISSIONS,
@@ -36,6 +36,7 @@ import { assertEmployeeInScope, employeeScopeFilter } from '../../auth/scope.js'
 import { toDateOnly } from '../time/helpers.js';
 import { assertTransition, calculateRun, finalizeRun } from './payroll.service.js';
 import { buildPayrollPreview } from './payroll-preview.service.js';
+import { notify } from '../../core/notifications/notification.service.js';
 
 /**
  * Salary components, pay periods, runs, adjustments and payslips.
@@ -822,6 +823,10 @@ export const payrollRunRoutes: FastifyPluginAsync = async (app) => {
         request,
       });
 
+      if (outcome.blocking === 0) {
+        await notifyPayrollApprovers(request, auth.companyId, auth.userId, id);
+      }
+
       const data: PayrollCalculationResult = { ...outcome, status: 'REVIEW' };
       return reply.send({ data });
     },
@@ -1398,9 +1403,12 @@ export const payslipRoutes: FastifyPluginAsync = async (app) => {
         throw new ConflictError('Only a finalized run has payslips to publish.');
       }
 
+      // One timestamp for the batch, so the payslips this call released can
+      // be told apart from any published earlier.
+      const publishedAt = new Date();
       const published = await prisma.payslip.updateMany({
         where: { companyId: auth.companyId, line: { runId: run.id }, publishedAt: null },
-        data: { publishedAt: new Date() },
+        data: { publishedAt },
       });
 
       await recordAudit({
@@ -1414,9 +1422,96 @@ export const payslipRoutes: FastifyPluginAsync = async (app) => {
         request,
       });
 
+      await notifyPayslipHolders(request, auth.companyId, run.id, publishedAt);
+
       return reply.send({ data: { published: published.count } });
     },
   );
 };
+
+/**
+ * Tells each employee whose payslip was just released that it is there.
+ *
+ * Only the payslips this call published - a second publish of the same run
+ * releases nothing and tells nobody. No figures: the payslip page has them,
+ * behind the sign-in, and the browser push for a `Payslip` is generic anyway.
+ */
+async function notifyPayslipHolders(
+  request: FastifyRequest,
+  companyId: string,
+  runId: string,
+  publishedAt: Date,
+): Promise<void> {
+  const payslips = await prisma.payslip.findMany({
+    where: { companyId, publishedAt, line: { runId } },
+    select: {
+      id: true,
+      employee: { select: { userId: true } },
+      line: { select: { run: { select: { period: { select: { name: true } } } } } },
+    },
+  });
+  for (const payslip of payslips) {
+    const userId = payslip.employee.userId;
+    if (!userId) continue;
+    await notify({
+      companyId,
+      userId,
+      type: 'SYSTEM',
+      title: 'Your payslip is ready',
+      message: `Your payslip for ${payslip.line.run.period.name} has been published.`,
+      entityType: 'Payslip',
+      entityId: payslip.id,
+      logger: request.log,
+    });
+  }
+}
+
+/**
+ * A calculated run with nothing blocking is waiting on whoever can approve
+ * it. Those are the accounts whose roles carry `payroll.approve`, less the
+ * person who just ran the calculation - they know.
+ */
+async function notifyPayrollApprovers(
+  request: FastifyRequest,
+  companyId: string,
+  actorUserId: string,
+  runId: string,
+): Promise<void> {
+  const [run, approvers] = await Promise.all([
+    prisma.payrollRun.findFirst({
+      where: { id: runId, companyId },
+      select: { employeeCount: true, period: { select: { name: true } } },
+    }),
+    prisma.user.findMany({
+      where: {
+        companyId,
+        status: 'ACTIVE',
+        id: { not: actorUserId },
+        userRoles: {
+          some: {
+            role: {
+              companyId,
+              rolePermissions: { some: { permission: { key: PERMISSIONS.PAYROLL_APPROVE } } },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    }),
+  ]);
+  if (!run) return;
+  for (const { id: userId } of approvers) {
+    await notify({
+      companyId,
+      userId,
+      type: 'APPROVAL_REQUESTED',
+      title: 'Payroll run ready for approval',
+      message: `${run.period.name}: calculated for ${run.employeeCount} employee(s) with no blocking exceptions.`,
+      entityType: 'PayrollRun',
+      entityId: runId,
+      logger: request.log,
+    });
+  }
+}
 
 export { toLineRecord };
