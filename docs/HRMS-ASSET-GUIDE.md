@@ -411,6 +411,16 @@ records `asset.issue.resolved` in the audit log against the asset, and shows
 one resolution and one refusal (*That issue has already been resolved.*), never
 a second note written over the first.
 
+The employee who reported it is told: an *Asset issue resolved* notification
+carries the asset, the issue and the resolution note. It opens their own view
+of the asset (`/assets/:id`), which shows only what they hold. Nobody is told
+about resolving their own report.
+
+**On the dashboard.** Whoever holds `asset.read.all` and `asset.update` sees
+the open issues on the *My Assigned Cases & Issues* card. Each one opens the
+queue on that issue. Issues have no assignee: everybody who can resolve one
+sees all of them.
+
 Resolving changes nothing about the asset. If the report turns out to mean the
 asset is damaged, needs repair or should be swapped, that is a separate act:
 **Damaged**, **Send for repair**, or a return and a new handover.

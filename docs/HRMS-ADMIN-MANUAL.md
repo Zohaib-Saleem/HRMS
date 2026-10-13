@@ -454,6 +454,25 @@ role gets a shorter page rather than a page of empty boxes. **No figure on it is
 about anybody else**, and the endpoints behind it take no employee id — the
 subject is resolved from the session, so there is no parameter to change.
 
+**My Assigned Cases & Issues** is a full-width card for anybody who works a
+case queue (`case.read.department` or `case.read.all`) or the asset register
+(`asset.read.all` and `asset.update`). It appears on both dashboards and is
+the work waiting on *the person reading it*:
+
+- the cases assigned to them, with reference, subject, category, department,
+  who raised it, priority, status, date assigned and last update. Each row
+  opens that case in the Case queue. Filters: Outstanding (the default),
+  Open, In progress, Pending response and Resolved, plus priority and case
+  type. Cases have no due date, so none is shown;
+- a warning when cases in their queue have nobody assigned, linking to the
+  queue filtered to unassigned;
+- for the register, the open asset issues, each opening that issue.
+
+The count beside the title is their live assigned cases plus the open asset
+issues. The card refreshes every minute, the same as the bell. Everything on
+it comes from the queue and issue endpoints, which apply their own access
+rules.
+
 One strip is added for whoever holds `asset.read.all`: **Asset register** —
 total assets, assigned, available and under repair, with a link through to the
 asset dashboard. It is the only company-wide figure on the page, and it is about
@@ -1357,11 +1376,17 @@ An agent whose employee record has no department sees an empty queue — that is
 the first thing to check when somebody reports the queue is blank. Somebody who
 works two queues is given `case.read.all`; there is no per-person desk roster.
 
+**A case assigned to somebody is always in their queue**, wherever it is filed.
+A case can be handed to anyone holding a read grant, so an HR case given to a
+manager in Design opens for that manager. The reach lasts as long as the
+assignment does: reassign the case and it leaves their queue unless their own
+department holds it. It never shows them anybody else's unassigned cases.
+
 ### The rest of the desk's grants
 
 | Grant | Lets somebody |
 |---|---|
-| `case.assign` | Take a case, hand it to somebody else, or put it back. A case can only be assigned to an account that holds a read grant — assigning into a hole would look handled and would not be |
+| `case.assign` | Take a case, hand it to somebody else, or put it back. A case can only be assigned to an account that holds a read grant — assigning into a hole would look handled and would not be. Without this grant a desk member can work a case but cannot take an unassigned one |
 | `case.update` | Change status and priority, and re-route a misfiled case |
 | `case.respond` | Reply to the requester. They see it and are notified |
 | `case.note.internal` | Write a staff-only note. The requester never sees it, is never notified about it, and it is absent from their view of the case rather than hidden in it |
@@ -1387,6 +1412,46 @@ Every status change writes an event into the conversation, and the optional note
 that goes with it reaches the requester unless it is marked internal.
 Re-routing a case moves it to the new queue with the whole conversation and
 unassigns it, so the receiving desk sees it as unclaimed.
+
+### Who is told
+
+Every notification below is in-app, in the bell. None is emailed yet
+(see the mail settings).
+
+A case nobody holds goes to its department's **queue owners**. They are worked
+out from roles and the department record. There is no list of names to keep up
+to date:
+
+1. **The department's own desk** — everybody whose employee record is in the
+   case's department **and** whose roles hold `case.read.department` plus at
+   least one of `case.respond`, `case.update` or `case.assign`. The rest of the
+   department is not told.
+2. **The department head** (Organisation → Departments), if they can open and
+   work the case. A head without the grants is not told, because the link
+   would not open for them.
+3. **Only if 1 and 2 find nobody:** every account holding both
+   `case.read.all` and `case.assign`. In practice that is the Super Admins, so
+   a case filed with a department that has no desk still reaches somebody who
+   can hand it on.
+
+| When | Who is told |
+|---|---|
+| A case is raised | The requester (a receipt), and the queue owners |
+| A case is assigned | The new assignee. The previous assignee is not told and stops getting updates about it |
+| A case is unassigned | The queue owners |
+| A case is re-routed | The new department's queue owners, and the requester |
+| The requester replies or reopens | The assignee, or the queue owners if nobody holds it |
+| Somebody else changes the status or priority, replies or writes a note | The assignee |
+| The desk replies, or changes the status | The requester. Moving a case to **Pending** tells them *Case … is waiting on you* |
+
+Nobody is told about their own action, and a person who qualifies more than
+once gets one notification. Clicking a desk notification opens the case in the
+**Case queue**, and the requester's opens it in **Cases**. Marking a
+notification read does nothing to the case.
+
+The assignment date is stored with the case and shown on the dashboard. The
+full history of who assigned whom, and when, is in the audit log
+(`case.assign`) and as internal events in the conversation.
 
 ### Attachments
 
@@ -1701,7 +1766,9 @@ queue on that issue.
 The queue shows **Open** issues, oldest first. Switch the filter to **Resolved**
 or **All** to see closed ones. **Resolve** (`asset.update`) asks what was done,
 and the note is compulsory. It records who resolved it and when, and it is
-audited against the asset.
+audited against the asset. The employee who reported it gets an *Asset issue
+resolved* notification with the note, which opens their own view of the asset.
+Open issues also show on the dashboard card described in §3.
 
 Resolving an issue does not change the asset. If the laptop really is broken,
 mark it **Damaged** or **Send for repair** as a separate step. Full detail is

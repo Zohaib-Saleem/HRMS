@@ -352,6 +352,35 @@ installation.
 
 ---
 
+## Cases
+
+### A desk member is not told about new cases
+
+New cases go to the department's queue owners (admin manual §15, *Who is
+told*). Check, in order:
+
+| Check | Fix |
+|---|---|
+| Their employee record is in the case's department | Correct the department on their profile |
+| One of their roles holds `case.read.department` | Grant it, or give them `case.read.all` |
+| One of their roles also holds `case.respond`, `case.update` or `case.assign` | Read access alone is not enough to be told |
+| Their account is ACTIVE and linked to the employee | Link the login on the employee record |
+
+A department with no qualifying member sends its cases to the Super Admins.
+
+### A desk member can open a case but cannot take it
+
+Taking or handing over a case needs `case.assign`. Add it to their role, or
+have somebody who holds it assign the case to them.
+
+### An "assigned to you" notification says the case was not found
+
+Notifications from before 2026-10-13 point at the requester's view. A desk
+member who opens one is forwarded to the Case queue automatically. If it still
+says not found, the case has been reassigned or re-routed away from them since.
+
+---
+
 ## API and integration
 
 ### API requests fail
