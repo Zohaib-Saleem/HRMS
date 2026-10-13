@@ -22,6 +22,7 @@ import { useLoanEligibility } from './use-loan-eligibility';
  */
 
 const RESULT: LoanEligibilityResult = {
+  kind: 'LOAN',
   eligible: true,
   maxAllowedAmount: 100_000,
   maxMonthlyDeduction: 30_000,

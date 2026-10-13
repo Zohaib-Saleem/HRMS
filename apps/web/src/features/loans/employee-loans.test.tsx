@@ -64,6 +64,7 @@ const BASE: LoanRecord = {
   employeeId: 'emp-1',
   employeeName: 'Awais Zahid',
   employeeNumber: '1020',
+  kind: 'LOAN',
   reference: null,
   principalAmount: 60000,
   currency: 'PKR',

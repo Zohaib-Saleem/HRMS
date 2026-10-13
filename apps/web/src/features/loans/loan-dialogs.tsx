@@ -4,11 +4,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
+  LOAN_KIND_LABELS,
+  SALARY_ADVANCE_INSTALLMENTS,
   buildSchedule,
   loanApplicationSchema,
   loanCreateSchema,
   type LoanApplicationInput,
   type LoanCreateInput,
+  type LoanKind,
   type LookupOption,
 } from '@hrms/shared';
 import { ApiError, api, errorMessage } from '@/lib/api';
@@ -35,6 +38,10 @@ import { useLoanEligibility } from './use-loan-eligibility';
  * That matters more than it looks: "5,000 over 7 months" is not obviously
  * 714.28 six times and 714.32 once, and somebody agreeing to a deduction is
  * entitled to see the figure that will actually come out of their pay.
+ *
+ * A salary advance is the same form with the term taken away: it is always one
+ * installment, the whole amount from one payslip, so there is no "repay over"
+ * to choose and the preview names the payslip instead of a schedule.
  */
 
 const blankToNull = (value: unknown) =>
@@ -94,7 +101,36 @@ function SchedulePreview({
   );
 }
 
-/** HR recording a loan for somebody. */
+function AdvancePreview({
+  amount,
+  month,
+  currency,
+}: {
+  amount: number;
+  month: string;
+  currency: string;
+}) {
+  if (!(Number.isFinite(amount) && amount > 0) || !/^\d{4}-\d{2}/.test(month)) {
+    return (
+      <p className="rounded-lg border border-border bg-surface-muted/40 px-3.5 py-2.5 text-[12.5px] text-muted-foreground">
+        Enter an amount and a month to see what will be recovered.
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-border bg-surface-muted/40 px-3.5 py-3 text-[12.5px]">
+      <p className="text-foreground">
+        The full <span className="font-medium tabular-nums">{money(amount, currency)}</span> is
+        recovered from the <span className="font-medium">{isoMonth(month)}</span> payslip.
+      </p>
+      <p className="mt-1 text-muted-foreground">
+        Nothing is deducted until the advance is approved and released.
+      </p>
+    </div>
+  );
+}
+
+/** HR recording a loan - or a salary advance - for somebody. */
 export function LoanCreateDialog({
   open,
   onClose,
@@ -102,29 +138,33 @@ export function LoanCreateDialog({
   currency,
   /** Pre-selects and locks the employee, for the profile screen. */
   fixedEmployeeId,
+  kind = 'LOAN',
 }: {
   open: boolean;
   onClose: () => void;
   employees: LookupOption[];
   currency: string;
   fixedEmployeeId?: string;
+  kind?: LoanKind;
 }) {
   const queryClient = useQueryClient();
   const [formError, setFormError] = React.useState<string | null>(null);
+  const isAdvance = kind === 'SALARY_ADVANCE';
 
   const blank = React.useCallback(
     (): LoanCreateInput => ({
+      kind,
       employeeId: fixedEmployeeId ?? '',
       principalAmount: 0,
       currency,
-      installmentCount: 6,
+      installmentCount: isAdvance ? SALARY_ADVANCE_INSTALLMENTS : 6,
       startMonth: thisMonthLocal(),
       reference: null,
       purpose: null,
       notes: null,
       activate: true,
     }),
-    [fixedEmployeeId, currency],
+    [fixedEmployeeId, currency, kind, isAdvance],
   );
 
   const form = useForm<LoanCreateInput>({
@@ -138,14 +178,16 @@ export function LoanCreateDialog({
       setFormError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, fixedEmployeeId, currency]);
+  }, [open, fixedEmployeeId, currency, kind]);
 
   const save = useMutation({
     mutationFn: (values: LoanCreateInput) => api.post('/loans', values),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['loans'] });
-      toast.success('Loan recorded', {
-        description: 'The repayment schedule is on file and visible to the employee.',
+      toast.success(`${LOAN_KIND_LABELS[kind]} recorded`, {
+        description: isAdvance
+          ? 'The recovery is on file and visible to the employee.'
+          : 'The repayment schedule is on file and visible to the employee.',
       });
       onClose();
     },
@@ -181,10 +223,11 @@ export function LoanCreateDialog({
           noValidate
         >
           <DialogHeader>
-            <DialogTitle>Record a loan</DialogTitle>
+            <DialogTitle>{isAdvance ? 'Record a salary advance' : 'Record a loan'}</DialogTitle>
             <DialogDescription>
-              The schedule is generated now. Payroll collects an installment only once the loan is
-              released.
+              {isAdvance
+                ? 'Pay handed over early. Payroll takes the whole amount back from one payslip, once the advance is released.'
+                : 'The schedule is generated now. Payroll collects an installment only once the loan is released.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -221,7 +264,7 @@ export function LoanCreateDialog({
               )}
 
               <FormField
-                label="Loan amount"
+                label={isAdvance ? 'Advance amount' : 'Loan amount'}
                 htmlFor="loan-amount"
                 required
                 error={errors.principalAmount?.message}
@@ -245,24 +288,28 @@ export function LoanCreateDialog({
                 />
               </FormField>
 
-              <FormField
-                label="Installments"
-                htmlFor="loan-installments"
-                required
-                hint="How many monthly deductions."
-                error={errors.installmentCount?.message}
-              >
-                <Input
-                  id="loan-installments"
-                  type="number"
-                  min={1}
-                  max={240}
-                  {...form.register('installmentCount')}
-                />
-              </FormField>
+              {isAdvance ? (
+                <input type="hidden" {...form.register('installmentCount')} />
+              ) : (
+                <FormField
+                  label="Installments"
+                  htmlFor="loan-installments"
+                  required
+                  hint="How many monthly deductions."
+                  error={errors.installmentCount?.message}
+                >
+                  <Input
+                    id="loan-installments"
+                    type="number"
+                    min={1}
+                    max={240}
+                    {...form.register('installmentCount')}
+                  />
+                </FormField>
+              )}
 
               <FormField
-                label="First deduction month"
+                label={isAdvance ? 'Recovered from (payslip month)' : 'First deduction month'}
                 htmlFor="loan-start"
                 required
                 error={errors.startMonth?.message}
@@ -302,12 +349,20 @@ export function LoanCreateDialog({
               </FormField>
 
               <div className="sm:col-span-2">
-                <SchedulePreview
-                  principal={principal}
-                  installments={installments}
-                  startMonth={startMonth}
-                  currency={form.watch('currency') || currency}
-                />
+                {isAdvance ? (
+                  <AdvancePreview
+                    amount={principal}
+                    month={startMonth}
+                    currency={form.watch('currency') || currency}
+                  />
+                ) : (
+                  <SchedulePreview
+                    principal={principal}
+                    installments={installments}
+                    startMonth={startMonth}
+                    currency={form.watch('currency') || currency}
+                  />
+                )}
               </div>
 
               <label className="flex cursor-pointer items-start gap-2.5 text-[13px] sm:col-span-2">
@@ -319,8 +374,9 @@ export function LoanCreateDialog({
                 <span>
                   Release it now
                   <span className="block text-[12.5px] text-muted-foreground">
-                    Payroll starts collecting from the first deduction month. Leave this off to file
-                    the loan as approved and release it later.
+                    {isAdvance
+                      ? 'Payroll recovers it from the chosen month. Leave this off to file the advance as approved and release it later.'
+                      : 'Payroll starts collecting from the first deduction month. Leave this off to file the loan as approved and release it later.'}
                   </span>
                 </span>
               </label>
@@ -332,7 +388,7 @@ export function LoanCreateDialog({
               Cancel
             </Button>
             <Button type="submit" loading={save.isPending}>
-              Save loan
+              {isAdvance ? 'Save advance' : 'Save loan'}
             </Button>
           </DialogFooter>
         </form>
@@ -341,28 +397,34 @@ export function LoanCreateDialog({
   );
 }
 
-/** An employee applying for a loan for themselves. */
+/** An employee applying for a loan - or a salary advance - for themselves. */
 export function LoanApplyDialog({
   open,
   onClose,
   currency,
+  kind = 'LOAN',
 }: {
   open: boolean;
   onClose: () => void;
   currency: string;
+  kind?: LoanKind;
 }) {
   const queryClient = useQueryClient();
   const [formError, setFormError] = React.useState<string | null>(null);
+  const isAdvance = kind === 'SALARY_ADVANCE';
+
+  const blank = (): LoanApplicationInput => ({
+    kind,
+    principalAmount: 0,
+    installmentCount: isAdvance ? SALARY_ADVANCE_INSTALLMENTS : 6,
+    startMonth: thisMonthLocal(),
+    purpose: '',
+    notes: null,
+  });
 
   const form = useForm<LoanApplicationInput>({
     resolver: zodResolver(loanApplicationSchema),
-    defaultValues: {
-      principalAmount: 0,
-      installmentCount: 6,
-      startMonth: thisMonthLocal(),
-      purpose: '',
-      notes: null,
-    },
+    defaultValues: blank(),
   });
 
   /*
@@ -381,22 +443,17 @@ export function LoanApplyDialog({
       Number.isFinite(watchedInstallments) && watchedInstallments > 0
         ? watchedInstallments
         : undefined,
+    kind,
     enabled: open,
   });
 
   React.useEffect(() => {
     if (open) {
-      form.reset({
-        principalAmount: 0,
-        installmentCount: 6,
-        startMonth: thisMonthLocal(),
-        purpose: '',
-        notes: null,
-      });
+      form.reset(blank());
       setFormError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, kind]);
 
   const apply = useMutation({
     mutationFn: (values: LoanApplicationInput) => api.post('/loans/apply', values),
@@ -437,10 +494,11 @@ export function LoanApplyDialog({
           noValidate
         >
           <DialogHeader>
-            <DialogTitle>Apply for a loan</DialogTitle>
+            <DialogTitle>{isAdvance ? 'Request a salary advance' : 'Apply for a loan'}</DialogTitle>
             <DialogDescription>
-              Your application goes to your manager for approval. Nothing is deducted from your pay
-              unless it is approved and released.
+              {isAdvance
+                ? 'Part of your pay, early. The whole amount comes back from one payslip. Your request goes to your manager, and nothing is deducted unless it is approved and released.'
+                : 'Your application goes to your manager for approval. Nothing is deducted from your pay unless it is approved and released.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -480,23 +538,27 @@ export function LoanApplyDialog({
                 />
               </FormField>
 
-              <FormField
-                label="Repay over (months)"
-                htmlFor="apply-installments"
-                required
-                error={errors.installmentCount?.message}
-              >
-                <Input
-                  id="apply-installments"
-                  type="number"
-                  min={1}
-                  max={240}
-                  {...form.register('installmentCount')}
-                />
-              </FormField>
+              {isAdvance ? (
+                <input type="hidden" {...form.register('installmentCount')} />
+              ) : (
+                <FormField
+                  label="Repay over (months)"
+                  htmlFor="apply-installments"
+                  required
+                  error={errors.installmentCount?.message}
+                >
+                  <Input
+                    id="apply-installments"
+                    type="number"
+                    min={1}
+                    max={240}
+                    {...form.register('installmentCount')}
+                  />
+                </FormField>
+              )}
 
               <FormField
-                label="First deduction month"
+                label={isAdvance ? 'Recovered from (payslip month)' : 'First deduction month'}
                 htmlFor="apply-start"
                 required
                 error={errors.startMonth?.message}
@@ -528,12 +590,20 @@ export function LoanApplyDialog({
               </FormField>
 
               <div className="sm:col-span-2">
-                <SchedulePreview
-                  principal={Number(form.watch('principalAmount'))}
-                  installments={Number(form.watch('installmentCount'))}
-                  startMonth={form.watch('startMonth')}
-                  currency={currency}
-                />
+                {isAdvance ? (
+                  <AdvancePreview
+                    amount={Number(form.watch('principalAmount'))}
+                    month={form.watch('startMonth')}
+                    currency={currency}
+                  />
+                ) : (
+                  <SchedulePreview
+                    principal={Number(form.watch('principalAmount'))}
+                    installments={Number(form.watch('installmentCount'))}
+                    startMonth={form.watch('startMonth')}
+                    currency={currency}
+                  />
+                )}
               </div>
             </div>
           </DialogBody>
@@ -553,7 +623,7 @@ export function LoanApplyDialog({
               loading={apply.isPending}
               disabled={eligibility.data ? !eligibility.data.eligible : false}
             >
-              Submit application
+              {isAdvance ? 'Submit request' : 'Submit application'}
             </Button>
           </DialogFooter>
         </form>

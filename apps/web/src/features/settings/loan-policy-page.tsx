@@ -145,6 +145,7 @@ export function toFormValues(policy: LoanPolicyRecord): LoanPolicyInput {
     maxMonthlyDeductionPercent: policy.maxMonthlyDeductionPercent,
     oneActiveLoan: policy.oneActiveLoan,
     onePendingLoan: policy.onePendingLoan,
+    advanceMaxSalaryPercent: policy.advanceMaxSalaryPercent,
     blockTerminated: policy.blockTerminated,
     blockResigned: policy.blockResigned,
     minSalary: policy.minSalary,
@@ -440,7 +441,7 @@ export function LoanPolicyPage() {
             render={({ field }) => (
               <Toggle
                 label={LOAN_POLICY_LABELS.oneActiveLoan}
-                hint="Blocks an application while a loan is being repaid."
+                hint="Blocks an application while one of the same kind is being repaid. A loan does not block an advance."
                 checked={field.value}
                 disabled={!canManage}
                 onChange={field.onChange}
@@ -453,7 +454,7 @@ export function LoanPolicyPage() {
             render={({ field }) => (
               <Toggle
                 label={LOAN_POLICY_LABELS.onePendingLoan}
-                hint="Blocks a second application while one is awaiting a decision."
+                hint="Blocks a second application of the same kind while one is awaiting a decision."
                 checked={field.value}
                 disabled={!canManage}
                 onChange={field.onChange}
@@ -461,6 +462,25 @@ export function LoanPolicyPage() {
             )}
           />
         </div>
+      </Section>
+
+      <Section
+        title="Salary advance"
+        description="Pay handed over early and recovered in full from one payslip. The eligibility, attendance and status rules above apply to advances too."
+      >
+        <FormField
+          label={LOAN_POLICY_LABELS.advanceMaxSalaryPercent}
+          htmlFor="advanceMaxSalaryPercent"
+          hint={`Percent of one month's salary. At 50, somebody earning ${view.currency} 100,000 can take at most ${view.currency} 50,000 as an advance. It replaces the monthly deduction limit for advances.`}
+          error={form.formState.errors.advanceMaxSalaryPercent?.message}
+        >
+          <Input
+            type="number"
+            step="0.1"
+            disabled={!canManage}
+            {...form.register('advanceMaxSalaryPercent')}
+          />
+        </FormField>
       </Section>
 
       {/*

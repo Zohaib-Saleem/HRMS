@@ -195,13 +195,17 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
      * schedule without opening both.
      */
     const loanDeduction = sumWhere(deductions, (l) => l.code === 'LOAN');
+    // A salary advance being recovered, kept apart from loan repayments for
+    // the same reason loans are kept apart from "Other".
+    const advanceDeduction = sumWhere(deductions, (l) => l.code === 'ADVANCE');
     const otherDeductions =
       num(data.deductionsTotal) -
       lateDeduction -
       earlyLeaveDeduction -
       absenceDeduction -
       shortHoursDeduction -
-      loanDeduction;
+      loanDeduction -
+      advanceDeduction;
 
     return {
       employeeId: line.employeeId,
@@ -237,6 +241,7 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
       absenceDeduction: round2(absenceDeduction),
       shortHoursDeduction: round2(shortHoursDeduction),
       loanDeduction: round2(loanDeduction),
+      advanceDeduction: round2(advanceDeduction),
       otherDeductions: round2(otherDeductions),
       deductionsTotal: num(data.deductionsTotal),
       adjustmentTotal: num(data.adjustmentTotal),
@@ -304,6 +309,7 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
         absenceDeduction: 0,
         shortHoursDeduction: 0,
         loanDeduction: 0,
+        advanceDeduction: 0,
         otherDeductions: 0,
         deductionsTotal: 0,
         adjustmentTotal: 0,

@@ -882,6 +882,8 @@ export interface PayrollPreviewRow {
   shortHoursDeduction: number;
   /** Repayments collected this period, from approved active loans only. */
   loanDeduction: number;
+  /** Salary advances recovered this period, in full, from released advances only. */
+  advanceDeduction: number;
   otherDeductions: number;
   deductionsTotal: number;
   adjustmentTotal: number;

@@ -75,6 +75,7 @@ export const LOAN_POLICY_DEFAULTS = {
   maxMonthlyDeductionPercent: 30,
   oneActiveLoan: true,
   onePendingLoan: true,
+  advanceMaxSalaryPercent: 50,
   blockTerminated: true,
   blockResigned: true,
   minSalary: 0,
@@ -126,6 +127,15 @@ export const loanPolicySchema = z.object({
     .max(100),
   oneActiveLoan: z.boolean(),
   onePendingLoan: z.boolean(),
+  /**
+   * The most a salary advance may be, as a percent of one month's salary. It
+   * replaces the monthly deduction ceiling for advances: an advance is taken
+   * back from a single payslip, so its whole amount IS the deduction.
+   */
+  advanceMaxSalaryPercent: z.coerce
+    .number()
+    .positive('A ceiling of zero would block every advance.')
+    .max(100, 'An advance cannot be more than a month of salary.'),
   blockTerminated: z.boolean(),
   blockResigned: z.boolean(),
   minSalary: z.coerce.number().min(0).max(1_000_000_000),
@@ -202,6 +212,7 @@ export const LOAN_POLICY_LABELS: Record<keyof LoanPolicyInput, string> = {
   maxMonthlyDeductionPercent: 'Maximum monthly deduction',
   oneActiveLoan: 'One active loan at a time',
   onePendingLoan: 'One pending application at a time',
+  advanceMaxSalaryPercent: 'Maximum salary advance',
   blockTerminated: 'Block terminated employees',
   blockResigned: 'Block resigned employees',
   minSalary: 'Minimum salary',
@@ -261,6 +272,8 @@ export interface LoanEligibilityFailure {
  * nothing.
  */
 export interface LoanEligibilityResult {
+  /** The kind the answer is for; the ceiling below differs by kind. */
+  kind: 'LOAN' | 'SALARY_ADVANCE';
   eligible: boolean;
   /** The most this employee could borrow right now, under the live policy. */
   maxAllowedAmount: number;
@@ -320,6 +333,8 @@ export const loanEligibilityQuerySchema = z.object({
   employeeId: z.string().trim().max(64).optional(),
   principalAmount: z.coerce.number().positive().max(1_000_000_000).optional(),
   installmentCount: z.coerce.number().int().min(1).max(240).optional(),
+  /** Which ceiling and which "already has one" rule to apply. */
+  kind: z.enum(['LOAN', 'SALARY_ADVANCE']).default('LOAN'),
 });
 
 export type LoanEligibilityQuery = z.infer<typeof loanEligibilityQuerySchema>;

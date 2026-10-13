@@ -75,6 +75,7 @@ function policy(overrides: Record<string, unknown> = {}) {
     maxInstallments: LOAN_POLICY_DEFAULTS.maxInstallments,
     oneActiveLoan: LOAN_POLICY_DEFAULTS.oneActiveLoan,
     onePendingLoan: LOAN_POLICY_DEFAULTS.onePendingLoan,
+    advanceMaxSalaryPercent: LOAN_POLICY_DEFAULTS.advanceMaxSalaryPercent,
     blockTerminated: LOAN_POLICY_DEFAULTS.blockTerminated,
     blockResigned: LOAN_POLICY_DEFAULTS.blockResigned,
     allowHrOverride: LOAN_POLICY_DEFAULTS.allowHrOverride,
@@ -176,7 +177,13 @@ function setup(input: {
   });
 }
 
-const evaluate = (extra: { requestedAmount?: number; requestedInstallments?: number } = {}) =>
+const evaluate = (
+  extra: {
+    requestedAmount?: number;
+    requestedInstallments?: number;
+    kind?: 'LOAN' | 'SALARY_ADVANCE';
+  } = {},
+) =>
   evaluateLoanEligibility({
     companyId: 'company-1',
     employeeId: 'emp-1',
@@ -517,6 +524,72 @@ describe('the shape of the loan', () => {
      */
     expect(result.estimatedMonthlyDeduction).toBe(6_666.66);
     expect(result.eligible).toBe(true);
+  });
+});
+
+describe('a salary advance', () => {
+  it('is capped at the policy share of one month, not the loan multiple', async () => {
+    setup({ salary: { amount: 100_000 }, policy: { maxSalaryMultiplier: 3 } });
+
+    const result = await evaluate({ kind: 'SALARY_ADVANCE' });
+
+    expect(result.kind).toBe('SALARY_ADVANCE');
+    expect(result.maxAllowedAmount).toBe(50_000);
+    // Its whole amount is the deduction, so the ceiling is the deduction limit.
+    expect(result.maxMonthlyDeduction).toBe(50_000);
+    expect(result.maxInstallments).toBe(1);
+  });
+
+  it('moves with the policy percentage', async () => {
+    setup({ salary: { amount: 100_000 }, policy: { advanceMaxSalaryPercent: 25 } });
+
+    expect((await evaluate({ kind: 'SALARY_ADVANCE' })).maxAllowedAmount).toBe(25_000);
+  });
+
+  it('is not refused by the monthly deduction ceiling a loan would be', async () => {
+    // 40,000 from one payslip is above the 30% loan deduction limit, and
+    // within the 50% advance ceiling - which is the one that applies.
+    setup({ salary: { amount: 100_000 } });
+
+    const result = await evaluate({
+      kind: 'SALARY_ADVANCE',
+      requestedAmount: 40_000,
+      requestedInstallments: 1,
+    });
+
+    expect(result.eligible).toBe(true);
+    expect(result.estimatedMonthlyDeduction).toBe(40_000);
+  });
+
+  it('refuses an amount above its ceiling', async () => {
+    setup({ salary: { amount: 100_000 } });
+
+    const result = await evaluate({ kind: 'SALARY_ADVANCE', requestedAmount: 50_001 });
+
+    expect(result.eligible).toBe(false);
+    expect(result.failedRules).toContain('MAX_AMOUNT');
+  });
+
+  it('refuses a schedule of more than one installment', async () => {
+    setup();
+
+    const result = await evaluate({
+      kind: 'SALARY_ADVANCE',
+      requestedAmount: 10_000,
+      requestedInstallments: 2,
+    });
+
+    expect(result.failedRules).toContain('MAX_INSTALLMENTS');
+  });
+
+  it('counts only advances against the one-at-a-time rules', async () => {
+    setup({ activeLoan: true });
+
+    await evaluate({ kind: 'SALARY_ADVANCE' });
+
+    for (const [args] of db.employeeLoan.findFirst.mock.calls) {
+      expect((args as { where: { kind: string } }).where.kind).toBe('SALARY_ADVANCE');
+    }
   });
 });
 

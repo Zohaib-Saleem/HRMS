@@ -98,6 +98,7 @@ export function toLoanRecord(
     employeeId: row.employeeId,
     employeeName: employeeName(row.employee),
     employeeNumber: row.employee.employeeNumber,
+    kind: row.kind,
     reference: row.reference,
     principalAmount: toNumber(row.principalAmount),
     currency: row.currency,
@@ -204,6 +205,7 @@ export async function dueInstallmentsForPeriod(input: {
     amount: number;
     reference: string | null;
     installmentCount: number;
+    kind: 'LOAN' | 'SALARY_ADVANCE';
   }>
 > {
   if (input.employeeIds.length === 0) return [];
@@ -225,7 +227,7 @@ export async function dueInstallmentsForPeriod(input: {
     },
     orderBy: [{ dueMonth: 'asc' }, { sequence: 'asc' }],
     include: {
-      loan: { select: { reference: true, installmentCount: true } },
+      loan: { select: { reference: true, installmentCount: true, kind: true } },
     },
   });
 
@@ -237,6 +239,7 @@ export async function dueInstallmentsForPeriod(input: {
     amount: toNumber(row.amount),
     reference: row.loan.reference,
     installmentCount: row.loan.installmentCount,
+    kind: row.loan.kind,
   }));
 }
 

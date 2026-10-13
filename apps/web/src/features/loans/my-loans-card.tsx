@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { HandCoins } from 'lucide-react';
 import {
+  LOAN_KIND_LABELS,
   LOAN_STATUS_LABELS,
   PERMISSIONS,
+  type LoanKind,
   type LoanRecord,
   type LoanStatus,
 } from '@hrms/shared';
@@ -41,7 +43,8 @@ const HEADLINE: readonly LoanStatus[] = ['ACTIVE', 'PENDING', 'APPROVED'];
 export function MyLoansCard() {
   const { has } = usePermissions();
   const { session } = useSession();
-  const [applying, setApplying] = React.useState(false);
+  // Which kind the open application is for; null while none is open.
+  const [applying, setApplying] = React.useState<LoanKind | null>(null);
 
   const canRead = has(PERMISSIONS.LOAN_READ);
   const canApply = has(PERMISSIONS.LOAN_REQUEST) && Boolean(session?.user.employee);
@@ -69,9 +72,14 @@ export function MyLoansCard() {
         </CardTitle>
         <div className="flex flex-wrap gap-2">
           {canApply ? (
-            <Button variant="outline" size="sm" onClick={() => setApplying(true)}>
-              Apply for a loan
-            </Button>
+            <>
+              <Button variant="outline" size="sm" onClick={() => setApplying('SALARY_ADVANCE')}>
+                Request an advance
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setApplying('LOAN')}>
+                Apply for a loan
+              </Button>
+            </>
           ) : null}
           <Button variant="ghost" size="sm" asChild>
             <Link to="/loans">Open</Link>
@@ -91,7 +99,7 @@ export function MyLoansCard() {
             description="You have no loans or salary advances on record. An application goes to your manager for approval; nothing is deducted from your pay until it is approved and released."
             action={
               canApply ? (
-                <Button variant="outline" size="sm" onClick={() => setApplying(true)}>
+                <Button variant="outline" size="sm" onClick={() => setApplying('LOAN')}>
                   Apply for a loan
                 </Button>
               ) : undefined
@@ -108,7 +116,7 @@ export function MyLoansCard() {
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3 rounded-lg border border-border bg-surface-muted/40 px-4 py-3">
                 <div>
                   <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                    Outstanding
+                    {active.kind === 'SALARY_ADVANCE' ? 'Advance outstanding' : 'Outstanding'}
                   </dt>
                   <dd className="tabular text-[15px] font-semibold">
                     {money(active.remainingAmount, active.currency)}
@@ -167,7 +175,9 @@ export function MyLoansCard() {
                     <p className="tabular truncate text-[13px] font-medium">
                       {money(row.principalAmount, row.currency)}
                       <span className="ml-2 font-normal text-muted-foreground">
-                        over {row.installmentCount} month{row.installmentCount === 1 ? '' : 's'}
+                        {row.kind === 'SALARY_ADVANCE'
+                          ? `${LOAN_KIND_LABELS[row.kind].toLowerCase()} · ${isoMonth(row.startMonth)}`
+                          : `over ${row.installmentCount} month${row.installmentCount === 1 ? '' : 's'}`}
                       </span>
                     </p>
                     <p className="truncate text-[12px] text-muted-foreground">
@@ -184,7 +194,12 @@ export function MyLoansCard() {
         )}
       </CardContent>
 
-      <LoanApplyDialog open={applying} onClose={() => setApplying(false)} currency={currency} />
+      <LoanApplyDialog
+        open={applying !== null}
+        kind={applying ?? 'LOAN'}
+        onClose={() => setApplying(null)}
+        currency={currency}
+      />
     </Card>
   );
 }

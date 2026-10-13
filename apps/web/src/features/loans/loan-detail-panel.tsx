@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { Ban, Check, HandCoins, X } from 'lucide-react';
 import {
   LOAN_INSTALLMENT_STATUS_LABELS,
+  LOAN_KIND_LABELS,
   LOAN_STATUS_DESCRIPTIONS,
   LOAN_STATUS_LABELS,
   PERMISSIONS,
@@ -44,6 +45,11 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
     enabled: loanId !== '',
   });
 
+  // "Loan" or "Salary advance", for the toasts and headings. A salary advance
+  // is a one-installment loan, so everything else on this panel holds as is.
+  const noun = LOAN_KIND_LABELS[query.data?.kind ?? 'LOAN'];
+  const isAdvance = query.data?.kind === 'SALARY_ADVANCE';
+
   const invalidate = async () => {
     await queryClient.invalidateQueries({ queryKey: ['loans'] });
   };
@@ -52,9 +58,11 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
     mutationFn: (activate: boolean) => api.post(`/loans/${loanId}/approve`, { activate }),
     onSuccess: async (_data, activate) => {
       await invalidate();
-      toast.success(activate ? 'Loan approved and released' : 'Loan approved', {
+      toast.success(activate ? `${noun} approved and released` : `${noun} approved`, {
         description: activate
-          ? 'Payroll will collect the installment due in each period.'
+          ? isAdvance
+            ? 'Payroll will recover it in full from the chosen payslip.'
+            : 'Payroll will collect the installment due in each period.'
           : 'Release it when the money is handed over; nothing is deducted until then.',
       });
     },
@@ -74,7 +82,11 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
     mutationFn: () => api.post(`/loans/${loanId}/activate`),
     onSuccess: async () => {
       await invalidate();
-      toast.success('Loan released', { description: 'Repayment starts from the first deduction month.' });
+      toast.success(`${noun} released`, {
+        description: isAdvance
+          ? 'Payroll recovers it from the chosen payslip.'
+          : 'Repayment starts from the first deduction month.',
+      });
     },
     onError: (error: unknown) => toast.error(errorMessage(error)),
   });
@@ -83,7 +95,7 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
     mutationFn: (reason: string | null) => api.post(`/loans/${loanId}/cancel`, { reason }),
     onSuccess: async () => {
       await invalidate();
-      toast.success('Loan cancelled', {
+      toast.success(`${noun} cancelled`, {
         description: 'Installments already collected are unchanged; nothing further is deducted.',
       });
     },
@@ -119,10 +131,10 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
 
   const handleCancel = async () => {
     const ok = await confirm({
-      title: `Cancel this loan?`,
+      title: `Cancel this ${noun.toLowerCase()}?`,
       description:
         'Future deductions stop. Installments already collected are kept exactly as they are.',
-      confirmLabel: 'Cancel loan',
+      confirmLabel: `Cancel ${noun.toLowerCase()}`,
       tone: 'destructive',
     });
     if (ok) cancel.mutate(null);
@@ -135,6 +147,7 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
           <CardTitle className="flex items-center gap-2">
             <HandCoins className="size-4" aria-hidden />
             {loan.employeeName}
+            {isAdvance ? <Badge variant="outline">{noun}</Badge> : null}
             <Badge variant={LOAN_STATUS_TONE[loan.status]}>{LOAN_STATUS_LABELS[loan.status]}</Badge>
           </CardTitle>
           <div className="flex flex-wrap gap-2">
@@ -198,7 +211,9 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
 
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
-              <dt className="text-xs uppercase tracking-wide text-muted-foreground">Loan amount</dt>
+              <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                {isAdvance ? 'Advance amount' : 'Loan amount'}
+              </dt>
               <dd className="text-lg font-semibold tabular-nums">
                 {money(loan.principalAmount, loan.currency)}
               </dd>
@@ -249,7 +264,7 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
           <dl className="grid gap-4 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-                First deduction
+                {isAdvance ? 'Recovered from' : 'First deduction'}
               </dt>
               <dd className="text-sm font-medium">{isoMonth(loan.startMonth)}</dd>
             </div>

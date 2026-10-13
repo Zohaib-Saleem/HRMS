@@ -58,6 +58,47 @@ export const LOAN_STATUS_DESCRIPTIONS: Record<LoanStatus, string> = {
   CANCELLED: 'Withdrawn or written off. No further deductions.',
 };
 
+/**
+ * What was lent.
+ *
+ * A salary advance is pay handed over early. Three things set it apart from a
+ * loan and nothing else does: the whole amount comes back from ONE payslip, the
+ * ceiling is a share of one month's salary rather than a multiple of it, and a
+ * payslip names the recovery separately from a loan repayment. Approval,
+ * release and collection are the loan machinery, unchanged.
+ */
+export const LOAN_KINDS = ['LOAN', 'SALARY_ADVANCE'] as const;
+
+export type LoanKind = (typeof LOAN_KINDS)[number];
+
+export const LOAN_KIND_LABELS: Record<LoanKind, string> = {
+  LOAN: 'Loan',
+  SALARY_ADVANCE: 'Salary advance',
+};
+
+/** An advance is always recovered in a single installment. */
+export const SALARY_ADVANCE_INSTALLMENTS = 1;
+
+/** The payslip line code for each kind, so payroll and reports agree on it. */
+export const LOAN_KIND_PAYROLL_CODES: Record<LoanKind, 'LOAN' | 'ADVANCE'> = {
+  LOAN: 'LOAN',
+  SALARY_ADVANCE: 'ADVANCE',
+};
+
+/** Shared by both write schemas: an advance with a schedule is not an advance. */
+function singleRecovery(
+  value: { kind: LoanKind; installmentCount: number },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.kind === 'SALARY_ADVANCE' && value.installmentCount !== SALARY_ADVANCE_INSTALLMENTS) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['installmentCount'],
+      message: 'A salary advance is recovered in full from a single month.',
+    });
+  }
+}
+
 /** The only status payroll ever deducts against. */
 export const LOAN_DEDUCTIBLE_STATUS: LoanStatus = 'ACTIVE';
 
@@ -143,51 +184,57 @@ export function monthlyDeductionFor(principal: number, installments: number): nu
 // ------------------------------------------------------------------- payloads
 
 /** Admin creating a loan outright. It starts ACTIVE unless told otherwise. */
-export const loanCreateSchema = z.object({
-  employeeId: z.string().trim().min(1, 'Choose an employee.'),
-  principalAmount: z.coerce.number().positive('Enter the loan amount.').max(1_000_000_000),
-  currency: z.string().trim().length(3).toUpperCase().optional(),
-  installmentCount: z.coerce
-    .number()
-    .int('Enter a whole number of installments.')
-    .min(1, 'A loan needs at least one installment.')
-    .max(240),
-  startMonth: monthInput,
-  reference: optionalText(64),
-  purpose: optionalText(500),
-  notes: optionalText(2000),
-  /**
-   * Whether repayment starts immediately. False files the loan as APPROVED,
-   * so the schedule exists and payroll ignores it until somebody releases it.
-   */
-  activate: z.boolean().default(true),
-  /**
-   * An authorised user's decision to grant a loan the eligibility rules
-   * refuse.
-   *
-   * Its ABSENCE is meaningful, which is why it is optional rather than
-   * nullable-with-a-default: omit it and there is no override, so an
-   * ineligible employee is refused exactly as they would be on their own
-   * application. Send it - even empty - and an override is being attempted,
-   * which the policy may forbid outright or require a reason for.
-   */
-  overrideReason: z.string().trim().max(1000).optional(),
-});
+export const loanCreateSchema = z
+  .object({
+    kind: z.enum(LOAN_KINDS).default('LOAN'),
+    employeeId: z.string().trim().min(1, 'Choose an employee.'),
+    principalAmount: z.coerce.number().positive('Enter the loan amount.').max(1_000_000_000),
+    currency: z.string().trim().length(3).toUpperCase().optional(),
+    installmentCount: z.coerce
+      .number()
+      .int('Enter a whole number of installments.')
+      .min(1, 'A loan needs at least one installment.')
+      .max(240),
+    startMonth: monthInput,
+    reference: optionalText(64),
+    purpose: optionalText(500),
+    notes: optionalText(2000),
+    /**
+     * Whether repayment starts immediately. False files the loan as APPROVED,
+     * so the schedule exists and payroll ignores it until somebody releases it.
+     */
+    activate: z.boolean().default(true),
+    /**
+     * An authorised user's decision to grant a loan the eligibility rules
+     * refuse.
+     *
+     * Its ABSENCE is meaningful, which is why it is optional rather than
+     * nullable-with-a-default: omit it and there is no override, so an
+     * ineligible employee is refused exactly as they would be on their own
+     * application. Send it - even empty - and an override is being attempted,
+     * which the policy may forbid outright or require a reason for.
+     */
+    overrideReason: z.string().trim().max(1000).optional(),
+  })
+  .superRefine(singleRecovery);
 
 export type LoanCreateInput = z.infer<typeof loanCreateSchema>;
 
 /** An employee applying for one. No employee id: it is always for themselves. */
-export const loanApplicationSchema = z.object({
-  principalAmount: z.coerce.number().positive('Enter the amount you need.').max(1_000_000_000),
-  installmentCount: z.coerce
-    .number()
-    .int('Enter a whole number of installments.')
-    .min(1, 'Choose how many months to repay over.')
-    .max(240),
-  startMonth: monthInput,
-  purpose: z.string().trim().min(3, 'Say what the loan is for.').max(500),
-  notes: optionalText(2000),
-});
+export const loanApplicationSchema = z
+  .object({
+    kind: z.enum(LOAN_KINDS).default('LOAN'),
+    principalAmount: z.coerce.number().positive('Enter the amount you need.').max(1_000_000_000),
+    installmentCount: z.coerce
+      .number()
+      .int('Enter a whole number of installments.')
+      .min(1, 'Choose how many months to repay over.')
+      .max(240),
+    startMonth: monthInput,
+    purpose: z.string().trim().min(3, 'Say what the loan is for.').max(500),
+    notes: optionalText(2000),
+  })
+  .superRefine(singleRecovery);
 
 export type LoanApplicationInput = z.infer<typeof loanApplicationSchema>;
 
@@ -214,6 +261,7 @@ export const loanCancelSchema = z.object({
 export const loanQuerySchema = paginationQuerySchema.extend({
   employeeId: z.string().trim().max(64).optional(),
   status: z.enum(LOAN_STATUSES).optional(),
+  kind: z.enum(LOAN_KINDS).optional(),
   /**
    * The borrower's employment status - the employee's own field, reached
    * through the relation. Not a copy held on the loan: a loan taken out on
@@ -243,6 +291,7 @@ export interface LoanRecord {
   employeeId: string;
   employeeName: string;
   employeeNumber: string;
+  kind: LoanKind;
   reference: string | null;
   principalAmount: number;
   currency: string;

@@ -955,18 +955,21 @@ function loanEvents(rows: LoanRow[], currency: string): Draft[] {
 
     // An HR-created loan has no application; `createdAt` is when it was
     // recorded, and that is the honest date for one.
-    add('applied', 'LOAN_APPLIED', row.requestedAt ?? row.createdAt, row.requestedAt ? 'Loan applied for' : 'Loan recorded');
-    add('approved', 'LOAN_APPROVED', row.approvedAt, 'Loan approved', [], row.approvedByUserId);
+    // A salary advance travels the same states under its own name.
+    const advance = row.kind === 'SALARY_ADVANCE';
+    const noun = advance ? 'Salary advance' : 'Loan';
+    add('applied', 'LOAN_APPLIED', row.requestedAt ?? row.createdAt, row.requestedAt ? `${noun} applied for` : `${noun} recorded`);
+    add('approved', 'LOAN_APPROVED', row.approvedAt, `${noun} approved`, [], row.approvedByUserId);
     add(
       'rejected',
       'LOAN_REJECTED',
       row.rejectedAt,
-      'Loan rejected',
+      `${noun} rejected`,
       row.rejectionReason ? [{ label: 'Reason', value: row.rejectionReason }] : [],
     );
-    add('activated', 'LOAN_ACTIVATED', row.activatedAt, 'Loan repayment started');
-    add('completed', 'LOAN_COMPLETED', row.completedAt, 'Loan repaid');
-    add('cancelled', 'LOAN_CANCELLED', row.cancelledAt, 'Loan cancelled');
+    add('activated', 'LOAN_ACTIVATED', row.activatedAt, advance ? 'Salary advance released' : 'Loan repayment started');
+    add('completed', 'LOAN_COMPLETED', row.completedAt, advance ? 'Salary advance recovered' : 'Loan repaid');
+    add('cancelled', 'LOAN_CANCELLED', row.cancelledAt, `${noun} cancelled`);
   }
 
   return events;
@@ -1350,6 +1353,7 @@ interface LeaveRow {
 }
 
 interface LoanRow {
+  kind: 'LOAN' | 'SALARY_ADVANCE';
   id: string;
   principalAmount: Amount;
   monthlyDeduction: Amount;
@@ -1738,6 +1742,7 @@ export async function employeeTimeline(
           take: SOURCE_LIMIT,
           select: {
             id: true,
+            kind: true,
             principalAmount: true,
             monthlyDeduction: true,
             currency: true,

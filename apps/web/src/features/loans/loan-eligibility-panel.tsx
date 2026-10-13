@@ -47,6 +47,8 @@ export function LoanEligibilityPanel({
   if (!result) return null;
 
   const { currency } = result;
+  // Older answers carry no kind; they are about a loan.
+  const isAdvance = result.kind === 'SALARY_ADVANCE';
   const overLimit =
     result.estimatedMonthlyDeduction !== null &&
     result.estimatedMonthlyDeduction > result.maxMonthlyDeduction;
@@ -62,7 +64,7 @@ export function LoanEligibilityPanel({
       >
         <p className="flex items-center gap-2 text-sm font-semibold text-destructive">
           <CircleAlert className="size-4 shrink-0" aria-hidden />
-          Loan application unavailable
+          {isAdvance ? 'Salary advance unavailable' : 'Loan application unavailable'}
         </p>
         <ul className="mt-2 space-y-1">
           {result.failures.map((failure) => (
@@ -92,19 +94,28 @@ export function LoanEligibilityPanel({
         {result.monthlySalary !== null ? (
           <Row label="Monthly salary" value={money(currency, result.monthlySalary)} />
         ) : null}
-        <Row label="Maximum eligible loan" value={money(currency, result.maxAllowedAmount)} />
-        {result.estimatedMonthlyDeduction !== null ? (
+        <Row
+          label={isAdvance ? 'Maximum advance' : 'Maximum eligible loan'}
+          value={money(currency, result.maxAllowedAmount)}
+        />
+        {isAdvance ? null : result.estimatedMonthlyDeduction !== null ? (
           <Row
             label="Estimated monthly deduction"
             value={money(currency, result.estimatedMonthlyDeduction)}
             tone={overLimit ? 'bad' : undefined}
           />
         ) : null}
-        <Row
-          label="Maximum permitted deduction"
-          value={money(currency, result.maxMonthlyDeduction)}
-        />
-        <Row label="Longest repayment" value={`${result.maxTenureMonths} months`} />
+        {isAdvance ? (
+          <Row label="Recovered" value="In full, from one payslip" />
+        ) : (
+          <>
+            <Row
+              label="Maximum permitted deduction"
+              value={money(currency, result.maxMonthlyDeduction)}
+            />
+            <Row label="Longest repayment" value={`${result.maxTenureMonths} months`} />
+          </>
+        )}
       </div>
 
       {result.warnings.length > 0 ? (

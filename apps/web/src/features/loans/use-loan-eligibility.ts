@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import type { LoanEligibilityResult } from '@hrms/shared';
+import type { LoanEligibilityResult, LoanKind } from '@hrms/shared';
 import { api } from '@/lib/api';
 import { useDebounced } from '@/lib/use-debounced';
 
@@ -20,6 +20,8 @@ export function useLoanEligibility(input?: {
   employeeId?: string;
   principalAmount?: number;
   installmentCount?: number;
+  /** Which ceiling to ask about. The server defaults to a loan. */
+  kind?: LoanKind;
   enabled?: boolean;
 }) {
   const amount = useDebounced(input?.principalAmount, 300);
@@ -31,6 +33,7 @@ export function useLoanEligibility(input?: {
   if (installments && Number.isFinite(installments) && installments > 0) {
     params.set('installmentCount', String(installments));
   }
+  if (input?.kind && input.kind !== 'LOAN') params.set('kind', input.kind);
   const qs = params.toString();
 
   return useQuery({

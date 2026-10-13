@@ -1,7 +1,13 @@
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { HandCoins, Plus } from 'lucide-react';
-import { LOAN_STATUS_LABELS, PERMISSIONS, type LoanRecord, type LoanStatus } from '@hrms/shared';
+import {
+  LOAN_STATUS_LABELS,
+  PERMISSIONS,
+  type LoanKind,
+  type LoanRecord,
+  type LoanStatus,
+} from '@hrms/shared';
 import { api } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -52,8 +58,9 @@ export function EmployeeLoans({
   const isOwnProfile = session?.user.employee?.id === employeeId;
   const canApply = isOwnProfile && has(PERMISSIONS.LOAN_REQUEST);
 
-  const [creating, setCreating] = React.useState(false);
-  const [applying, setApplying] = React.useState(false);
+  // Which kind the open dialog is for; null while none is open.
+  const [creating, setCreating] = React.useState<LoanKind | null>(null);
+  const [applying, setApplying] = React.useState<LoanKind | null>(null);
   const [openLoanId, setOpenLoanId] = React.useState<string | null>(null);
 
   const query = useQuery({
@@ -97,14 +104,24 @@ export function EmployeeLoans({
   const actions = (
     <div className="flex flex-wrap gap-2">
       {canApply ? (
-        <Button size="sm" variant="outline" onClick={() => setApplying(true)}>
-          Apply for a loan
-        </Button>
+        <>
+          <Button size="sm" variant="outline" onClick={() => setApplying('SALARY_ADVANCE')}>
+            Request an advance
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setApplying('LOAN')}>
+            Apply for a loan
+          </Button>
+        </>
       ) : null}
       {canManage ? (
-        <Button size="sm" onClick={() => setCreating(true)}>
-          <Plus className="size-4" aria-hidden /> Record a loan
-        </Button>
+        <>
+          <Button size="sm" variant="outline" onClick={() => setCreating('SALARY_ADVANCE')}>
+            <Plus className="size-4" aria-hidden /> Record an advance
+          </Button>
+          <Button size="sm" onClick={() => setCreating('LOAN')}>
+            <Plus className="size-4" aria-hidden /> Record a loan
+          </Button>
+        </>
       ) : null}
     </div>
   );
@@ -181,9 +198,16 @@ export function EmployeeLoans({
                         <p className="tabular text-[13.5px] font-medium">
                           {money(row.principalAmount, row.currency)}
                           <span className="ml-2 font-normal text-muted-foreground">
-                            over {row.installmentCount} month{row.installmentCount === 1 ? '' : 's'}
-                            {' · '}
-                            {money(row.monthlyDeduction, row.currency)}/month
+                            {row.kind === 'SALARY_ADVANCE' ? (
+                              <>salary advance · recovered from {isoMonth(row.startMonth)}</>
+                            ) : (
+                              <>
+                                over {row.installmentCount} month
+                                {row.installmentCount === 1 ? '' : 's'}
+                                {' · '}
+                                {money(row.monthlyDeduction, row.currency)}/month
+                              </>
+                            )}
                           </span>
                         </p>
                         <p className="mt-0.5 text-[12.5px] text-muted-foreground">
@@ -209,13 +233,19 @@ export function EmployeeLoans({
       {selected ? <LoanDetailPanel loanId={selected} /> : null}
 
       <LoanCreateDialog
-        open={creating}
-        onClose={() => setCreating(false)}
+        open={creating !== null}
+        kind={creating ?? 'LOAN'}
+        onClose={() => setCreating(null)}
         employees={[]}
         fixedEmployeeId={employeeId}
         currency={currency}
       />
-      <LoanApplyDialog open={applying} onClose={() => setApplying(false)} currency={currency} />
+      <LoanApplyDialog
+        open={applying !== null}
+        kind={applying ?? 'LOAN'}
+        onClose={() => setApplying(null)}
+        currency={currency}
+      />
     </div>
   );
 }

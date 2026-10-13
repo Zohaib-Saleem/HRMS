@@ -6,6 +6,7 @@ import type {
   PayrollSettings,
   Prisma,
 } from '@prisma/client';
+import { LOAN_KIND_PAYROLL_CODES } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { logger } from '../../core/logger.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
@@ -734,16 +735,23 @@ export async function computePayroll(input: {
   }
 
   // Loan repayments, labelled LOAN so a payslip says why the money went
-  // rather than calling every one of them an adjustment.
+  // rather than calling every one of them an adjustment. A salary advance is
+  // labelled ADVANCE: it is pay given early being taken back, not borrowing,
+  // and a payslip and the reports name the two apart.
   const loanInstallmentsByEmployee = new Map<string, typeof loanInstallments>();
   for (const installment of loanInstallments) {
+    const code = LOAN_KIND_PAYROLL_CODES[installment.kind];
+    const ref = installment.reference ? ` (${installment.reference})` : '';
     pushAdjustment(installment.employeeId, {
       id: installment.id,
       kind: 'DEDUCTION',
-      label: `Loan repayment ${installment.sequence}/${installment.installmentCount}${installment.reference ? ` (${installment.reference})` : ''}`,
+      label:
+        installment.kind === 'SALARY_ADVANCE'
+          ? `Salary advance recovery${ref}`
+          : `Loan repayment ${installment.sequence}/${installment.installmentCount}${ref}`,
       amount: installment.amount,
-      code: 'LOAN',
-      lineKind: 'LOAN',
+      code,
+      lineKind: code,
     });
     const list = loanInstallmentsByEmployee.get(installment.employeeId);
     if (list) list.push(installment);

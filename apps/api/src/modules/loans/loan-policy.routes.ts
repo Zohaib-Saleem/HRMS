@@ -210,6 +210,7 @@ export const loanEligibilityRoutes: FastifyPluginAsync = async (app) => {
       employeeId,
       requestedAmount: query.principalAmount ?? null,
       requestedInstallments: query.installmentCount ?? null,
+      kind: query.kind,
     });
 
     return reply.send({ data: result });

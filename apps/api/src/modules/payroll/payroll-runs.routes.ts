@@ -530,6 +530,7 @@ export const PREVIEW_COLUMNS: Array<[key: string, label: string, pick: (row: Pay
   ['lateDeduction', 'Late deduction', (r) => r.lateDeduction],
   ['earlyLeaveDeduction', 'Early-leave deduction', (r) => r.earlyLeaveDeduction],
   ['loanDeduction', 'Loan deduction', (r) => r.loanDeduction],
+  ['advanceDeduction', 'Salary advance recovery', (r) => r.advanceDeduction],
   ['otherDeductions', 'Other deductions', (r) => r.otherDeductions],
   ['deductionsTotal', 'Deductions', (r) => r.deductionsTotal],
   ['grossAmount', 'Gross', (r) => r.grossAmount],

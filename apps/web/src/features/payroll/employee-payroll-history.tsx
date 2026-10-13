@@ -92,6 +92,7 @@ export function EmployeePayrollHistory({ employeeId }: { employeeId: string }) {
                     <TH className="text-right">Leave</TH>
                     <TH className="text-right">Working hours</TH>
                     <TH className="text-right">Loan</TH>
+                    <TH className="text-right">Advance</TH>
                     <TH className="text-right">Other</TH>
                     <TH className="text-right">Net</TH>
                     <TH />
@@ -126,6 +127,9 @@ export function EmployeePayrollHistory({ employeeId }: { employeeId: string }) {
                         </TD>
                         <TD className="tabular text-right text-muted-foreground">
                           {cut.loan === 0 ? '—' : `-${money(cut.loan, row.currency)}`}
+                        </TD>
+                        <TD className="tabular text-right text-muted-foreground">
+                          {cut.advance === 0 ? '—' : `-${money(cut.advance, row.currency)}`}
                         </TD>
                         <TD className="tabular text-right text-muted-foreground">
                           {cut.other === 0 ? '—' : `-${money(cut.other, row.currency)}`}
@@ -180,9 +184,10 @@ function bucket(line: PayrollLineRecord): {
   leave: number;
   hours: number;
   loan: number;
+  advance: number;
   other: number;
 } {
-  const out = { leave: 0, hours: 0, loan: 0, other: 0 };
+  const out = { leave: 0, hours: 0, loan: 0, advance: 0, other: 0 };
   for (const d of line.deductions) {
     if (d.kind === 'ABSENCE' || d.kind === 'UNPAID_LEAVE' || d.kind === 'PAID_LEAVE') {
       out.leave += d.amount;
@@ -190,6 +195,8 @@ function bucket(line: PayrollLineRecord): {
       out.hours += d.amount;
     } else if (d.kind === 'LOAN') {
       out.loan += d.amount;
+    } else if (d.kind === 'ADVANCE') {
+      out.advance += d.amount;
     } else {
       out.other += d.amount;
     }

@@ -2,7 +2,9 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
+  LOAN_KIND_LABELS,
   PERMISSIONS,
+  SALARY_ADVANCE_INSTALLMENTS,
   idParamSchema,
   loanApplicationSchema,
   loanCancelSchema,
@@ -11,6 +13,7 @@ import {
   loanQuerySchema,
   loanRejectSchema,
   monthlyDeductionFor,
+  type LoanKind,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
@@ -64,6 +67,9 @@ import {
 const employeeLabel = (e: { firstName: string; lastName: string; displayName: string | null }) =>
   e.displayName ?? `${e.firstName} ${e.lastName}`.trim();
 
+/** "loan" or "salary advance", for sentences an audit row or a toast reads. */
+const nounFor = (kind: LoanKind) => LOAN_KIND_LABELS[kind].toLowerCase();
+
 async function callerContext(auth: {
   companyId: string;
   userId: string;
@@ -80,11 +86,21 @@ async function callerContext(auth: {
   };
 }
 
-/** Rejects a schedule that would clash with a loan the employee is still repaying. */
-async function assertNoActiveLoan(employeeId: string, excludeLoanId?: string): Promise<void> {
+/**
+ * Rejects a schedule that would clash with one the employee is still repaying.
+ *
+ * Within a kind: a loan being repaid does not block an advance, nor the other
+ * way round. Two advances, or two loans, open at once still cannot happen.
+ */
+async function assertNoActiveLoan(
+  employeeId: string,
+  kind: LoanKind,
+  excludeLoanId?: string,
+): Promise<void> {
   const existing = await prisma.employeeLoan.findFirst({
     where: {
       employeeId,
+      kind,
       status: { in: ['PENDING', 'APPROVED', 'ACTIVE'] },
       ...(excludeLoanId ? { NOT: { id: excludeLoanId } } : {}),
     },
@@ -94,7 +110,7 @@ async function assertNoActiveLoan(employeeId: string, excludeLoanId?: string): P
   if (existing) {
     throw new ValidationError({
       principalAmount: [
-        `That employee already has a loan in ${existing.status.toLowerCase()}. Settle or cancel it before starting another.`,
+        `That employee already has a ${nounFor(kind)} in ${existing.status.toLowerCase()}. Settle or cancel it before starting another.`,
       ],
     });
   }
@@ -123,6 +139,7 @@ async function assertLoanAllowed(input: {
   employeeId: string;
   principalAmount: number;
   installmentCount: number;
+  kind: LoanKind;
   override?: { by: string; reason: string | null; request: FastifyRequest } | null;
 }): Promise<void> {
   const result = await evaluateLoanEligibility({
@@ -130,6 +147,7 @@ async function assertLoanAllowed(input: {
     employeeId: input.employeeId,
     requestedAmount: input.principalAmount,
     requestedInstallments: input.installmentCount,
+    kind: input.kind,
   });
 
   if (result.eligible) return;
@@ -163,6 +181,7 @@ async function assertLoanAllowed(input: {
       failedRules: result.failedRules,
       reasons: result.reasons,
       reason: override.reason,
+      kind: input.kind,
       principalAmount: input.principalAmount,
       installmentCount: input.installmentCount,
     },
@@ -194,6 +213,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         query.view === 'mine' ? { employeeId: caller.employeeId ?? '__none__' } : {},
         query.employeeId ? { employeeId: query.employeeId } : {},
         query.status ? { status: query.status } : {},
+        query.kind ? { kind: query.kind } : {},
         query.employmentStatus ? { employee: { employmentStatus: query.employmentStatus } } : {},
         query.q
           ? {
@@ -264,7 +284,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
       ]);
       if (!employee) throw new ValidationError({ employeeId: ['That employee does not exist.'] });
 
-      await assertNoActiveLoan(input.employeeId);
+      await assertNoActiveLoan(input.employeeId, input.kind);
 
       /*
        * The same gate, with the override an authorised user is allowed.
@@ -281,6 +301,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         employeeId: input.employeeId,
         principalAmount: input.principalAmount,
         installmentCount: input.installmentCount,
+        kind: input.kind,
         override:
           input.overrideReason === undefined
             ? null
@@ -295,6 +316,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           data: {
             companyId: auth.companyId,
             employeeId: input.employeeId,
+            kind: input.kind,
             reference: input.reference,
             principalAmount: input.principalAmount,
             currency,
@@ -336,8 +358,12 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         action: 'loan.create',
         entityType: 'EmployeeLoan',
         entityId: created.id,
-        summary: `Created a ${currency} ${input.principalAmount} loan for ${employeeLabel(employee)} over ${input.installmentCount} installment(s) from ${input.startMonth}`,
+        summary:
+          input.kind === 'SALARY_ADVANCE'
+            ? `Created a ${currency} ${input.principalAmount} salary advance for ${employeeLabel(employee)}, recovered from ${input.startMonth}`
+            : `Created a ${currency} ${input.principalAmount} loan for ${employeeLabel(employee)} over ${input.installmentCount} installment(s) from ${input.startMonth}`,
         after: {
+          kind: input.kind,
           principalAmount: input.principalAmount,
           installmentCount: input.installmentCount,
           startMonth: input.startMonth,
@@ -371,7 +397,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
       const input = parseOrThrow(loanApplicationSchema, request.body);
 
       const self = await callerEmployeeOrThrow(auth);
-      await assertNoActiveLoan(self.id);
+      await assertNoActiveLoan(self.id, input.kind);
 
       /*
        * The policy gate.
@@ -387,6 +413,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         employeeId: self.id,
         principalAmount: input.principalAmount,
         installmentCount: input.installmentCount,
+        kind: input.kind,
       });
 
       const company = await prisma.company.findUniqueOrThrow({
@@ -404,6 +431,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           data: {
             companyId: auth.companyId,
             employeeId: self.id,
+            kind: input.kind,
             principalAmount: input.principalAmount,
             currency: company.currency,
             installmentCount: input.installmentCount,
@@ -438,7 +466,10 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           subjectId: loan.id,
           requesterEmployeeId: self.id,
           requesterUserId: auth.userId,
-          title: `Loan: ${company.currency} ${input.principalAmount} over ${input.installmentCount} month${input.installmentCount === 1 ? '' : 's'}`,
+          title:
+            input.kind === 'SALARY_ADVANCE'
+              ? `Salary advance: ${company.currency} ${input.principalAmount}, recovered from ${input.startMonth.slice(0, 7)} pay`
+              : `Loan: ${company.currency} ${input.principalAmount} over ${input.installmentCount} month${input.installmentCount === 1 ? '' : 's'}`,
           summary: input.purpose,
           chain,
           request,
@@ -460,7 +491,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         action: 'approval.submit',
         entityType: 'ApprovalRequest',
         entityId: approval.id,
-        summary: `Submitted for approval: loan of ${company.currency} ${input.principalAmount}`,
+        summary: `Submitted for approval: ${nounFor(input.kind)} of ${company.currency} ${input.principalAmount}`,
         after: { subjectType: 'LOAN_REQUEST', subjectId: created.id, steps: chain.stages.length },
         request,
       });
@@ -472,8 +503,12 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         action: 'loan.apply',
         entityType: 'EmployeeLoan',
         entityId: created.id,
-        summary: `Applied for a ${company.currency} ${input.principalAmount} loan over ${input.installmentCount} installment(s)`,
+        summary:
+          input.kind === 'SALARY_ADVANCE'
+            ? `Applied for a ${company.currency} ${input.principalAmount} salary advance`
+            : `Applied for a ${company.currency} ${input.principalAmount} loan over ${input.installmentCount} installment(s)`,
         after: {
+          kind: input.kind,
           principalAmount: input.principalAmount,
           installmentCount: input.installmentCount,
           startMonth: input.startMonth,
@@ -525,6 +560,11 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
 
       const principal = input.principalAmount ?? toNumber(loan.principalAmount);
       const installments = input.installmentCount ?? loan.installmentCount;
+      if (loan.kind === 'SALARY_ADVANCE' && installments !== SALARY_ADVANCE_INSTALLMENTS) {
+        throw new ValidationError({
+          installmentCount: ['A salary advance is recovered in full from a single month.'],
+        });
+      }
       const startMonth = input.startMonth ?? day(loan.startMonth)!;
       const retermed =
         principal !== toNumber(loan.principalAmount) ||
@@ -595,7 +635,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         action: 'loan.approve',
         entityType: 'EmployeeLoan',
         entityId: loan.id,
-        summary: `Approved a ${loan.currency} ${principal} loan for ${employeeLabel(loan.employee)}${input.activate ? ' and released it' : ''}${retermed ? ' on revised terms' : ''}`,
+        summary: `Approved a ${loan.currency} ${principal} ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)}${input.activate ? ' and released it' : ''}${retermed ? ' on revised terms' : ''}`,
         before: {
           principalAmount: toNumber(loan.principalAmount),
           installmentCount: loan.installmentCount,
@@ -679,7 +719,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         action: 'loan.reject',
         entityType: 'EmployeeLoan',
         entityId: loan.id,
-        summary: `Declined the loan for ${employeeLabel(loan.employee)} - ${input.reason}`,
+        summary: `Declined the ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)} - ${input.reason}`,
         request,
       });
 
@@ -721,7 +761,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         action: 'loan.activate',
         entityType: 'EmployeeLoan',
         entityId: loan.id,
-        summary: `Released the loan for ${employeeLabel(loan.employee)}; repayment starts ${day(loan.startMonth)}`,
+        summary: `Released the ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)}; ${loan.kind === 'SALARY_ADVANCE' ? 'recovered from' : 'repayment starts'} ${day(loan.startMonth)}`,
         request,
       });
 
@@ -792,7 +832,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
       action: 'loan.cancel',
       entityType: 'EmployeeLoan',
       entityId: loan.id,
-      summary: `Cancelled the loan for ${employeeLabel(loan.employee)}${input.reason ? ` - ${input.reason}` : ''}`,
+      summary: `Cancelled the ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)}${input.reason ? ` - ${input.reason}` : ''}`,
       before: { status: loan.status },
       after: { status: 'CANCELLED' },
       request,

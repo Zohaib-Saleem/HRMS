@@ -17,6 +17,7 @@ import { LoanEligibilityPanel } from './loan-eligibility-panel';
  */
 
 const RESULT: LoanEligibilityResult = {
+  kind: 'LOAN',
   eligible: true,
   maxAllowedAmount: 100_000,
   maxMonthlyDeduction: 30_000,
@@ -64,6 +65,28 @@ describe('an eligible employee', () => {
     expect(valueFor('Estimated monthly deduction')).toBe('PKR 6,666.66');
     expect(valueFor('Maximum permitted deduction')).toBe('PKR 30,000');
     expect(valueFor('Longest repayment')).toBe('12 months');
+  });
+
+  it('is shown a salary advance in its own terms', () => {
+    render(
+      <LoanEligibilityPanel
+        result={{
+          ...RESULT,
+          kind: 'SALARY_ADVANCE',
+          maxAllowedAmount: 50_000,
+          maxMonthlyDeduction: 50_000,
+          maxTenureMonths: 1,
+          maxInstallments: 1,
+          estimatedMonthlyDeduction: 40_000,
+        }}
+      />,
+    );
+
+    expect(valueFor('Maximum advance')).toBe('PKR 50,000');
+    expect(valueFor('Recovered')).toBe('In full, from one payslip');
+    // The loan-shaped rows say nothing true about an advance.
+    expect(screen.queryByText('Longest repayment')).not.toBeInTheDocument();
+    expect(screen.queryByText('Maximum permitted deduction')).not.toBeInTheDocument();
   });
 
   it('marks an installment over the deduction ceiling', () => {

@@ -1,8 +1,10 @@
 import {
   EMPLOYMENT_STATUS_LABELS,
+  SALARY_ADVANCE_INSTALLMENTS,
   isEmploymentStatusEligible,
   monthlyDeductionFor,
   type EmploymentStatus,
+  type LoanKind,
   type LoanEligibilityFailure,
   type LoanEligibilityResult,
   type LoanEligibilityRule,
@@ -43,6 +45,12 @@ export interface EligibilityInput {
   /** Optional: with neither, this answers "what could this person borrow". */
   requestedAmount?: number | null;
   requestedInstallments?: number | null;
+  /**
+   * Which kind is being asked about. An advance has its own ceiling (a share
+   * of one month's salary), is always one installment, and is counted apart
+   * from loans by the one-at-a-time rules. Defaults to a loan.
+   */
+  kind?: LoanKind;
   now?: Date;
 }
 
@@ -105,11 +113,13 @@ async function monthlySalaryFrom(
 
 /** An empty answer, used when the subject cannot be evaluated at all. */
 function blocked(
+  kind: LoanKind,
   currency: string,
   policy: LoanPolicyRow | null,
   failures: LoanEligibilityFailure[],
 ): LoanEligibilityResult {
   return {
+    kind,
     eligible: false,
     maxAllowedAmount: 0,
     maxMonthlyDeduction: 0,
@@ -140,6 +150,9 @@ export async function evaluateLoanEligibility(
   input: EligibilityInput,
 ): Promise<LoanEligibilityResult> {
   const now = input.now ?? new Date();
+  const kind: LoanKind = input.kind ?? 'LOAN';
+  const isAdvance = kind === 'SALARY_ADVANCE';
+  const noun = isAdvance ? 'salary advance' : 'loan';
   const failures: LoanEligibilityFailure[] = [];
   const warnings: string[] = [];
   const fail = (rule: LoanEligibilityRule, message: string) => failures.push({ rule, message });
@@ -170,7 +183,7 @@ export async function evaluateLoanEligibility(
   });
 
   if (!employee) {
-    return blocked(company.currency, policy, [
+    return blocked(kind, company.currency, policy, [
       { rule: 'EMPLOYEE_RECORD', message: 'There is no employee record to apply against.' },
     ]);
   }
@@ -244,19 +257,30 @@ export async function evaluateLoanEligibility(
   const currency = salaryRow?.currency ?? company.currency;
 
   if (monthlySalary === null || monthlySalary <= 0) {
-    fail('SALARY_RECORD', 'You have no salary on record, so a loan limit cannot be worked out.');
+    fail('SALARY_RECORD', `You have no salary on record, so a ${noun} limit cannot be worked out.`);
   } else if (monthlySalary < toNumber(policy.minSalary)) {
     fail(
       'MIN_SALARY',
-      `Your salary is below the ${currency} ${format(toNumber(policy.minSalary))} minimum for a loan.`,
+      `Your salary is below the ${currency} ${format(toNumber(policy.minSalary))} minimum for a ${noun}.`,
     );
   }
 
+  /*
+   * The ceiling, by kind.
+   *
+   * A loan is bounded twice: by a multiple of salary, and by what may come off
+   * one payslip each month. An advance comes back from ONE payslip in full, so
+   * the monthly ceiling would always refuse it - its own ceiling, a share of a
+   * single month's salary, replaces both. Its deduction is its amount.
+   */
   const salary = monthlySalary ?? 0;
-  const maxAllowedAmount = round2(salary * toNumber(policy.maxSalaryMultiplier));
-  const maxMonthlyDeduction = round2(
-    salary * (toNumber(policy.maxMonthlyDeductionPercent) / 100),
-  );
+  const advancePercent = toNumber(policy.advanceMaxSalaryPercent);
+  const maxAllowedAmount = isAdvance
+    ? round2(salary * (advancePercent / 100))
+    : round2(salary * toNumber(policy.maxSalaryMultiplier));
+  const maxMonthlyDeduction = isAdvance
+    ? maxAllowedAmount
+    : round2(salary * (toNumber(policy.maxMonthlyDeductionPercent) / 100));
 
   // --- attendance -----------------------------------------------------------
   const months = normaliseEvaluationMonths(policy.evaluationMonths);
@@ -400,20 +424,24 @@ export async function evaluateLoanEligibility(
   }
 
   // --- loans already on file ------------------------------------------------
+  //
+  // Counted within the kind. A loan being repaid does not stop somebody taking
+  // an advance against this month's pay, and an advance does not stop a loan;
+  // what the switches close is a second of the SAME thing.
   if (policy.oneActiveLoan) {
     const active = await prisma.employeeLoan.findFirst({
-      where: { employeeId: employee.id, status: { in: [...ACTIVE_LIKE] } },
+      where: { employeeId: employee.id, kind, status: { in: [...ACTIVE_LIKE] } },
       select: { id: true },
     });
-    if (active) fail('ACTIVE_LOAN', 'You already have a loan in progress.');
+    if (active) fail('ACTIVE_LOAN', `You already have a ${noun} in progress.`);
   }
   if (policy.onePendingLoan) {
     const pending = await prisma.employeeLoan.findFirst({
-      where: { employeeId: employee.id, status: 'PENDING' },
+      where: { employeeId: employee.id, kind, status: 'PENDING' },
       select: { id: true },
     });
     if (pending) {
-      fail('PENDING_LOAN', 'You already have an application waiting for a decision.');
+      fail('PENDING_LOAN', `You already have a ${noun} application waiting for a decision.`);
     }
   }
 
@@ -421,7 +449,11 @@ export async function evaluateLoanEligibility(
   const requestedAmount = input.requestedAmount ?? null;
   const requestedInstallments = input.requestedInstallments ?? null;
 
-  if (requestedInstallments !== null) {
+  if (isAdvance) {
+    if (requestedInstallments !== null && requestedInstallments !== SALARY_ADVANCE_INSTALLMENTS) {
+      fail('MAX_INSTALLMENTS', 'A salary advance is recovered in full from a single month.');
+    }
+  } else if (requestedInstallments !== null) {
     if (requestedInstallments > policy.maxInstallments) {
       fail(
         'MAX_INSTALLMENTS',
@@ -440,7 +472,9 @@ export async function evaluateLoanEligibility(
     if (requestedAmount > maxAllowedAmount) {
       fail(
         'MAX_AMOUNT',
-        `You asked for ${currency} ${format(requestedAmount)}. The most you can borrow is ${currency} ${format(maxAllowedAmount)}.`,
+        isAdvance
+          ? `You asked for ${currency} ${format(requestedAmount)}. The most you can take as an advance is ${currency} ${format(maxAllowedAmount)} (${pct(advancePercent)} of your monthly salary).`
+          : `You asked for ${currency} ${format(requestedAmount)}. The most you can borrow is ${currency} ${format(maxAllowedAmount)}.`,
       );
     }
   }
@@ -448,11 +482,15 @@ export async function evaluateLoanEligibility(
   // The installment the schedule would actually carry - the same function that
   // builds it, so the figure quoted here is the figure that gets collected.
   const estimatedMonthlyDeduction =
-    requestedAmount !== null && requestedInstallments !== null
-      ? monthlyDeductionFor(requestedAmount, requestedInstallments)
-      : null;
+    requestedAmount !== null && isAdvance
+      ? round2(requestedAmount)
+      : requestedAmount !== null && requestedInstallments !== null
+        ? monthlyDeductionFor(requestedAmount, requestedInstallments)
+        : null;
 
+  // Not for an advance: its ceiling above already is its deduction ceiling.
   if (
+    !isAdvance &&
     estimatedMonthlyDeduction !== null &&
     monthlySalary !== null &&
     monthlySalary > 0 &&
@@ -465,13 +503,14 @@ export async function evaluateLoanEligibility(
   }
 
   return {
+    kind,
     eligible: failures.length === 0,
     maxAllowedAmount,
     maxMonthlyDeduction,
     monthlySalary,
     currency,
-    maxTenureMonths: policy.maxTenureMonths,
-    maxInstallments: policy.maxInstallments,
+    maxTenureMonths: isAdvance ? SALARY_ADVANCE_INSTALLMENTS : policy.maxTenureMonths,
+    maxInstallments: isAdvance ? SALARY_ADVANCE_INSTALLMENTS : policy.maxInstallments,
     estimatedMonthlyDeduction,
     reasons: failures.map((f) => f.message),
     failedRules: failures.map((f) => f.rule),

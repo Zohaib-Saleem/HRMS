@@ -3576,6 +3576,16 @@ enum EmployeeLoanStatus {
   CANCELLED
 }
 
+/// What was lent. A salary advance is pay handed over early: the whole amount
+/// comes back from one payslip, its ceiling is a share of one month's salary
+/// rather than a multiple of it, and a payslip names it separately from a
+/// loan repayment. Everything else - approval, release, collection - is the
+/// loan machinery unchanged.
+enum LoanKind {
+  LOAN
+  SALARY_ADVANCE
+}
+
 enum LoanInstallmentStatus {
   SCHEDULED
   /// Claimed by a payroll run that has not been finalized yet.
@@ -3597,6 +3607,8 @@ model EmployeeLoan {
   id         String @id @default(cuid())
   companyId  String
   employeeId String
+
+  kind LoanKind @default(LOAN)
 
   reference String?
 
@@ -3642,6 +3654,7 @@ model EmployeeLoan {
 
   @@index([companyId, status])
   @@index([employeeId, status])
+  @@index([companyId, kind])
   @@map("employee_loans")
 }
 
@@ -3747,6 +3760,12 @@ model LoanPolicy {
   maxInstallments            Int     @default(12)
   oneActiveLoan              Boolean @default(true)
   onePendingLoan             Boolean @default(true)
+
+  // --- salary advance -------------------------------------------------------
+  /// Ceiling on an advance, as a percent of one month's salary. An advance is
+  /// recovered from a single payslip, so this - not the monthly deduction
+  /// ceiling, which it would always exceed - is what bounds it.
+  advanceMaxSalaryPercent    Decimal @default(50) @db.Decimal(5, 2)
 
   // --- employment status ----------------------------------------------------
   blockTerminated Boolean @default(true)

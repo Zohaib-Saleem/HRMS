@@ -4,9 +4,12 @@ import { HandCoins, Plus } from 'lucide-react';
 import {
   EMPLOYMENT_STATUSES,
   EMPLOYMENT_STATUS_LABELS,
+  LOAN_KINDS,
+  LOAN_KIND_LABELS,
   LOAN_STATUSES,
   LOAN_STATUS_LABELS,
   PERMISSIONS,
+  type LoanKind,
   type LoanRecord,
 } from '@hrms/shared';
 import { api } from '@/lib/api';
@@ -43,7 +46,15 @@ import { LoanDetailPanel } from './loan-detail-panel';
  * the people who can see both and want their own.
  */
 
-const INITIAL = { q: '', status: '', employmentStatus: '', view: 'all' as 'all' | 'mine', page: 1, limit: 20 };
+const INITIAL = {
+  q: '',
+  status: '',
+  kind: '',
+  employmentStatus: '',
+  view: 'all' as 'all' | 'mine',
+  page: 1,
+  limit: 20,
+};
 
 export function LoansPage() {
   const { has } = usePermissions();
@@ -52,8 +63,9 @@ export function LoansPage() {
   const canSeeOthers = has(PERMISSIONS.LOAN_MANAGE) || has(PERMISSIONS.LOAN_APPROVE);
 
   const [filters, setFilters] = React.useState(INITIAL);
-  const [creating, setCreating] = React.useState(false);
-  const [applying, setApplying] = React.useState(false);
+  // Which kind the open dialog is for; null while none is open.
+  const [creating, setCreating] = React.useState<LoanKind | null>(null);
+  const [applying, setApplying] = React.useState<LoanKind | null>(null);
   const [openLoanId, setOpenLoanId] = React.useState<string | null>(null);
   const debouncedQuery = useDebounced(filters.q, 350);
 
@@ -78,6 +90,7 @@ export function LoansPage() {
         query: {
           q: debouncedQuery || undefined,
           status: filters.status || undefined,
+          kind: filters.kind || undefined,
           employmentStatus: filters.employmentStatus || undefined,
           view: filters.view,
           page: filters.page,
@@ -92,6 +105,7 @@ export function LoansPage() {
   const hasActiveFilters =
     filters.q !== '' ||
     filters.status !== '' ||
+    filters.kind !== '' ||
     filters.employmentStatus !== '' ||
     filters.view !== 'all';
 
@@ -103,15 +117,26 @@ export function LoansPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             {canRequest ? (
-              <Button variant="outline" size="sm" onClick={() => setApplying(true)}>
-                Apply for a loan
-              </Button>
+              <>
+                <Button variant="outline" size="sm" onClick={() => setApplying('SALARY_ADVANCE')}>
+                  Request an advance
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setApplying('LOAN')}>
+                  Apply for a loan
+                </Button>
+              </>
             ) : null}
             {canManage ? (
-              <Button size="sm" onClick={() => setCreating(true)}>
-                <Plus className="size-4" aria-hidden />
-                Record a loan
-              </Button>
+              <>
+                <Button variant="outline" size="sm" onClick={() => setCreating('SALARY_ADVANCE')}>
+                  <Plus className="size-4" aria-hidden />
+                  Record an advance
+                </Button>
+                <Button size="sm" onClick={() => setCreating('LOAN')}>
+                  <Plus className="size-4" aria-hidden />
+                  Record a loan
+                </Button>
+              </>
             ) : null}
           </div>
         }
@@ -136,6 +161,19 @@ export function LoansPage() {
                 {LOAN_STATUSES.map((status) => (
                   <option key={status} value={status}>
                     {LOAN_STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                aria-label="Kind"
+                value={filters.kind}
+                onChange={(event) => update({ kind: event.target.value })}
+                className="xl:w-44"
+              >
+                <option value="">Loans and advances</option>
+                {LOAN_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {LOAN_KIND_LABELS[kind]}
                   </option>
                 ))}
               </NativeSelect>
@@ -184,6 +222,7 @@ export function LoansPage() {
                 <THead>
                   <TR>
                     <TH>Employee</TH>
+                    <TH>Kind</TH>
                     <TH>Amount</TH>
                     <TH>Monthly</TH>
                     <TH>Remaining</TH>
@@ -194,10 +233,10 @@ export function LoansPage() {
                 </THead>
                 <TBody>
                   {query.isLoading ? (
-                    <TableSkeleton rows={5} columns={7} />
+                    <TableSkeleton rows={5} columns={8} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={7} className="p-0">
+                      <TD colSpan={8} className="p-0">
                         <EmptyState
                           icon={HandCoins}
                           title={hasActiveFilters ? 'No loans match those filters' : 'No loans yet'}
@@ -223,6 +262,9 @@ export function LoansPage() {
                           <p className="font-mono text-[11.5px] text-muted-foreground">
                             {row.employeeNumber}
                           </p>
+                        </TD>
+                        <TD className="whitespace-nowrap text-[13px] text-muted-foreground">
+                          {LOAN_KIND_LABELS[row.kind]}
                         </TD>
                         <TD className="tabular text-[13px]">
                           {money(row.principalAmount, row.currency)}
@@ -256,12 +298,18 @@ export function LoansPage() {
       </Card>
 
       <LoanCreateDialog
-        open={creating}
-        onClose={() => setCreating(false)}
+        open={creating !== null}
+        kind={creating ?? 'LOAN'}
+        onClose={() => setCreating(null)}
         employees={lookups.managers}
         currency={currency}
       />
-      <LoanApplyDialog open={applying} onClose={() => setApplying(false)} currency={currency} />
+      <LoanApplyDialog
+        open={applying !== null}
+        kind={applying ?? 'LOAN'}
+        onClose={() => setApplying(null)}
+        currency={currency}
+      />
 
       <Dialog open={openLoanId !== null} onOpenChange={(next) => !next && setOpenLoanId(null)}>
         <DialogContent variant="drawer" size="lg">

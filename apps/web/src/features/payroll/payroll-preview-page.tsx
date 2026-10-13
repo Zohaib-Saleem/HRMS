@@ -302,6 +302,7 @@ export function PayrollPreviewPage() {
                       <TH className="text-right">OT amount</TH>
                       <TH className="text-right">Hours ded.</TH>
                       <TH className="text-right">Loan</TH>
+                      <TH className="text-right">Advance</TH>
                       <TH className="text-right">Other ded.</TH>
                       <TH className="text-right">Deductions</TH>
                       <TH className="text-right">Gross</TH>
@@ -347,6 +348,9 @@ export function PayrollPreviewPage() {
                         </TD>
                         <TD className="text-right tabular-nums">
                           {money(row.loanDeduction, row.currency)}
+                        </TD>
+                        <TD className="text-right tabular-nums">
+                          {money(row.advanceDeduction, row.currency)}
                         </TD>
                         <TD className="text-right tabular-nums">
                           {money(row.otherDeductions, row.currency)}
