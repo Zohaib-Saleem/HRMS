@@ -78,7 +78,7 @@ export function pushCategory(
   approval?: Pick<PushApprovalContext, 'subjectType'> | null,
 ): PushContent['category'] {
   if (source.entityType === PUSH_TEST_ENTITY) return 'TEST';
-  if (source.type === 'CASE_UPDATE') return 'CASES';
+  if (source.type === 'CASE_UPDATE' || source.type === 'CASE_MENTION') return 'CASES';
   switch (source.entityType) {
     case 'Case':
     case 'CaseDesk':
@@ -237,6 +237,22 @@ export function buildPushContent(
   }
 
   if (source.type === 'CELEBRATION') return content(source, category, source.title, source.message);
+
+  /*
+   * A mention names who tagged you and which case - both already on every
+   * desk push - and stops there. The in-app message goes on to quote the
+   * case's subject and the comment itself, and either can be the whole of a
+   * medical or salary matter, so neither is put on a lock screen.
+   */
+  if (source.type === 'CASE_MENTION') {
+    const lead = /^(.{1,80}?) mentioned you in (CASE-\d{4}-\d+)/.exec(source.message);
+    return content(
+      source,
+      category,
+      lead ? `You were mentioned in ${lead[2]}` : source.title,
+      lead ? `${lead[1]} mentioned you. ${GENERIC_BODY}` : GENERIC_BODY,
+    );
+  }
 
   // "Interview scheduled: <candidate>" - the candidate is not ours to show.
   if (source.type.startsWith('INTERVIEW_')) {

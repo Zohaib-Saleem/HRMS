@@ -408,6 +408,7 @@ model Company {
   cases           Case[]
   caseMessages    CaseMessage[]
   caseAttachments CaseAttachment[]
+  caseMentions    CaseMessageMention[]
 
   // --- lunch ---
   lunchMenuItems  LunchMenuItem[]
@@ -1077,9 +1078,10 @@ model User {
   notificationPreference NotificationPreference?
 
   // --- cases (helpdesk) ---
-  casesAssigned    Case[]           @relation("CaseAssignee")
-  caseMessagesSent CaseMessage[]    @relation("CaseMessageSender")
-  caseAttachments  CaseAttachment[] @relation("CaseAttachmentUploader")
+  casesAssigned    Case[]               @relation("CaseAssignee")
+  caseMessagesSent CaseMessage[]        @relation("CaseMessageSender")
+  caseAttachments  CaseAttachment[]     @relation("CaseAttachmentUploader")
+  caseMentions     CaseMessageMention[] @relation("CaseMentionedUser")
 
   // --- recruitment ---
   candidateDocuments CandidateDocument[] @relation("CandidateDocumentUploader")
@@ -1311,6 +1313,10 @@ enum NotificationType {
   INTERVIEW_REMINDER
   /// An interview you sat on is over and your evaluation has not been filed.
   INTERVIEW_EVALUATION_PENDING
+  /// Somebody tagged you in a message on a case. Its own type rather than
+  /// CASE_UPDATE so the dashboard's "Mentions & follow-ups" list and the push
+  /// wording can tell "you were named" apart from "the case moved".
+  CASE_MENTION
 }
 
 enum AttendanceStatus {
@@ -1647,6 +1653,7 @@ model Notification {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   pushDeliveries PushDelivery[]
+  caseMention    CaseMessageMention?
 
   @@index([userId, readAt])
   @@index([userId, createdAt])
@@ -4531,6 +4538,7 @@ model Case {
 
   messages    CaseMessage[]
   attachments CaseAttachment[]
+  mentions    CaseMessageMention[]
 
   /// One case number per company. The generator reads the highest so far, so
   /// this index is what actually guarantees uniqueness under a race - the
@@ -4578,12 +4586,49 @@ model CaseMessage {
   sender  User?   @relation("CaseMessageSender", fields: [senderUserId], references: [id], onDelete: SetNull)
 
   attachments CaseAttachment[]
+  mentions    CaseMessageMention[]
 
   /// How a case detail reads its thread: this case, oldest first, and - for an
   /// employee - only the messages that are not notes.
   @@index([caseId, isInternal, createdAt])
   @@index([companyId, createdAt])
   @@map("case_messages")
+}
+
+/// One person tagged in one case message.
+///
+/// A mention is a fact about the MESSAGE, not about the case: it does not
+/// assign the case, change its status, or widen who may open it. Only an id the
+/// author picked from the server's candidate list, and that the server re-read
+/// and found able to open the message, becomes a row here - typing "@Somebody"
+/// by hand is just text.
+///
+/// `notificationId` is set once, by the dispatch that claimed `notifiedAt`, so a
+/// retried dispatch cannot tell the same person twice about the same message.
+model CaseMessageMention {
+  id              String @id @default(cuid())
+  companyId       String
+  caseId          String
+  messageId       String
+  mentionedUserId String
+
+  notifiedAt     DateTime?
+  notificationId String?   @unique
+
+  createdAt DateTime @default(now())
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  case          Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  message       CaseMessage   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  mentionedUser User          @relation("CaseMentionedUser", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  notification  Notification? @relation(fields: [notificationId], references: [id], onDelete: SetNull)
+
+  /// One mention per person per message, however many times they were named.
+  @@unique([messageId, mentionedUserId])
+  /// The dashboard's list: my mentions, newest first.
+  @@index([mentionedUserId, createdAt])
+  @@index([caseId])
+  @@map("case_message_mentions")
 }
 
 /// A file on a case.

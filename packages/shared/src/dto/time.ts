@@ -27,6 +27,8 @@ export const NOTIFICATION_TYPES = [
   'INTERVIEW_REMINDER',
   /** An interview you sat on is over and your evaluation is not filed. */
   'INTERVIEW_EVALUATION_PENDING',
+  /** Somebody tagged you in a message on a case. */
+  'CASE_MENTION',
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 

@@ -22,6 +22,7 @@ import { MyLoansCard } from '@/features/loans/my-loans-card';
 import { MyMedicalCard } from '@/features/medical/my-medical-card';
 import { MyCasesCard } from '@/features/cases/my-cases-card';
 import { MyAssignedWorkCard } from '@/features/cases/my-assigned-work-card';
+import { MentionsCard } from '@/features/cases/mentions-card';
 import { MyAssetsCard } from '@/features/assets/my-assets-card';
 import { AssetOperationsCard } from '@/features/assets/asset-operations-card';
 import { LunchTodayCard } from '@/features/lunch/lunch-today-card';
@@ -298,6 +299,9 @@ export function EmployeeDashboard() {
             because it is a table; renders itself away for everybody who
             staffs no desk. */}
         <MyAssignedWorkCard />
+        {/* Case messages that tagged this person. Renders itself away until
+            somebody has. */}
+        <MentionsCard />
 
         {/* Leave, as one number, full width beneath the service row - the same
             shape as the attendance band above it, and the same left and right

@@ -58,6 +58,7 @@ import {
   type TrendRangeKey,
 } from './dashboard-data';
 import { MyAssignedWorkCard } from '@/features/cases/my-assigned-work-card';
+import { MentionsCard } from '@/features/cases/mentions-card';
 
 /**
  * The company dashboard.
@@ -287,6 +288,9 @@ export function CompanyDashboard() {
       {/* Above the company's figures: the cases and issues waiting on the
           person reading this. Renders itself away without a desk grant. */}
       <MyAssignedWorkCard />
+      {/* Case messages that tagged this person. Renders itself away until
+          somebody has. */}
+      <MentionsCard />
 
       {canReadAttendance ? (
         <>

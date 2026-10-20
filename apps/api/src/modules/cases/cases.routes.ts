@@ -9,6 +9,7 @@ import {
   canRequesterReply,
   canRequesterTransition,
   caseCreateSchema,
+  caseMentionFeedQuerySchema,
   caseQuerySchema,
   caseReopenSchema,
   caseReplySchema,
@@ -36,6 +37,7 @@ import {
   toCaseRecord,
 } from './cases.service.js';
 import { caseQueueOwners, caseResponsible, notifyDesk } from './case-notify.service.js';
+import { MESSAGE_MENTIONS_SELECT, mentionFeed } from './case-mentions.service.js';
 
 /**
  * Cases: the employee's side of the helpdesk.
@@ -122,6 +124,30 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
       if (!requester) return reply.send({ data: EMPTY_CASE_SUMMARY });
 
       return reply.send({ data: await caseSummaryFor(requester) });
+    },
+  );
+
+  /**
+   * Where the caller has been tagged: the dashboard's "Mentions & follow-ups".
+   *
+   * Anybody who can read a case from either side may have been tagged in one,
+   * so either grant reaches it. The rows are the caller's own mentions and
+   * nobody else's, and each is re-checked against what the caller can open
+   * now - see `mentionFeed`.
+   */
+  app.get(
+    '/mentions',
+    {
+      preHandler: requireAnyPermission(
+        PERMISSIONS.CASE_READ_OWN,
+        PERMISSIONS.CASE_READ_DEPARTMENT,
+        PERMISSIONS.CASE_READ_ALL,
+      ),
+    },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { limit } = parseOrThrow(caseMentionFeedQuerySchema, request.query);
+      return reply.send({ data: await mentionFeed(auth, limit) });
     },
   );
 
@@ -353,6 +379,7 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
                 uploadedBy: { select: { firstName: true, lastName: true } },
               },
             },
+            mentions: MESSAGE_MENTIONS_SELECT,
           },
         }),
         // Files hung on the case itself rather than on any one reply - which is

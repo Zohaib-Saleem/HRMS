@@ -12,6 +12,7 @@ import {
   type CaseAttachmentRecord,
   type CaseDepartmentCatalogue,
   type CaseDetail,
+  type CaseMessageMentionRecord,
   type CaseMessageRecord,
   type CaseRecord,
   type CaseStatus,
@@ -485,6 +486,23 @@ export function toAttachmentRecord(row: AttachmentRow): CaseAttachmentRecord {
   };
 }
 
+type MentionRow = {
+  mentionedUserId: string;
+  mentionedUser: { firstName: string; lastName: string; employee: { id: string } | null };
+};
+
+/**
+ * One tag, named the way it was written into the text - the account's own
+ * name, which is what `caseMentionToken` was built from when it was saved.
+ */
+export function toMentionRecord(row: MentionRow): CaseMessageMentionRecord {
+  return {
+    userId: row.mentionedUserId,
+    name: `${row.mentionedUser.firstName} ${row.mentionedUser.lastName}`.trim(),
+    employeeId: row.mentionedUser.employee?.id ?? null,
+  };
+}
+
 type MessageRow = {
   id: string;
   senderUserId: string | null;
@@ -493,6 +511,8 @@ type MessageRow = {
   createdAt: Date;
   sender: { id: string; firstName: string; lastName: string } | null;
   attachments: AttachmentRow[];
+  /** Absent on reads that did not ask for them, which is read as none. */
+  mentions?: MentionRow[];
 };
 
 /**
@@ -513,6 +533,7 @@ export function toMessageRecord(row: MessageRow, requesterUserId: string | null)
     message: row.message,
     internal: row.isInternal,
     attachments: row.attachments.map(toAttachmentRecord),
+    mentions: (row.mentions ?? []).map(toMentionRecord),
     createdAt: row.createdAt.toISOString(),
   };
 }

@@ -704,6 +704,8 @@ export interface CaseMessageRecord {
    */
   internal: boolean;
   attachments: CaseAttachmentRecord[];
+  /** The people tagged in it. Only ids the server validated - never parsed from text. */
+  mentions: CaseMessageMentionRecord[];
   createdAt: string;
 }
 
@@ -897,6 +899,14 @@ export const caseRouteSchema = z.object({
 
 export type CaseRouteInput = z.infer<typeof caseRouteSchema>;
 
+/** The most people one case message may tag. */
+export const CASE_MENTION_MAX = 10;
+
+/** How a tag is written into the message text: `@` and the person's name. */
+export function caseMentionToken(name: string): string {
+  return `@${name}`;
+}
+
 /**
  * The desk's reply, which is two different things behind one form.
  *
@@ -914,6 +924,18 @@ export type CaseRouteInput = z.infer<typeof caseRouteSchema>;
 export const caseDeskReplySchema = z.object({
   message: trimmed(1, 5000, 'Write something before sending.'),
   internal: z.boolean().default(false),
+  /**
+   * The people tagged in it, as user ids picked from the candidate list.
+   *
+   * Ids rather than names parsed out of the text, so "@Somebody" typed by hand
+   * stays text. Every id is re-read on the server, must belong to an active
+   * account that can open this message, and must still be named in the text as
+   * `@<name>` - a tag deleted from the box before sending is not a tag.
+   */
+  mentionUserIds: z
+    .array(z.string().trim().min(1).max(64))
+    .max(CASE_MENTION_MAX, `Tag at most ${CASE_MENTION_MAX} people in one message.`)
+    .default([]),
 });
 
 export type CaseDeskReplyInput = z.infer<typeof caseDeskReplySchema>;
@@ -928,6 +950,89 @@ export type CaseDeskReplyInput = z.infer<typeof caseDeskReplySchema>;
  */
 export function canDeskReply(status: CaseStatus): boolean {
   return status !== 'CLOSED';
+}
+
+// --- mentions ----------------------------------------------------------------
+
+/**
+ * Tagging somebody in a case message.
+ *
+ * A TAG tells a person and records that they were named. It is not an
+ * assignment - the assignee, the status and the queue are untouched - and it is
+ * not a grant: only people who can already open the message may be tagged, and
+ * somebody who cannot is refused with a message saying so rather than quietly
+ * let in. Routing the case or assigning it is how somebody gains access.
+ */
+/** The candidate search behind the `@` dropdown. */
+export const caseMentionCandidateQuerySchema = z.object({
+  q: z.string().trim().max(60).optional().default(''),
+  /** Whether the message being written is an internal note. */
+  internal: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .optional()
+    .transform((value) => value === true || value === 'true'),
+});
+
+export type CaseMentionCandidateQuery = z.infer<typeof caseMentionCandidateQuerySchema>;
+
+/** One person the `@` dropdown offers. */
+export interface CaseMentionCandidate {
+  userId: string;
+  name: string;
+  departmentName: string | null;
+  /** Designation, or the free-text job title when there is none. */
+  jobTitle: string | null;
+  roleNames: string[];
+  /**
+   * Whether they can open this message. False rows are shown, disabled, with
+   * `reason` - so the author learns why rather than wondering where they went.
+   */
+  canAccess: boolean;
+  reason: string | null;
+}
+
+/** Somebody tagged in a message, as the conversation renders them. */
+export interface CaseMessageMentionRecord {
+  userId: string;
+  /** The name as written into the text, which is what gets highlighted. */
+  name: string;
+  /** Their employee record, for a profile link where the reader may follow it. */
+  employeeId: string | null;
+}
+
+/**
+ * One row of the dashboard's "Mentions & follow-ups".
+ *
+ * Access is re-checked when the list is read, not only when the tag was made: a
+ * case that has since been routed away from the reader keeps its row - the
+ * reference, who tagged them and when - but loses its subject and preview.
+ */
+export interface CaseMentionFeedItem {
+  id: string;
+  caseId: string;
+  caseNumber: string;
+  caseStatus: CaseStatus;
+  /** Null when the reader can no longer open the case. */
+  caseSubject: string | null;
+  mentionedByName: string | null;
+  /** A clipped, single-line excerpt of the message. Null without access. */
+  preview: string | null;
+  createdAt: string;
+  /** From the notification it sent. Null until it is opened. */
+  readAt: string | null;
+  notificationId: string | null;
+  /** Where it opens: the desk's view or the requester's. Null without access. */
+  link: string | null;
+}
+
+/** How many of the caller's mentions the dashboard reads. */
+export const caseMentionFeedQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+
+export interface CaseMentionFeed {
+  items: CaseMentionFeedItem[];
+  unread: number;
 }
 
 /** Somebody a case can be handed to, as the assign control receives them. */

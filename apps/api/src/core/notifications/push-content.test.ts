@@ -138,6 +138,36 @@ describe('sensitive kinds get a generic body', () => {
   });
 });
 
+describe('a case mention', () => {
+  const mention = note({
+    type: 'CASE_MENTION',
+    title: 'You were mentioned in a case',
+    message:
+      'Zohaib Saleem mentioned you in CASE-2026-000029 (Medical reimbursement - chemotherapy): "Please process the approved PKR 85,000 reimbursement."',
+    entityType: 'CaseDesk',
+    entityId: 'case-29',
+  });
+
+  it('says who tagged you and which case - never the subject or the comment', () => {
+    const push = buildPushContent(mention);
+    expect(push).toMatchObject({
+      category: 'CASES',
+      title: 'You were mentioned in CASE-2026-000029',
+      body: 'Zohaib Saleem mentioned you. Open HRMS to view it.',
+    });
+    expect(JSON.stringify(push)).not.toMatch(/chemotherapy|85,000|reimbursement/i);
+  });
+
+  it('falls back to the bare title when the message is not in the expected shape', () => {
+    const push = buildPushContent({ ...mention, message: 'Medical: chemotherapy' });
+    expect(push).toMatchObject({ title: 'You were mentioned in a case', body: 'Open HRMS to view it.' });
+  });
+
+  it('is muted with the other case notifications', () => {
+    expect(pushCategory({ type: 'CASE_MENTION', entityType: 'Case' })).toBe('CASES');
+  });
+});
+
 describe('assets', () => {
   it('names the tag, the asset and the kind of fault for IT', () => {
     const push = buildPushContent(

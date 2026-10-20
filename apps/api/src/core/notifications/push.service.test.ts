@@ -134,6 +134,29 @@ describe('queueing a push', () => {
     expect(db.pushDelivery.createMany).not.toHaveBeenCalled();
   });
 
+  it('pushes a case mention only to a recipient who turned browser notifications on', async () => {
+    const mention = {
+      ...NOTIFICATION,
+      type: 'CASE_MENTION',
+      title: 'You were mentioned in a case',
+      message: 'Zohaib Saleem mentioned you in CASE-2026-000029 (Medical claim): "Please process it."',
+    };
+    db.notification.findUnique.mockResolvedValue(mention);
+
+    expect(await push.enqueuePush('n-1')).toBe(2);
+
+    vi.clearAllMocks();
+    db.notification.findUnique.mockResolvedValue(mention);
+    db.pushSubscription.findMany.mockResolvedValue([]);
+    expect(await push.enqueuePush('n-1')).toBe(0);
+    expect(db.pushDelivery.createMany).not.toHaveBeenCalled();
+
+    db.pushSubscription.findMany.mockResolvedValue([{ id: 's-1' }]);
+    db.notificationPreference.findUnique.mockResolvedValue({ pushMutedCategories: ['CASES'] });
+    expect(await push.enqueuePush('n-1')).toBe(0);
+    expect(db.pushDelivery.createMany).not.toHaveBeenCalled();
+  });
+
   it('never mutes the test push', async () => {
     db.notification.findUnique.mockResolvedValue({ ...NOTIFICATION, type: 'SYSTEM', entityType: 'PushTest', entityId: null });
     db.notificationPreference.findUnique.mockResolvedValue({ pushMutedCategories: ['GENERAL', 'CASES'] });

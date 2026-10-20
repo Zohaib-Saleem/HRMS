@@ -37,6 +37,7 @@ import { FormField, Textarea } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { CASE_PRIORITY_TONE, CASE_STATUS_TONE, caseDay, caseTimestamp, fileSize } from './case-shared';
+import { MessageText } from './case-mentions';
 
 /**
  * One case, and the conversation on it.
@@ -275,9 +276,7 @@ export function CaseDetailPage() {
                           {caseTimestamp(message.createdAt)}
                         </span>
                       </div>
-                      <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed">
-                        {message.message}
-                      </p>
+                      <MessageText text={message.message} mentions={message.mentions} />
                       {message.attachments.length > 0 ? (
                         <AttachmentList
                           caseId={detail.id}

@@ -12,6 +12,7 @@ import {
   CASE_PRIORITY_LABELS,
   CASE_STATUS_DESCRIPTIONS,
   CASE_STATUS_LABELS,
+  PERMISSIONS,
   safeAttachmentName,
   type CaseAgentOption,
   type CaseAttachmentRecord,
@@ -36,7 +37,8 @@ import {
 import { FormField, NativeSelect, Textarea } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
-import { useAuthenticatedSession } from '@/features/auth/session-context';
+import { useAuthenticatedSession, usePermissions } from '@/features/auth/session-context';
+import { MentionTextarea, MessageText, type PickedMention } from './case-mentions';
 import { CASE_PRIORITY_TONE, CASE_STATUS_TONE, caseDay, caseTimestamp, fileSize } from './case-shared';
 import { useCaseCatalogue } from './use-case-catalogue';
 
@@ -65,8 +67,10 @@ export function CaseWorkPage() {
   const { id = '' } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const session = useAuthenticatedSession();
+  const { has } = usePermissions();
 
   const [draft, setDraft] = React.useState('');
+  const [mentions, setMentions] = React.useState<PickedMention[]>([]);
   const [internal, setInternal] = React.useState(false);
   const [files, setFiles] = React.useState<File[]>([]);
   const [routing, setRouting] = React.useState(false);
@@ -124,6 +128,7 @@ export function CaseWorkPage() {
       const message = await api.post<{ id: string }>(`/cases/queue/${id}/messages`, {
         message: draft.trim(),
         internal,
+        mentionUserIds: mentions.map((m) => m.userId),
       });
 
       const failed: string[] = [];
@@ -140,10 +145,17 @@ export function CaseWorkPage() {
       return failed;
     },
     onSuccess: (failed) => {
+      const tagged = mentions.length;
       setDraft('');
+      setMentions([]);
       setFiles([]);
       refresh();
-      toast.success(internal ? 'Note saved for the desk.' : 'Reply sent to the requester.');
+      toast.success(internal ? 'Note saved for the desk.' : 'Reply sent to the requester.', {
+        description:
+          tagged > 0
+            ? `${tagged === 1 ? 'The person' : `All ${tagged} people`} you tagged ${tagged === 1 ? 'was' : 'were'} notified.`
+            : undefined,
+      });
       if (failed.length > 0) {
         toast.warning('Some files were not attached.', { description: failed.join(' · ') });
       }
@@ -340,9 +352,11 @@ export function CaseWorkPage() {
                           {caseTimestamp(message.createdAt)}
                         </span>
                       </div>
-                      <p className="whitespace-pre-wrap text-[13.5px] leading-relaxed">
-                        {message.message}
-                      </p>
+                      <MessageText
+                        text={message.message}
+                        mentions={message.mentions}
+                        profileLinks={has(PERMISSIONS.EMPLOYEE_READ)}
+                      />
                       {message.attachments.length > 0 ? (
                         <AttachmentList
                           caseId={detail.id}
@@ -399,23 +413,30 @@ export function CaseWorkPage() {
                     </TabButton>
                   </div>
 
-                  <Textarea
+                  <MentionTextarea
+                    caseId={detail.id}
+                    internal={internal}
                     rows={4}
                     aria-label={internal ? 'Internal note' : 'Reply to the requester'}
                     className={internal ? 'border-warning/50 bg-warning-soft/20' : undefined}
                     placeholder={
                       internal
-                        ? 'For the desk only. What you found, what you tried, what the next person needs to know.'
-                        : 'What has happened, what you need from them, or that it is done.'
+                        ? 'For the desk only. What you found, what you tried, what the next person needs to know. Type @ to tag a colleague.'
+                        : 'What has happened, what you need from them, or that it is done. Type @ to tag a colleague.'
                     }
                     value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
+                    onChange={setDraft}
+                    mentions={mentions}
+                    onMentionsChange={setMentions}
                   />
 
                   <p className="text-[12px] text-muted-foreground">
                     {internal
                       ? `${detail.requesterName} will never see this, and is not notified about it.`
                       : `${detail.requesterName} sees this on their case and is notified.`}
+                    {mentions.length > 0
+                      ? ' Tagged people are notified. Tagging does not assign the case or change its status.'
+                      : ''}
                   </p>
 
                   <input

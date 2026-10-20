@@ -10,6 +10,7 @@ import {
   canTransitionCase,
   caseAssignSchema,
   caseDeskReplySchema,
+  caseMentionCandidateQuerySchema,
   casePriorityChangeSchema,
   caseQueueQuerySchema,
   caseRouteSchema,
@@ -48,6 +49,13 @@ import {
   type CaseDeskAgent,
 } from './case-desk.service.js';
 import { caseQueueOwners, notifyDesk } from './case-notify.service.js';
+import {
+  MESSAGE_MENTIONS_SELECT,
+  mentionCandidates,
+  mentionRows,
+  notifyMentions,
+  resolveMentions,
+} from './case-mentions.service.js';
 
 /**
  * The desk: the people who answer cases.
@@ -327,6 +335,7 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
               uploadedBy: { select: { firstName: true, lastName: true } },
             },
           },
+          mentions: MESSAGE_MENTIONS_SELECT,
         },
       }),
       prisma.caseAttachment.findMany({
@@ -769,6 +778,33 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
   );
 
   /**
+   * Who may be tagged in a message on this case - the `@` dropdown.
+   *
+   * Gated like the composer it serves: somebody who cannot write on the case
+   * has nobody to tag. Everybody active is searchable; the ones who could not
+   * open the message come back disabled with the reason, and the save refuses
+   * them again whatever the browser sends.
+   */
+  app.get(
+    '/queue/:id/mention-candidates',
+    {
+      preHandler: requireAnyPermission(
+        PERMISSIONS.CASE_RESPOND,
+        PERMISSIONS.CASE_NOTE_INTERNAL,
+      ),
+    },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const agent = await requireAgent(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const query = parseOrThrow(caseMentionCandidateQuerySchema, request.query);
+
+      const row = await deskCaseOrThrow(agent, id);
+      return reply.send({ data: await mentionCandidates(row, auth.userId, query) });
+    },
+  );
+
+  /**
    * The desk's reply, and the desk's note.
    *
    * One endpoint for both, because they are written in the same box on the same
@@ -807,6 +843,19 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      /*
+       * Tags are checked before anything is written, so a refused tag leaves
+       * no half-sent message behind. A tag changes nothing about the case: no
+       * status, no assignee, no access - see `case-mentions.service.ts`.
+       */
+      const mentioned = await resolveMentions(row, {
+        authorUserId: auth.userId,
+        message: input.message,
+        internal: input.internal,
+        userIds: input.mentionUserIds,
+      });
+      const mentionedIds = mentioned.map((m) => m.userId);
+
       const now = new Date();
       const [message] = await prisma.$transaction([
         prisma.caseMessage.create({
@@ -816,6 +865,7 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
             senderUserId: auth.userId,
             message: input.message,
             isInternal: input.internal,
+            mentions: mentionRows(row, mentioned),
           },
           select: { id: true, createdAt: true },
         }),
@@ -838,11 +888,28 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
         summary: input.internal
           ? `Wrote an internal note on case ${row.caseNumber}`
           : `Replied to the requester on case ${row.caseNumber}`,
-        after: { messageId: message.id, characters: input.message.length },
+        after: {
+          messageId: message.id,
+          characters: input.message.length,
+          ...(mentionedIds.length > 0 ? { mentionedUserIds: mentionedIds } : {}),
+        },
         request,
       });
 
-      if (!input.internal) {
+      // Only after the message is saved, and once per person.
+      await notifyMentions({
+        row,
+        messageId: message.id,
+        authorUserId: auth.userId,
+        message: input.message,
+        targets: mentioned,
+        logger: request.log,
+      });
+
+      // A requester who was tagged has just been told, by name; a second,
+      // vaguer notification about the same reply would be noise.
+      const requesterTagged = mentionedIds.includes(requesterUserId(row) ?? '');
+      if (!input.internal && !requesterTagged) {
         await tellRequester(
           row,
           `New reply on case ${row.caseNumber}`,
@@ -857,6 +924,7 @@ export const caseDeskRoutes: FastifyPluginAsync = async (app) => {
         caseId: row.id,
         userIds: [row.assignedUserId],
         actorUserId: auth.userId,
+        exclude: mentionedIds,
         title: input.internal
           ? `Internal note on case ${row.caseNumber}`
           : `Reply sent on case ${row.caseNumber}`,
