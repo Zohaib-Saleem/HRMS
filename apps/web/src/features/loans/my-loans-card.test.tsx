@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import type { LoanRecord } from '@hrms/shared';
+import { loanStatusLabel, type LoanRecord } from '@hrms/shared';
 
 /**
  * The employee's loans card on their own dashboard.
@@ -91,9 +91,15 @@ const BASE: LoanRecord = {
   createdAt: '2026-03-19T00:00:00.000Z',
   canApprove: false,
   canCancel: false,
+  statusLabel: 'Repayment in progress',
 };
 
-const loan = (over: Partial<LoanRecord>): LoanRecord => ({ ...BASE, ...over });
+/** The label follows the status unless a case sets it, as the server's would. */
+const loan = (over: Partial<LoanRecord>): LoanRecord => ({
+  ...BASE,
+  statusLabel: over.status ? loanStatusLabel({ status: over.status, kind: over.kind ?? BASE.kind, paidInstallments: over.paidInstallments ?? BASE.paidInstallments }) : BASE.statusLabel,
+  ...over,
+});
 
 function renderCard(rows: LoanRecord[]) {
   vi.mocked(api.getPage).mockImplementation(() =>

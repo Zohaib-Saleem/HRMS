@@ -11,7 +11,11 @@ import {
   loanCreateSchema,
   loanDecisionSchema,
   loanQuerySchema,
+  loanRecordPaymentSchema,
   loanRejectSchema,
+  loanRescheduleSchema,
+  loanReversePaymentSchema,
+  loanWaiveSchema,
   monthlyDeductionFor,
   type LoanKind,
 } from '@hrms/shared';
@@ -34,8 +38,8 @@ import { callerEmployeeOrThrow } from '../time/helpers.js';
 import { evaluateLoanEligibility } from './loan-eligibility.service.js';
 import { currentLoanPolicy } from './loan-policy.service.js';
 import {
+  LOAN_DETAIL_INCLUDE,
   LOAN_INCLUDE,
-  completeIfSettled,
   day,
   scheduleRows,
   toLoanDetail,
@@ -43,6 +47,20 @@ import {
   toMonthStart,
   toNumber,
 } from './loans.service.js';
+import {
+  canCorrectLoans,
+  carryForwardPastClosedMonths,
+  recordManualPayment,
+  rescheduleLoan,
+  reverseManualPayment,
+  settleHistoricalInstallments,
+  waiveInstallment,
+} from './loan-ledger.service.js';
+import {
+  currentPayrollMonth,
+  deductionMonthInfo,
+  resolveRequestedDeductionMonth,
+} from './loan-schedule.service.js';
 
 /**
  * Employee loans.
@@ -115,6 +133,51 @@ async function callerContext(auth: {
     employeeId: self?.id ?? null,
     canApprove: auth.permissions.has(PERMISSIONS.LOAN_APPROVE),
     canManage: auth.permissions.has(PERMISSIONS.LOAN_MANAGE),
+    canCorrect: canCorrectLoans(auth.permissions),
+  };
+}
+
+/**
+ * One loan in full, as every endpoint that changes a loan returns it: the
+ * schedule, the ledger behind it with the names of who recorded what, and the
+ * month the screen should measure Due and Overdue against.
+ */
+async function loanDetailFor(
+  auth: { companyId: string; userId: string; permissions: ReadonlySet<string> },
+  loanId: string,
+) {
+  const [row, currentMonth, caller] = await Promise.all([
+    prisma.employeeLoan.findUniqueOrThrow({ where: { id: loanId }, include: LOAN_DETAIL_INCLUDE }),
+    currentPayrollMonth(auth.companyId),
+    callerContext(auth),
+  ]);
+  const actorIds = [
+    ...new Set((row.transactions ?? []).map((t) => t.createdBy).filter(Boolean) as string[]),
+  ];
+  const users = actorIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: actorIds } },
+        select: { id: true, email: true, employee: { select: { firstName: true, lastName: true, displayName: true } } },
+      })
+    : [];
+  const names = new Map(
+    users.map((u) => [u.id, u.employee ? employeeLabel(u.employee) : u.email] as const),
+  );
+  return toLoanDetail(row, caller, { currentMonth, names });
+}
+
+/**
+ * Correcting a loan's history needs both halves of the authority behind it.
+ *
+ * `loan.manage` for the loan and `payroll.manage` for what payroll does with
+ * it: Super Admin, HR Admin and Accounts hold both; nobody else does.
+ */
+function requireLoanCorrector() {
+  return async (request: FastifyRequest) => {
+    const auth = requireAuthContext(request);
+    if (!canCorrectLoans(auth.permissions)) {
+      throw new ForbiddenError('Correcting loan history needs both loan and payroll management permissions.');
+    }
   };
 }
 
@@ -285,13 +348,24 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
 
     const row = await prisma.employeeLoan.findFirst({
       where: { id, companyId: auth.companyId },
-      include: LOAN_INCLUDE,
+      select: { id: true, employeeId: true },
     });
     if (!row) throw new NotFoundError('Loan');
 
     await assertEmployeeInScope(auth, row.employeeId);
 
-    return reply.send({ data: toLoanDetail(row, await callerContext(auth)) });
+    return reply.send({ data: await loanDetailFor(auth, row.id) });
+  });
+
+  /**
+   * The deduction month rule, as the server will apply it.
+   *
+   * The request form reads its default from here instead of the browser's own
+   * clock, so the month an employee sees is the month the server stores.
+   */
+  app.get('/deduction-month', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    return reply.send({ data: await deductionMonthInfo(auth.companyId) });
   });
 
   /** An administrator recording a loan that has already been agreed. */
@@ -317,6 +391,19 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
       if (!employee) throw new ValidationError({ employeeId: ['That employee does not exist.'] });
 
       await assertNoActiveLoan(input.employeeId, input.kind);
+
+      if (input.alreadyRepaidInstallments > 0) {
+        if (!canCorrectLoans(auth.permissions)) {
+          throw new ForbiddenError(
+            'Recording repayments made before a loan was entered needs both loan and payroll management permissions.',
+          );
+        }
+        if (!input.activate) {
+          throw new ValidationError({
+            alreadyRepaidInstallments: ['Earlier repayments can only be recorded on a loan that is released.'],
+          });
+        }
+      }
 
       /*
        * The same gate, with the override an authorised user is allowed.
@@ -381,6 +468,19 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           }),
         });
 
+        // A loan entered after the fact, with months already repaid: settle
+        // them now, inside the same transaction, so no payroll run ever sees
+        // them as owed.
+        if (input.alreadyRepaidInstallments > 0) {
+          await settleHistoricalInstallments(tx, {
+            companyId: auth.companyId,
+            loanId: loan.id,
+            count: input.alreadyRepaidInstallments,
+            reason: input.alreadyRepaidReason ?? 'Repaid before it was entered in HRMS.',
+            actorId: auth.userId,
+          });
+        }
+
         return loan;
       });
 
@@ -400,16 +500,13 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           installmentCount: input.installmentCount,
           startMonth: input.startMonth,
           status: created.status,
+          alreadyRepaidInstallments: input.alreadyRepaidInstallments,
+          alreadyRepaidReason: input.alreadyRepaidReason ?? null,
         },
         request,
       });
 
-      const full = await prisma.employeeLoan.findUniqueOrThrow({
-        where: { id: created.id },
-        include: LOAN_INCLUDE,
-      });
-
-      return reply.status(201).send({ data: toLoanDetail(full, await callerContext(auth)) });
+      return reply.status(201).send({ data: await loanDetailFor(auth, created.id) });
     },
   );
 
@@ -453,6 +550,11 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         select: { currency: true },
       });
 
+      // The deduction month, by the company rule - the one asked for if it is
+      // allowed, the default if none was asked for. Stored on the loan and
+      // its schedule; payroll reads the schedule and nothing else.
+      const startMonth = await resolveRequestedDeductionMonth(auth.companyId, input.startMonth);
+
       const chain = await resolveChain(auth.companyId, 'LOAN_REQUEST', self.id);
       assertChainUsable(chain, self.id);
 
@@ -468,7 +570,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
             currency: company.currency,
             installmentCount: input.installmentCount,
             monthlyDeduction: monthly,
-            startMonth: toMonthStart(input.startMonth),
+            startMonth: toMonthStart(startMonth),
             status: 'PENDING',
             purpose: input.purpose,
             notes: input.notes,
@@ -488,7 +590,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
             employeeId: self.id,
             principal: input.principalAmount,
             installmentCount: input.installmentCount,
-            startMonth: input.startMonth,
+            startMonth,
           }),
         });
 
@@ -500,8 +602,8 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           requesterUserId: auth.userId,
           title:
             input.kind === 'SALARY_ADVANCE'
-              ? `Salary advance: ${company.currency} ${input.principalAmount}, recovered from ${input.startMonth.slice(0, 7)} pay`
-              : `Loan: ${company.currency} ${input.principalAmount} over ${input.installmentCount} month${input.installmentCount === 1 ? '' : 's'}`,
+              ? `Salary advance: ${company.currency} ${input.principalAmount}, recovered from ${startMonth} pay`
+              : `Loan: ${company.currency} ${input.principalAmount} over ${input.installmentCount} month${input.installmentCount === 1 ? '' : 's'}, from ${startMonth}`,
           summary: input.purpose,
           chain,
           request,
@@ -543,13 +645,14 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           kind: input.kind,
           principalAmount: input.principalAmount,
           installmentCount: input.installmentCount,
-          startMonth: input.startMonth,
+          startMonth,
+          requestedStartMonth: input.startMonth ?? null,
         },
         request,
       });
 
       return reply.status(201).send({
-        data: { id: created.id, approvalRequestId: approval.id, monthlyDeduction: monthly },
+        data: { id: created.id, approvalRequestId: approval.id, monthlyDeduction: monthly, startMonth },
       });
     },
   );
@@ -597,15 +700,23 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           installmentCount: ['A salary advance is recovered in full from a single month.'],
         });
       }
-      const startMonth = input.startMonth ?? day(loan.startMonth)!;
+      const requestedStart = input.startMonth?.slice(0, 7);
+      const storedStart = day(loan.startMonth)!.slice(0, 7);
+      // A month the approver changes is held to the same rule as the
+      // applicant's; the month already on the request is carried forward
+      // below if its payroll has closed since.
+      const startMonth =
+        requestedStart && requestedStart !== storedStart
+          ? await resolveRequestedDeductionMonth(auth.companyId, requestedStart)
+          : storedStart;
       const retermed =
         principal !== toNumber(loan.principalAmount) ||
         installments !== loan.installmentCount ||
-        startMonth !== day(loan.startMonth);
+        startMonth !== storedStart;
 
       const now = new Date();
 
-      await prisma.$transaction(async (tx) => {
+      const carried = await prisma.$transaction(async (tx) => {
         if (retermed) {
           // Nothing has been collected yet - the loan was PENDING - so the
           // whole schedule is replaced rather than patched.
@@ -635,6 +746,12 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
             activatedAt: input.activate ? now : null,
             ...(input.note ? { notes: input.note } : {}),
           },
+        });
+
+        return carryForwardPastClosedMonths(tx, {
+          companyId: auth.companyId,
+          loanId: loan.id,
+          actorId: auth.userId,
         });
       });
 
@@ -676,26 +793,24 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         after: {
           principalAmount: principal,
           installmentCount: installments,
-          startMonth,
+          startMonth: carried?.to ?? startMonth,
           status: input.activate ? 'ACTIVE' : 'APPROVED',
+          carriedForwardFrom: carried?.from ?? null,
         },
         request,
       });
 
+      const deductionMonth = carried?.to ?? startMonth;
       await notifyLoanHolder(
         request,
         loan,
         input.activate
           ? `Your ${nounFor(loan.kind)} was approved and released`
           : `Your ${nounFor(loan.kind)} was approved`,
-        `${loan.currency} ${principal}${retermed ? ', on revised terms' : ''}.${input.activate ? '' : ' It will be released before payroll starts recovering it.'}`,
+        `${loan.currency} ${principal}${retermed ? ', on revised terms' : ''}. ${loan.kind === 'SALARY_ADVANCE' ? 'Recovered from' : 'Deductions start with'} the ${deductionMonth} payslip${carried ? ` (moved from ${carried.from}, whose payroll was already finalized)` : ''}.${input.activate ? '' : ' It will be released before payroll starts recovering it.'}`,
       );
 
-      const updated = await prisma.employeeLoan.findUniqueOrThrow({
-        where: { id: loan.id },
-        include: LOAN_INCLUDE,
-      });
-      return reply.send({ data: toLoanDetail(updated, await callerContext(auth)) });
+      return reply.send({ data: await loanDetailFor(auth, loan.id) });
     },
   );
 
@@ -798,10 +913,21 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
-      await prisma.employeeLoan.update({
-        where: { id: loan.id },
-        data: { status: 'ACTIVE', activatedAt: new Date() },
+      // Released after the deduction month's payroll was finalized: the
+      // schedule is carried forward to the first open month, on the record,
+      // rather than left owed to a payroll that can no longer collect it.
+      const carried = await prisma.$transaction(async (tx) => {
+        await tx.employeeLoan.update({
+          where: { id: loan.id },
+          data: { status: 'ACTIVE', activatedAt: new Date() },
+        });
+        return carryForwardPastClosedMonths(tx, {
+          companyId: auth.companyId,
+          loanId: loan.id,
+          actorId: auth.userId,
+        });
       });
+      const deductionMonth = carried?.to ?? day(loan.startMonth)!.slice(0, 7);
 
       await recordAudit({
         companyId: auth.companyId,
@@ -809,7 +935,8 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         action: 'loan.activate',
         entityType: 'EmployeeLoan',
         entityId: loan.id,
-        summary: `Released the ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)}; ${loan.kind === 'SALARY_ADVANCE' ? 'recovered from' : 'repayment starts'} ${day(loan.startMonth)}`,
+        summary: `Released the ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)}; ${loan.kind === 'SALARY_ADVANCE' ? 'recovered from' : 'repayment starts'} ${deductionMonth}${carried ? ` (carried forward from ${carried.from}, already finalized)` : ''}`,
+        after: { status: 'ACTIVE', startMonth: deductionMonth, carriedForwardFrom: carried?.from ?? null },
         request,
       });
 
@@ -817,14 +944,10 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         request,
         loan,
         `Your ${nounFor(loan.kind)} has been released`,
-        `${loan.currency} ${toNumber(loan.principalAmount)} - ${loan.kind === 'SALARY_ADVANCE' ? 'recovered in full from' : 'repayments start with'} the ${day(loan.startMonth)?.slice(0, 7)} payslip.`,
+        `${loan.currency} ${toNumber(loan.principalAmount)} - ${loan.kind === 'SALARY_ADVANCE' ? 'recovered in full from' : 'repayments start with'} the ${deductionMonth} payslip.`,
       );
 
-      const updated = await prisma.employeeLoan.findUniqueOrThrow({
-        where: { id: loan.id },
-        include: LOAN_INCLUDE,
-      });
-      return reply.send({ data: toLoanDetail(updated, await callerContext(auth)) });
+      return reply.send({ data: await loanDetailFor(auth, loan.id) });
     },
   );
 
@@ -896,66 +1019,210 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ data: { id: loan.id, status: 'CANCELLED' } });
   });
 
+  const installmentParams = z.object({ id: z.string().min(1), installmentId: z.string().min(1) });
+
+  /** The loan an installment belongs to, scoped, or a 404. */
+  async function scopedLoan(
+    auth: Parameters<typeof assertEmployeeInScope>[0] & { companyId: string },
+    loanId: string,
+  ) {
+    const loan = await prisma.employeeLoan.findFirst({
+      where: { id: loanId, companyId: auth.companyId },
+      include: { employee: { select: { firstName: true, lastName: true, displayName: true } } },
+    });
+    if (!loan) throw new NotFoundError('Loan');
+    await assertEmployeeInScope(auth, loan.employeeId);
+    return loan;
+  }
+
   /**
    * Forgive one installment without ending the loan.
    *
-   * Waived counts as settled: it is no longer owed and it is not collected.
-   * That is why the balance treats it alongside PAID rather than pretending
-   * the money is still coming.
+   * Waived counts as settled: it is no longer owed and it is not collected. It
+   * is not a payment, and is never shown as Paid. Deliberate by construction:
+   * a reason is required, and it goes on the ledger and the audit trail.
    */
   app.post(
     '/:id/installments/:installmentId/waive',
     { preHandler: requirePermission(PERMISSIONS.LOAN_MANAGE) },
     async (request, reply) => {
       const auth = requireAuthContext(request);
-      const params = parseOrThrow(
-        z.object({ id: z.string().min(1), installmentId: z.string().min(1) }),
-        request.params,
-      );
-      const body = parseOrThrow(
-        z.object({ note: z.string().trim().max(500).optional() }),
-        request.body ?? {},
-      );
+      const params = parseOrThrow(installmentParams, request.params);
+      const body = parseOrThrow(loanWaiveSchema, request.body ?? {});
 
-      const installment = await prisma.employeeLoanInstallment.findFirst({
-        where: {
-          id: params.installmentId,
-          loanId: params.id,
-          companyId: auth.companyId,
-        },
-        include: { loan: { select: { employeeId: true, status: true } } },
+      await scopedLoan(auth, params.id);
+      const result = await waiveInstallment({
+        companyId: auth.companyId,
+        loanId: params.id,
+        installmentId: params.installmentId,
+        reason: body.reason,
+        actorId: auth.userId,
       });
-      if (!installment) throw new NotFoundError('Installment');
-
-      await assertEmployeeInScope(auth, installment.loan.employeeId);
-
-      if (installment.status !== 'SCHEDULED') {
-        throw new ConflictError(
-          installment.status === 'PENDING_PAYROLL'
-            ? 'That installment is in a payroll run that has not been finalized. Recalculate or cancel the run first.'
-            : `That installment is already ${installment.status.toLowerCase()}.`,
-        );
-      }
-
-      await prisma.employeeLoanInstallment.update({
-        where: { id: installment.id },
-        data: { status: 'WAIVED', note: body.note ?? null },
-      });
-
-      const completed = await completeIfSettled(params.id);
 
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
         action: 'loan.installment.waive',
         entityType: 'EmployeeLoanInstallment',
-        entityId: installment.id,
-        summary: `Waived installment ${installment.sequence} of ${toNumber(installment.amount)}${completed ? '; the loan is now complete' : ''}`,
-        after: { note: body.note ?? null },
+        entityId: result.installmentId,
+        summary: `Waived installment ${result.sequence} of ${result.amount} - ${body.reason}${result.loanCompleted ? '; the loan is now complete' : ''}`,
+        before: { status: 'SCHEDULED' },
+        after: { status: 'WAIVED', reason: body.reason },
         request,
       });
 
-      return reply.send({ data: { id: installment.id, status: 'WAIVED', loanCompleted: completed } });
+      return reply.send({
+        data: { id: result.installmentId, status: 'WAIVED', loanCompleted: result.loanCompleted },
+      });
+    },
+  );
+
+  /**
+   * Record an installment repaid outside payroll.
+   *
+   * The correction for a loan entered with months that were in fact already
+   * repaid - and for any cash or transfer repayment. Writes a MANUAL_PAYMENT
+   * to the ledger and settles the installment, so payroll will not collect it.
+   */
+  app.post(
+    '/:id/installments/:installmentId/record-payment',
+    { preHandler: [requirePermission(PERMISSIONS.LOAN_MANAGE), requireLoanCorrector()] },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const params = parseOrThrow(installmentParams, request.params);
+      const body = parseOrThrow(loanRecordPaymentSchema, request.body ?? {});
+
+      const loan = await scopedLoan(auth, params.id);
+      const before = await prisma.employeeLoanInstallment.findFirst({
+        where: { id: params.installmentId, loanId: loan.id },
+        select: { sequence: true, amount: true, status: true, dueMonth: true, payrollRunId: true },
+      });
+
+      const result = await recordManualPayment({
+        companyId: auth.companyId,
+        loanId: loan.id,
+        installmentId: params.installmentId,
+        paidOn: body.paidOn,
+        reference: body.reference,
+        reason: body.reason,
+        actorId: auth.userId,
+      });
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'loan.installment.record_payment',
+        entityType: 'EmployeeLoanInstallment',
+        entityId: result.installmentId,
+        summary: `Recorded installment ${before?.sequence ?? '?'} of ${employeeLabel(loan.employee)}'s ${nounFor(loan.kind)} as repaid outside payroll on ${body.paidOn} - ${body.reason}${result.releasedFromRunId ? '; taken back from an unfinalized payroll run, which must be recalculated' : ''}`,
+        before: before
+          ? {
+              status: before.status,
+              dueMonth: day(before.dueMonth),
+              amount: toNumber(before.amount),
+              payrollRunId: before.payrollRunId,
+            }
+          : undefined,
+        after: {
+          status: 'PAID',
+          paidOn: body.paidOn,
+          reference: body.reference,
+          reason: body.reason,
+          releasedFromRunId: result.releasedFromRunId,
+        },
+        request,
+      });
+
+      return reply.send({
+        data: {
+          id: result.installmentId,
+          loanCompleted: result.loanCompleted,
+          runNeedsRecalculation: result.releasedFromRunId,
+          loan: await loanDetailFor(auth, loan.id),
+        },
+      });
+    },
+  );
+
+  /** Take back a manual payment recorded in error. The original entry stays. */
+  app.post(
+    '/:id/installments/:installmentId/reverse-payment',
+    { preHandler: [requirePermission(PERMISSIONS.LOAN_MANAGE), requireLoanCorrector()] },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const params = parseOrThrow(installmentParams, request.params);
+      const body = parseOrThrow(loanReversePaymentSchema, request.body ?? {});
+
+      const loan = await scopedLoan(auth, params.id);
+      const result = await reverseManualPayment({
+        companyId: auth.companyId,
+        loanId: loan.id,
+        installmentId: params.installmentId,
+        reason: body.reason,
+        actorId: auth.userId,
+      });
+
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'loan.installment.reverse_payment',
+        entityType: 'EmployeeLoanInstallment',
+        entityId: result.installmentId,
+        summary: `Reversed a manual repayment on ${employeeLabel(loan.employee)}'s ${nounFor(loan.kind)} - ${body.reason}${result.loanReopened ? '; the loan is open again' : ''}`,
+        before: { status: 'PAID' },
+        after: { status: 'SCHEDULED', reason: body.reason, loanReopened: result.loanReopened },
+        request,
+      });
+
+      return reply.send({ data: { id: result.installmentId, loan: await loanDetailFor(auth, loan.id) } });
+    },
+  );
+
+  /**
+   * Move the remaining schedule to start in another month.
+   *
+   * How a deduction month is changed after the request: recorded with the
+   * reason, never into a month whose payroll is finalized, and the employee is
+   * told the new month.
+   */
+  app.post(
+    '/:id/reschedule',
+    { preHandler: [requirePermission(PERMISSIONS.LOAN_MANAGE), requireLoanCorrector()] },
+    async (request, reply) => {
+      const auth = requireAuthContext(request);
+      const { id } = parseOrThrow(idParamSchema, request.params);
+      const body = parseOrThrow(loanRescheduleSchema, request.body ?? {});
+
+      const loan = await scopedLoan(auth, id);
+      const { moves } = await rescheduleLoan({
+        companyId: auth.companyId,
+        loanId: loan.id,
+        startMonth: body.startMonth,
+        reason: body.reason,
+        actorId: auth.userId,
+      });
+
+      if (moves.length > 0) {
+        await recordAudit({
+          companyId: auth.companyId,
+          actorId: auth.userId,
+          action: 'loan.reschedule',
+          entityType: 'EmployeeLoan',
+          entityId: loan.id,
+          summary: `Moved ${moves.length} installment(s) of ${employeeLabel(loan.employee)}'s ${nounFor(loan.kind)} to start ${body.startMonth.slice(0, 7)} - ${body.reason}`,
+          before: { months: moves.map((m) => ({ sequence: m.sequence, dueMonth: m.from })) },
+          after: { months: moves.map((m) => ({ sequence: m.sequence, dueMonth: m.to })), reason: body.reason },
+          request,
+        });
+        await notifyLoanHolder(
+          request,
+          loan,
+          `Your ${nounFor(loan.kind)} deduction month changed`,
+          `${loan.kind === 'SALARY_ADVANCE' ? 'Now recovered from' : 'Deductions now start with'} the ${moves[0]!.to} payslip. ${body.reason}`,
+        );
+      }
+
+      return reply.send({ data: { moved: moves.length, loan: await loanDetailFor(auth, loan.id) } });
     },
   );
 };
@@ -989,13 +1256,24 @@ export async function applyLoanDecision(
         })
       : null;
 
-    await prisma.employeeLoan.update({
-      where: { id: loanId },
-      data: {
-        status: 'APPROVED',
-        approvedAt: now,
-        approvedByUserId: approval?.decidedByUserId ?? null,
-      },
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.employeeLoan.update({
+        where: { id: loanId },
+        data: {
+          status: 'APPROVED',
+          approvedAt: now,
+          approvedByUserId: approval?.decidedByUserId ?? null,
+        },
+        select: { companyId: true },
+      });
+      // Approved after the requested month's payroll closed: carried forward,
+      // on the ledger, so the approval record shows the month it will really
+      // come off.
+      await carryForwardPastClosedMonths(tx, {
+        companyId: updated.companyId,
+        loanId,
+        actorId: approval?.decidedByUserId ?? null,
+      });
     });
     return;
   }

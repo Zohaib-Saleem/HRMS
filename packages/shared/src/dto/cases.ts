@@ -1175,3 +1175,71 @@ export interface CaseCatalogueAdminGroup {
  */
 export const CASE_CATEGORY_IN_USE_MESSAGE =
   'Cases are already filed under this, so it cannot be deleted. Retire it instead - it disappears from the form and the existing cases keep their history.';
+
+// ------------------------------------------------------------------ routing
+
+const optionalUserId = z
+  .string()
+  .trim()
+  .max(64)
+  .nullish()
+  .transform((v) => (v === '' || v === undefined ? null : v));
+
+/**
+ * Who a new case in one queue goes to.
+ *
+ * `categoryId` null is the department's default; a category or subcategory id
+ * otherwise. One rule per scope: saving again for the same scope replaces it.
+ * People are user ids from the company's own accounts - nobody is named in
+ * code or configuration files.
+ */
+export const caseRoutingRuleWriteSchema = z
+  .object({
+    departmentId: z.string().trim().min(1, 'Choose a department.').max(64),
+    categoryId: optionalUserId,
+    responsibleUserId: z.string().trim().min(1, 'Choose who is responsible.').max(64),
+    backupUserId: optionalUserId,
+    escalationUserId: optionalUserId,
+    isActive: z.boolean().default(true),
+  })
+  .superRefine((value, ctx) => {
+    if (value.backupUserId && value.backupUserId === value.responsibleUserId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['backupUserId'],
+        message: 'The backup has to be somebody other than the responsible person.',
+      });
+    }
+  });
+
+export type CaseRoutingRuleWriteInput = z.infer<typeof caseRoutingRuleWriteSchema>;
+
+export interface CaseRoutingPerson {
+  userId: string;
+  name: string;
+  /** False when the account is no longer active or can no longer work cases. */
+  eligible: boolean;
+}
+
+export interface CaseRoutingRuleRecord {
+  id: string;
+  departmentId: string;
+  departmentName: string;
+  /** Null for the department default. */
+  categoryId: string | null;
+  categoryName: string | null;
+  /** Set when `categoryId` is a subcategory: the category it sits under. */
+  parentCategoryName: string | null;
+  responsible: CaseRoutingPerson;
+  backup: CaseRoutingPerson | null;
+  escalation: CaseRoutingPerson | null;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+/** The routing screen: every rule, and who may be named in one. */
+export interface CaseRoutingOverview {
+  rules: CaseRoutingRuleRecord[];
+  /** Active accounts that can work cases - the only people a case can go to. */
+  candidates: CaseAgentOption[];
+}

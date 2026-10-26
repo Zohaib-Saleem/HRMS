@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import type { LoanDetail, LoanRecord } from '@hrms/shared';
+import { loanStatusLabel, type LoanDetail, type LoanRecord } from '@hrms/shared';
 
 /**
  * The Loans tab of a person's profile.
@@ -90,9 +90,15 @@ const BASE: LoanRecord = {
   createdAt: '2026-03-19T00:00:00.000Z',
   canApprove: false,
   canCancel: false,
+  statusLabel: 'Repayment in progress',
 };
 
-const loan = (over: Partial<LoanRecord>): LoanRecord => ({ ...BASE, ...over });
+/** The label follows the status unless a case sets it, as the server's would. */
+const loan = (over: Partial<LoanRecord>): LoanRecord => ({
+  ...BASE,
+  statusLabel: over.status ? loanStatusLabel({ status: over.status, kind: over.kind ?? BASE.kind, paidInstallments: over.paidInstallments ?? BASE.paidInstallments }) : BASE.statusLabel,
+  ...over,
+});
 
 /** A detail response for whichever loan the panel opens, from the same record. */
 function detailFor(record: LoanRecord): LoanDetail {
@@ -112,7 +118,17 @@ function detailFor(record: LoanRecord): LoanDetail {
       payrollRunId: index < record.paidInstallments ? 'run-1' : null,
       paidAt: index < record.paidInstallments ? '2026-08-31T00:00:00.000Z' : null,
       note: null,
+      displayStatus:
+        index < record.paidInstallments
+          ? ('PAID' as const)
+          : index === record.paidInstallments && record.status === 'ACTIVE'
+            ? ('IN_PAYROLL' as const)
+            : ('UPCOMING' as const),
+      settledBy: index < record.paidInstallments ? ('PAYROLL_DEDUCTION' as const) : null,
+      actions: [],
     })),
+    transactions: [],
+    canCorrect: false,
   };
 }
 
@@ -223,7 +239,7 @@ describe('the Loans tab on a profile', () => {
       }),
     ]);
 
-    expect(await screen.findAllByText('Completed')).not.toHaveLength(0);
+    expect(await screen.findAllByText('Fully repaid')).not.toHaveLength(0);
     expect(screen.getByText(/12\/12 paid/)).toBeInTheDocument();
     expect(screen.getByText(/nothing outstanding/)).toBeInTheDocument();
     // Still openable: last year's payslip has to stay explainable.

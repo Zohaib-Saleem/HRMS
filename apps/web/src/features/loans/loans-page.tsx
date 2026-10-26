@@ -283,7 +283,7 @@ export function LoansPage() {
                         </TD>
                         <TD>
                           <Badge variant={LOAN_STATUS_TONE[row.status]}>
-                            {LOAN_STATUS_LABELS[row.status]}
+                            {row.statusLabel}
                           </Badge>
                         </TD>
                       </TR>

@@ -171,6 +171,11 @@ export const attendancePolicySchema = z
      */
     ipRestrictionEnabled: z.boolean().optional(),
     /**
+     * Web check-out must be made inside the office geofence. Optional for the
+     * same reason as the network fields: omitted leaves it as it is.
+     */
+    checkOutLocationEnforced: z.boolean().optional(),
+    /**
      * Networks permitted to check in. Validated here so a typo cannot become a
      * rule that silently matches nothing, or - worse - one that looks like it
      * matches something.

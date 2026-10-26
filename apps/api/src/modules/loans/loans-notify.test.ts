@@ -12,11 +12,15 @@ import { PERMISSIONS, type Permission } from '@hrms/shared';
 const db = vi.hoisted(() => ({
   employee: { findFirst: vi.fn(), findUnique: vi.fn() },
   employeeLoan: { findFirst: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
-  employeeLoanInstallment: { updateMany: vi.fn() },
+  employeeLoanInstallment: { findFirst: vi.fn(), updateMany: vi.fn() },
   approvalRequest: { updateMany: vi.fn() },
   approvalStep: { updateMany: vi.fn() },
   approvalEvent: { create: vi.fn() },
   auditLog: { create: vi.fn() },
+  payrollPeriod: { findMany: vi.fn() },
+  employeeLoanTransaction: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn() },
+  company: { findUniqueOrThrow: vi.fn() },
+  user: { findMany: vi.fn() },
   $transaction: vi.fn(),
 }));
 vi.mock('../../core/db.js', () => ({ prisma: db }));
@@ -84,6 +88,11 @@ async function appAsHr(): Promise<FastifyInstance> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // No payroll month is closed and nothing is on the ledger yet.
+  db.payrollPeriod.findMany.mockResolvedValue([]);
+  db.employeeLoanInstallment.findFirst.mockResolvedValue(null);
+  db.user.findMany.mockResolvedValue([]);
+  db.company.findUniqueOrThrow.mockResolvedValue({ currency: 'PKR', timezone: 'Asia/Karachi' });
   db.employee.findFirst.mockResolvedValue({ id: 'emp-hr', departmentId: 'dep-1' });
   db.employee.findUnique.mockResolvedValue({ userId: 'user-bilal' });
   db.employeeLoan.update.mockResolvedValue({});

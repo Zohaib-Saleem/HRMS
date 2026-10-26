@@ -6,6 +6,7 @@ import { AlertTriangle, ArrowLeft, Calculator, Users } from 'lucide-react';
 import {
   PAYROLL_EXCEPTION_LABELS,
   PERMISSIONS,
+  payrollCalendarDays,
   type PayrollCalculationResult,
   type PayrollExceptionRecord,
   type PayrollLineRecord,
@@ -295,18 +296,19 @@ export function PayrollRunDetailPage() {
                     <TH className="w-32 text-right">Gross</TH>
                     <TH className="w-32 text-right">Deductions</TH>
                     <TH className="w-32 text-right">Net</TH>
-                    <TH className="w-20 text-right">Present</TH>
-                    <TH className="w-20 text-right">Absent</TH>
-                    <TH className="w-24 text-right">Unpaid</TH>
+                    <TH className="w-20 text-right">Calendar days</TH>
+                    <TH className="w-24 text-right">Scheduled working days</TH>
+                    <TH className="w-20 text-right">Paid days</TH>
+                    <TH className="w-24 text-right">Unpaid days</TH>
                     <TH className="w-24 text-right">OT hours</TH>
                   </TR>
                 </THead>
                 <TBody>
                   {lines.isLoading ? (
-                    <TableSkeleton rows={6} columns={13} />
+                    <TableSkeleton rows={6} columns={14} />
                   ) : rows.length === 0 ? (
                     <TR className="hover:bg-transparent">
-                      <TD colSpan={13} className="p-0">
+                      <TD colSpan={14} className="p-0">
                         <EmptyState
                           icon={Users}
                           title={
@@ -372,13 +374,19 @@ export function PayrollRunDetailPage() {
                             {money(line.netAmount, line.currency)}
                           </TD>
                           <TD className="tabular text-right text-[13px]">
-                            {days(line.presentDays)}
+                            {days(payrollCalendarDays(line))}
                           </TD>
                           <TD className="tabular text-right text-[13px]">
-                            {days(line.absentDays)}
+                            {days(line.scheduledDays)}
                           </TD>
                           <TD className="tabular text-right text-[13px]">
-                            {days(line.unpaidLeaveDays)}
+                            {days(line.payableDays)}
+                          </TD>
+                          <TD
+                            className="tabular text-right text-[13px]"
+                            title={`${days(line.absentDays)} full-day absence(s), ${days(line.halfDays)} half day(s) × 0.5, ${days(line.unpaidLeaveDays)} unpaid leave`}
+                          >
+                            {days(line.unpaidDays)}
                           </TD>
                           <TD className="tabular text-right text-[13px]">
                             {hoursFromMinutes(line.paidOvertimeMinutes)}

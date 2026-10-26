@@ -446,10 +446,22 @@ describe('the employee dashboard in the order an employee reads it', () => {
           {
             leaveTypeId: 'lt-1',
             leaveTypeName: 'Annual',
+            isPaid: true,
             annualEntitlementDays: 20,
             usedDays: 5,
             pendingDays: 2,
             availableDays: 15,
+          },
+          // Leave without pay with an HR-granted allowance of 10. It is not
+          // paid leave, so it must not add 10 to "days remaining".
+          {
+            leaveTypeId: 'lt-lwp',
+            leaveTypeName: 'Leave Without Pay',
+            isPaid: false,
+            annualEntitlementDays: 0,
+            usedDays: 0,
+            pendingDays: 0,
+            availableDays: 10,
           },
         ] as never);
       if (path === '/lunch/today')

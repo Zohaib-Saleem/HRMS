@@ -1,10 +1,11 @@
 import type { Prisma } from '@prisma/client';
-import type {
-  PayrollExceptionCode,
-  PayrollExceptionSeverity,
-  PayrollMoneyLine,
-  PayrollPreview,
-  PayrollPreviewRow,
+import {
+  payrollCalendarDays,
+  type PayrollExceptionCode,
+  type PayrollExceptionSeverity,
+  type PayrollMoneyLine,
+  type PayrollPreview,
+  type PayrollPreviewRow,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { NotFoundError, ValidationError } from '../../core/errors.js';
@@ -221,14 +222,21 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
       dailyRate: num(data.dailyRate),
       hourlyRate: num(data.hourlyRate),
 
+      calendarDays: payrollCalendarDays({
+        scheduledDays: num(data.scheduledDays),
+        holidayDays: num(data.holidayDays),
+        weekendDays: num(data.weekendDays),
+      }),
       scheduledDays: num(data.scheduledDays),
       paidDays: num(data.payableDays),
       presentDays: num(data.presentDays),
+      halfDays: num(data.halfDays),
       absentDays: num(data.absentDays),
       unpaidLeaveDays: num(data.unpaidLeaveDays),
       paidLeaveDays: num(data.paidLeaveDays),
       holidayDays: num(data.holidayDays),
       weekendDays: num(data.weekendDays),
+      unpaidDays: num(data.unpaidDays),
 
       allowances: round2(allowances),
       // The hours actually priced, after approval and the payroll cap - not
@@ -293,10 +301,13 @@ export async function buildPayrollPreview(scope: PreviewScope): Promise<PayrollP
         basisDays: 0,
         dailyRate: 0,
         hourlyRate: 0,
+        calendarDays: 0,
         scheduledDays: 0,
         paidDays: 0,
         presentDays: 0,
+        halfDays: 0,
         absentDays: 0,
+        unpaidDays: 0,
         unpaidLeaveDays: 0,
         paidLeaveDays: 0,
         holidayDays: 0,

@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dialog';
 import { ErrorState } from '@/components/feedback/states';
 import { Skeleton } from '@/components/ui/skeleton';
-import { days, hoursFromMinutes, money } from './payroll-shared';
+import { UnpaidDaysBreakdown, days, hoursFromMinutes, money } from './payroll-shared';
 
 /**
  * How one figure was arrived at.
@@ -76,11 +76,12 @@ export function PayrollLineDrawer({
                   {formatDate(data.periodEnd)}. Payroll does not recalculate any of it.
                 </p>
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
-                  <Fact label="Scheduled" value={days(data.attendance.scheduledDays)} />
+                  <Fact label="Scheduled working days" value={days(data.attendance.scheduledDays)} />
                   <Fact label="Present" value={days(data.attendance.presentDays)} />
+                  <Fact label="Half days" value={days(data.attendance.halfDays)} />
                   <Fact label="Paid leave" value={days(data.attendance.paidLeaveDays)} />
-                  <Fact label="Unpaid leave" value={days(data.attendance.unpaidLeaveDays)} />
-                  <Fact label="Absent" value={days(data.attendance.absentDays)} />
+                  <Fact label="Unpaid leave (LWP)" value={days(data.attendance.unpaidLeaveDays)} />
+                  <Fact label="Full-day absences" value={days(data.attendance.absentDays)} />
                   <Fact label="Holidays" value={days(data.attendance.holidayDays)} />
                   <Fact label="Weekends" value={days(data.attendance.weekendDays)} />
                   <Fact
@@ -127,17 +128,21 @@ export function PayrollLineDrawer({
                   />
                   <Fact label="Daily rate" value={money(data.payroll.dailyRate, currency)} />
                   <Fact label="Hourly rate" value={money(data.payroll.hourlyRate, currency)} />
-                  <Fact label="Payable days" value={days(data.payroll.payableDays)} />
-                  <Fact label="Unpaid days" value={days(data.payroll.unpaidDays)} />
                 </dl>
-                {data.payroll.salaryType === 'MONTHLY' && data.payroll.unpaidDays > 0 ? (
-                  <p className="tabular mt-3 border-t border-border pt-2 text-[12.5px] text-muted-foreground">
-                    {money(data.payroll.salaryAmount, currency)} ÷ {data.payroll.basisDays} ={' '}
-                    {money(data.payroll.dailyRate, currency)} per day ×{' '}
-                    {days(data.payroll.unpaidDays)} unpaid
-                  </p>
-                ) : null}
               </section>
+
+              <UnpaidDaysBreakdown
+                currency={currency}
+                line={{
+                  ...data.payroll,
+                  scheduledDays: data.attendance.scheduledDays,
+                  holidayDays: data.attendance.holidayDays,
+                  weekendDays: data.attendance.weekendDays,
+                  absentDays: data.attendance.absentDays,
+                  halfDays: data.attendance.halfDays,
+                  deductions: data.deductions,
+                }}
+              />
 
               <section>
                 <h3 className="mb-2 text-[12.5px] font-semibold uppercase tracking-wide text-muted-foreground">

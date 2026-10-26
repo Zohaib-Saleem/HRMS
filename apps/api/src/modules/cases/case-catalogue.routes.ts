@@ -4,15 +4,19 @@ import {
   PERMISSIONS,
   caseCategoryUpdateSchema,
   caseCategoryWriteSchema,
+  caseRoutingRuleWriteSchema,
   idParamSchema,
   type CaseCatalogueAdminGroup,
   type CaseCategoryAdminRecord,
+  type CaseRoutingOverview,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { parseOrThrow } from '../../core/validate.js';
 import { recordAudit } from '../../core/audit.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { requireAuth, requireAuthContext, requirePermission } from '../../auth/guards.js';
+import { assignableAgents, eligibleAgentIds } from './case-desk.service.js';
+import { routingRuleRecords } from './case-routing.service.js';
 
 /**
  * The routing catalogue, as its administrator edits it.
@@ -369,6 +373,157 @@ export const caseCatalogueRoutes: FastifyPluginAsync = async (app) => {
       request,
     });
 
+    return reply.status(204).send();
+  });
+
+  // --- routing -------------------------------------------------------------
+
+  /**
+   * Who each queue's new cases go to, and who may be named.
+   *
+   * The candidates are the same accounts the desk's own assign picker offers -
+   * active, holding a desk grant - so a rule can never name somebody a case
+   * could not be handed to by hand.
+   */
+  app.get('/catalogue/routing', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const data: CaseRoutingOverview = {
+      rules: await routingRuleRecords(auth.companyId),
+      candidates: await assignableAgents(auth.companyId),
+    };
+    return reply.send({ data });
+  });
+
+  /**
+   * Sets the rule for one scope: a department's default, a category, or a
+   * subcategory. Saving again for the same scope replaces it.
+   *
+   * Only the rule changes. Cases already filed keep the assignee they have;
+   * the routing of a case is decided when it is filed and recorded there.
+   */
+  app.put('/catalogue/routing', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const input = parseOrThrow(caseRoutingRuleWriteSchema, request.body);
+
+    const department = await prisma.department.findFirst({
+      where: { id: input.departmentId, companyId: auth.companyId },
+      select: { id: true, name: true },
+    });
+    if (!department) throw new ValidationError({ departmentId: ['Choose a department.'] });
+
+    if (input.categoryId) {
+      const category = await prisma.caseCategory.findFirst({
+        where: { id: input.categoryId, companyId: auth.companyId, departmentId: department.id },
+        select: { id: true },
+      });
+      if (!category) {
+        throw new ValidationError({ categoryId: ['That queue is not in this department.'] });
+      }
+    }
+
+    const desk = await eligibleAgentIds(
+      auth.companyId,
+      [input.responsibleUserId, input.backupUserId].filter((id): id is string => Boolean(id)),
+    );
+    if (!desk.has(input.responsibleUserId)) {
+      throw new ValidationError({
+        responsibleUserId: ['That person cannot work cases, so cases cannot be routed to them.'],
+      });
+    }
+    if (input.backupUserId && !desk.has(input.backupUserId)) {
+      throw new ValidationError({
+        backupUserId: ['That person cannot work cases, so they cannot be the backup.'],
+      });
+    }
+    if (input.escalationUserId) {
+      const escalation = await prisma.user.findFirst({
+        where: { id: input.escalationUserId, companyId: auth.companyId, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (!escalation) {
+        throw new ValidationError({ escalationUserId: ['Choose an active account to escalate to.'] });
+      }
+    }
+
+    const existing = await prisma.caseRoutingRule.findFirst({
+      where: { companyId: auth.companyId, departmentId: department.id, categoryId: input.categoryId },
+    });
+    const values = {
+      responsibleUserId: input.responsibleUserId,
+      backupUserId: input.backupUserId,
+      escalationUserId: input.escalationUserId,
+      isActive: input.isActive,
+      updatedBy: auth.userId,
+    };
+    const saved = existing
+      ? await prisma.caseRoutingRule.update({ where: { id: existing.id }, data: values })
+      : await prisma.caseRoutingRule.create({
+          data: {
+            ...values,
+            companyId: auth.companyId,
+            departmentId: department.id,
+            categoryId: input.categoryId,
+            createdBy: auth.userId,
+          },
+        });
+
+    await recordAudit({
+      companyId: auth.companyId,
+      actorId: auth.userId,
+      action: existing ? 'case.routing.update' : 'case.routing.create',
+      entityType: 'CaseRoutingRule',
+      entityId: saved.id,
+      summary: `${existing ? 'Changed' : 'Set'} case routing for ${department.name}${input.categoryId ? ' (queue)' : ' (department default)'}`,
+      before: existing
+        ? {
+            responsibleUserId: existing.responsibleUserId,
+            backupUserId: existing.backupUserId,
+            escalationUserId: existing.escalationUserId,
+            isActive: existing.isActive,
+          }
+        : undefined,
+      after: {
+        departmentId: department.id,
+        categoryId: input.categoryId,
+        responsibleUserId: input.responsibleUserId,
+        backupUserId: input.backupUserId,
+        escalationUserId: input.escalationUserId,
+        isActive: input.isActive,
+      },
+      request,
+    });
+
+    const rules = await routingRuleRecords(auth.companyId);
+    return reply.status(existing ? 200 : 201).send({ data: rules.find((r) => r.id === saved.id) });
+  });
+
+  /** Removes a rule. New cases fall back to the next rule up, or the queue owners. */
+  app.delete('/catalogue/routing/:id', async (request, reply) => {
+    const auth = requireAuthContext(request);
+    const { id } = parseOrThrow(idParamSchema, request.params);
+    const rule = await prisma.caseRoutingRule.findFirst({
+      where: { id, companyId: auth.companyId },
+    });
+    if (!rule) throw new NotFoundError('Routing rule');
+
+    await prisma.caseRoutingRule.delete({ where: { id: rule.id } });
+    await recordAudit({
+      companyId: auth.companyId,
+      actorId: auth.userId,
+      action: 'case.routing.delete',
+      entityType: 'CaseRoutingRule',
+      entityId: rule.id,
+      summary: 'Removed a case routing rule',
+      before: {
+        departmentId: rule.departmentId,
+        categoryId: rule.categoryId,
+        responsibleUserId: rule.responsibleUserId,
+        backupUserId: rule.backupUserId,
+        escalationUserId: rule.escalationUserId,
+        isActive: rule.isActive,
+      },
+      request,
+    });
     return reply.status(204).send();
   });
 };

@@ -20,6 +20,10 @@ import {
   type SalarySegment,
 } from './calculation.js';
 import { completeIfSettled, dueInstallmentsForPeriod } from '../loans/loans.service.js';
+import {
+  assertRunLoanDeductionsReconcile,
+  recordPayrollDeductions,
+} from '../loans/loan-ledger.service.js';
 
 /**
  * Running payroll.
@@ -923,6 +927,31 @@ export async function computePayroll(input: {
       });
     }
 
+    /**
+     * Installments from months before this period, collected in it.
+     *
+     * Payroll collects anything due on or before the period's end, so a month
+     * no run ever collected is not lost. That is right for a month genuinely
+     * missed - and exactly wrong for a historical loan entered with months
+     * that were repaid before HRMS knew about it, which would otherwise come
+     * off one payslip all at once. Not blocking, but never silent.
+     */
+    const periodStartKey = dateKey(from);
+    const arrears = (loanInstallmentsByEmployee.get(employee.id) ?? []).filter(
+      (i) => i.dueMonth < periodStartKey,
+    );
+    if (arrears.length > 0) {
+      const months = [...new Set(arrears.map((i) => i.dueMonth.slice(0, 7)))].sort();
+      const total = arrears.reduce((sum, i) => sum + i.amount, 0);
+      pending.push({
+        code: 'LOAN_ARREARS',
+        severity: 'WARNING',
+        message: `${employee.firstName} ${employee.lastName} has ${arrears.length} loan installment(s) from earlier months (${months[0]}${months.length > 1 ? ` to ${months[months.length - 1]}` : ''}) collected in this run, totalling ${Math.round(total * 100) / 100}. If they were already repaid outside payroll, record that on the loan and recalculate.`,
+        employeeId: employee.id,
+        detail: { installmentIds: arrears.map((i) => i.id), months, total },
+      });
+    }
+
     // A ceiling that trimmed something is a fact the employee will ask about,
     // so it is reported rather than silently applied. Not blocking: the cap is
     // the company's own rule, working as configured.
@@ -1240,6 +1269,11 @@ export async function finalizeRun(input: {
     throw new ValidationError({ run: ['This run has no lines to finalize.'] });
   }
 
+  // The stored lines must still collect exactly what the run has claimed. A
+  // repayment recorded after the run was calculated breaks that, and
+  // finalizing anyway would deduct money the loan no longer expects.
+  await assertRunLoanDeductionsReconcile(prisma, runId);
+
   const settings = await resolveSettings(companyId);
   const finalizedAt = new Date();
 
@@ -1270,6 +1304,8 @@ export async function finalizeRun(input: {
     // The money has now actually moved, so the repayments this run collected
     // become PAID. This is the only place an installment is ever settled by
     // payroll - a run that is calculated and then cancelled collects nothing.
+    // The ledger entries are written first, from the same rows.
+    await recordPayrollDeductions(tx, { companyId, runId, finalizedAt, actorId });
     await tx.employeeLoanInstallment.updateMany({
       where: { payrollRunId: runId, status: 'PENDING_PAYROLL' },
       data: { status: 'PAID', paidAt: finalizedAt },

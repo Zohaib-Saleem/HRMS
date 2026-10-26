@@ -2,8 +2,12 @@ import type { Prisma } from '@prisma/client';
 import {
   LOAN_SETTLED_STATUSES,
   buildSchedule,
+  installmentDisplayStatus,
+  loanStatusLabel,
   type LoanDetail,
+  type LoanInstallmentAction,
   type LoanRecord,
+  type LoanTransactionType,
 } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 
@@ -27,6 +31,14 @@ export const LOAN_INCLUDE = {
 } satisfies Prisma.EmployeeLoanInclude;
 
 export type LoanRow = Prisma.EmployeeLoanGetPayload<{ include: typeof LOAN_INCLUDE }>;
+
+/** One loan in full: the schedule and the ledger behind it. */
+export const LOAN_DETAIL_INCLUDE = {
+  ...LOAN_INCLUDE,
+  transactions: { orderBy: { createdAt: 'asc' } },
+} satisfies Prisma.EmployeeLoanInclude;
+
+export type LoanDetailRow = Prisma.EmployeeLoanGetPayload<{ include: typeof LOAN_DETAIL_INCLUDE }>;
 
 export const toNumber = (value: Prisma.Decimal | number | null | undefined): number =>
   value === null || value === undefined ? 0 : Number(value);
@@ -132,15 +144,63 @@ export function toLoanRecord(
     canCancel:
       (row.status === 'PENDING' && (isOwner || caller.canManage)) ||
       (['APPROVED', 'ACTIVE'].includes(row.status) && caller.canManage),
+    statusLabel: loanStatusLabel({
+      status: row.status,
+      kind: row.kind,
+      paidInstallments: totals.paidInstallments,
+    }),
   };
 }
 
+/**
+ * One loan in full.
+ *
+ * `transactions` is optional so a loan read without its ledger - straight
+ * after a write that only included the schedule - still maps; it then simply
+ * reports none. Every installment carries what the caller may do to it, so
+ * the screen draws an Actions menu from the server's answer, not its own.
+ */
 export function toLoanDetail(
-  row: LoanRow,
-  caller: { employeeId: string | null; canApprove: boolean; canManage: boolean },
+  row: LoanRow & { transactions?: LoanDetailRow['transactions'] },
+  caller: {
+    employeeId: string | null;
+    canApprove: boolean;
+    canManage: boolean;
+    canCorrect?: boolean;
+  },
+  context: { currentMonth: string; names?: ReadonlyMap<string, string> } = {
+    currentMonth: new Date().toISOString().slice(0, 7),
+  },
 ): LoanDetail {
+  const transactions = row.transactions ?? [];
+  const reversed = new Set(transactions.map((t) => t.reversesId).filter(Boolean) as string[]);
+
+  // The entry that settled each installment, if one still stands.
+  const settlement = new Map<string, LoanTransactionType>();
+  for (const t of transactions) {
+    if (!t.installmentId || reversed.has(t.id)) continue;
+    if (t.type === 'PAYROLL_DEDUCTION' || t.type === 'MANUAL_PAYMENT' || t.type === 'WAIVER') {
+      settlement.set(t.installmentId, t.type);
+    }
+  }
+  const sequenceOf = new Map(row.installments.map((i) => [i.id, i.sequence]));
+  const canCorrect = caller.canCorrect === true;
+
+  const actionsFor = (i: LoanRow['installments'][number]): LoanInstallmentAction[] => {
+    const actions: LoanInstallmentAction[] = [];
+    if (row.status === 'ACTIVE' && canCorrect) {
+      if (i.status === 'SCHEDULED' || i.status === 'PENDING_PAYROLL') actions.push('RECORD_PAYMENT');
+      if (i.status === 'PAID' && settlement.get(i.id) === 'MANUAL_PAYMENT') actions.push('REVERSE_PAYMENT');
+    }
+    if (i.status === 'SCHEDULED' && caller.canManage && ['APPROVED', 'ACTIVE'].includes(row.status)) {
+      actions.push('WAIVE');
+    }
+    return actions;
+  };
+
   return {
     ...toLoanRecord(row, caller),
+    canCorrect,
     installments: row.installments.map((i) => ({
       id: i.id,
       sequence: i.sequence,
@@ -150,6 +210,32 @@ export function toLoanDetail(
       payrollRunId: i.payrollRunId,
       paidAt: i.paidAt?.toISOString() ?? null,
       note: i.note,
+      displayStatus: installmentDisplayStatus(
+        { status: i.status, dueMonth: day(i.dueMonth)! },
+        row.status,
+        context.currentMonth,
+      ),
+      settledBy:
+        settlement.get(i.id) ??
+        // Paid by a run finalized before the ledger existed: the run is the record.
+        (i.status === 'PAID' && i.payrollRunId ? 'PAYROLL_DEDUCTION' : null),
+      actions: actionsFor(i),
+    })),
+    transactions: transactions.map((t) => ({
+      id: t.id,
+      installmentId: t.installmentId,
+      installmentSequence: t.installmentId ? (sequenceOf.get(t.installmentId) ?? null) : null,
+      type: t.type,
+      amount: toNumber(t.amount),
+      effectiveDate: day(t.effectiveDate)!,
+      payrollRunId: t.payrollRunId,
+      reference: t.reference,
+      reason: t.reason,
+      reversesId: t.reversesId,
+      reversed: reversed.has(t.id),
+      detail: t.detail,
+      createdByName: t.createdBy ? (context.names?.get(t.createdBy) ?? null) : null,
+      createdAt: t.createdAt.toISOString(),
     })),
   };
 }
@@ -206,6 +292,8 @@ export async function dueInstallmentsForPeriod(input: {
     reference: string | null;
     installmentCount: number;
     kind: 'LOAN' | 'SALARY_ADVANCE';
+    /** yyyy-MM-dd, the first of the month the installment belongs to. */
+    dueMonth: string;
   }>
 > {
   if (input.employeeIds.length === 0) return [];
@@ -240,6 +328,7 @@ export async function dueInstallmentsForPeriod(input: {
     reference: row.loan.reference,
     installmentCount: row.loan.installmentCount,
     kind: row.loan.kind,
+    dueMonth: day(row.dueMonth)!,
   }));
 }
 

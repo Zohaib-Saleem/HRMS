@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ChevronRight, FolderTree, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { ChevronRight, FolderTree, Pencil, Plus, RotateCcw, Route, Trash2 } from 'lucide-react';
 import {
   type CaseCatalogueAdminGroup,
   type CaseCategoryAdminRecord,
+  type CaseRoutingOverview,
+  type CaseRoutingRuleRecord,
 } from '@hrms/shared';
 import { api, errorMessage } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -21,7 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { FormField, Input, Textarea } from '@/components/ui/field';
+import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
@@ -63,11 +65,20 @@ export function CaseCategoriesPage() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const [editor, setEditor] = React.useState<EditorState | null>(null);
+  const [routing, setRouting] = React.useState<RoutingScope | null>(null);
 
   const query = useQuery({
     queryKey: ['cases', 'catalogue', 'admin'],
     queryFn: () => api.get<CaseCatalogueAdminGroup[]>('/cases/catalogue'),
   });
+  const routingQuery = useQuery({
+    queryKey: ['cases', 'catalogue', 'routing'],
+    queryFn: () => api.get<CaseRoutingOverview>('/cases/catalogue/routing'),
+  });
+  const ruleFor = (departmentId: string, categoryId: string | null) =>
+    routingQuery.data?.rules.find(
+      (r) => r.departmentId === departmentId && r.categoryId === categoryId,
+    ) ?? null;
 
   /**
    * Both caches, every time.
@@ -153,24 +164,45 @@ export function CaseCategoriesPage() {
                     <Badge variant="neutral">Department retired</Badge>
                   ) : null}
                 </CardTitle>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    setEditor({
-                      mode: 'create',
-                      departmentId: group.departmentId,
-                      departmentName: group.departmentName,
-                      parent: null,
-                      row: null,
-                    })
-                  }
-                >
-                  <Plus className="size-4" aria-hidden />
-                  Add a category
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setRouting({
+                        departmentId: group.departmentId,
+                        departmentName: group.departmentName,
+                        categoryId: null,
+                        label: `${group.departmentName} (department default)`,
+                      })
+                    }
+                  >
+                    <Route className="size-4" aria-hidden />
+                    Default routing
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      setEditor({
+                        mode: 'create',
+                        departmentId: group.departmentId,
+                        departmentName: group.departmentName,
+                        parent: null,
+                        row: null,
+                      })
+                    }
+                  >
+                    <Plus className="size-4" aria-hidden />
+                    Add a category
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
+                <RoutingLine
+                  rule={ruleFor(group.departmentId, null)}
+                  fallback="No department default: cases with no rule of their own stay unassigned and the department's queue owners are told."
+                />
                 {group.categories.length === 0 ? (
                   <p className="py-4 text-[13px] text-muted-foreground">
                     No queues yet, so nothing can be filed with {group.departmentName}. Add a
@@ -182,6 +214,24 @@ export function CaseCategoriesPage() {
                       <li key={category.id} className="py-3">
                         <Row
                           row={category}
+                          routing={
+                            <RoutingLine
+                              rule={ruleFor(group.departmentId, category.id)}
+                              fallback={
+                                ruleFor(group.departmentId, null)
+                                  ? 'Uses the department default.'
+                                  : 'Unrouted: new cases stay unassigned.'
+                              }
+                            />
+                          }
+                          onRoute={() =>
+                            setRouting({
+                              departmentId: group.departmentId,
+                              departmentName: group.departmentName,
+                              categoryId: category.id,
+                              label: `${group.departmentName} › ${category.name}`,
+                            })
+                          }
                           onEdit={() =>
                             setEditor({
                               mode: 'edit',
@@ -212,6 +262,26 @@ export function CaseCategoriesPage() {
                               <li key={child.id}>
                                 <Row
                                   row={child}
+                                  routing={
+                                    <RoutingLine
+                                      rule={ruleFor(group.departmentId, child.id)}
+                                      fallback={
+                                        ruleFor(group.departmentId, category.id)
+                                          ? `Uses the ${category.name} rule.`
+                                          : ruleFor(group.departmentId, null)
+                                            ? 'Uses the department default.'
+                                            : 'Unrouted: new cases stay unassigned.'
+                                      }
+                                    />
+                                  }
+                                  onRoute={() =>
+                                    setRouting({
+                                      departmentId: group.departmentId,
+                                      departmentName: group.departmentName,
+                                      categoryId: child.id,
+                                      label: `${group.departmentName} › ${category.name} › ${child.name}`,
+                                    })
+                                  }
                                   onEdit={() =>
                                     setEditor({
                                       mode: 'edit',
@@ -241,6 +311,13 @@ export function CaseCategoriesPage() {
       )}
 
       <CategoryDialog state={editor} onClose={() => setEditor(null)} onSaved={refresh} />
+      <RoutingDialog
+        scope={routing}
+        rule={routing ? ruleFor(routing.departmentId, routing.categoryId) : null}
+        candidates={routingQuery.data?.candidates ?? []}
+        onClose={() => setRouting(null)}
+        onSaved={() => void queryClient.invalidateQueries({ queryKey: ['cases', 'catalogue', 'routing'] })}
+      />
     </>
   );
 }
@@ -254,12 +331,16 @@ export function CaseCategoriesPage() {
  */
 function Row({
   row,
+  routing,
+  onRoute,
   onEdit,
   onAddChild,
   onRetire,
   onDelete,
 }: {
   row: CaseCategoryAdminRecord;
+  routing?: React.ReactNode;
+  onRoute?: () => void;
   onEdit: () => void;
   onAddChild?: () => void;
   onRetire: () => void;
@@ -285,6 +366,7 @@ function Row({
             : `${row.caseCount} case${row.caseCount === 1 ? '' : 's'} filed here`}
           {row.sortOrder ? ` · sort ${row.sortOrder}` : ''}
         </p>
+        {routing}
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
@@ -292,6 +374,12 @@ function Row({
           <Button variant="ghost" size="sm" onClick={onAddChild}>
             <ChevronRight className="size-4" aria-hidden />
             Subcategory
+          </Button>
+        ) : null}
+        {onRoute ? (
+          <Button variant="ghost" size="sm" onClick={onRoute}>
+            <Route className="size-4" aria-hidden />
+            Routing
           </Button>
         ) : null}
         <Button variant="ghost" size="sm" onClick={onEdit}>
@@ -450,6 +538,204 @@ function CategoryDialog({
             </Button>
             <Button type="submit" disabled={mutation.isPending || name.trim().length < 2}>
               {mutation.isPending ? 'Saving...' : state?.mode === 'edit' ? 'Save' : 'Add it'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --- routing -------------------------------------------------------------------
+
+interface RoutingScope {
+  departmentId: string;
+  departmentName: string;
+  /** Null for the department default. */
+  categoryId: string | null;
+  label: string;
+}
+
+/** Who a queue's new cases go to, in one line. */
+function RoutingLine({ rule, fallback }: { rule: CaseRoutingRuleRecord | null; fallback: string }) {
+  if (!rule) {
+    return <p className="mt-0.5 text-[11.5px] text-muted-foreground">{fallback}</p>;
+  }
+  const who = (p: { name: string; eligible: boolean }) => (p.eligible ? p.name : `${p.name} (cannot take cases)`);
+  return (
+    <p className={cn('mt-0.5 text-[11.5px]', rule.isActive ? 'text-foreground' : 'text-muted-foreground')}>
+      {rule.isActive ? 'New cases go to ' : 'Routing off - was '}
+      <span className="font-medium">{who(rule.responsible)}</span>
+      {rule.backup ? <> · backup {who(rule.backup)}</> : null}
+      {rule.escalation ? <> · escalates to {rule.escalation.name}</> : null}
+      {!rule.responsible.eligible && rule.isActive ? (
+        <Badge variant="warning" className="ml-2">
+          Check routing
+        </Badge>
+      ) : null}
+    </p>
+  );
+}
+
+/**
+ * Setting who a queue's new cases go to.
+ *
+ * The people offered are the accounts that can actually work cases - the
+ * server refuses anybody else - so a rule cannot point at somebody who could
+ * not open the case they were given. Saving changes only what happens to the
+ * next case; nothing already filed moves.
+ */
+function RoutingDialog({
+  scope,
+  rule,
+  candidates,
+  onClose,
+  onSaved,
+}: {
+  scope: RoutingScope | null;
+  rule: CaseRoutingRuleRecord | null;
+  candidates: CaseRoutingOverview['candidates'];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const confirm = useConfirm();
+  const [responsible, setResponsible] = React.useState('');
+  const [backup, setBackup] = React.useState('');
+  const [escalation, setEscalation] = React.useState('');
+  const [active, setActive] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!scope) return;
+    setResponsible(rule?.responsible.userId ?? '');
+    setBackup(rule?.backup?.userId ?? '');
+    setEscalation(rule?.escalation?.userId ?? '');
+    setActive(rule?.isActive ?? true);
+    setError(null);
+  }, [scope, rule]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.put('/cases/catalogue/routing', {
+        departmentId: scope!.departmentId,
+        categoryId: scope!.categoryId,
+        responsibleUserId: responsible,
+        backupUserId: backup || null,
+        escalationUserId: escalation || null,
+        isActive: active,
+      }),
+    onSuccess: () => {
+      onSaved();
+      toast.success('Routing saved.', { description: 'It applies to new cases; existing cases keep their assignee.' });
+      onClose();
+    },
+    onError: (e: unknown) => setError(errorMessage(e)),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.delete(`/cases/catalogue/routing/${rule!.id}`),
+    onSuccess: () => {
+      onSaved();
+      toast.success('Routing removed.');
+      onClose();
+    },
+    onError: (e: unknown) => setError(errorMessage(e)),
+  });
+
+  if (!scope) return null;
+
+  const options = (exclude?: string) =>
+    candidates
+      .filter((c) => c.userId !== exclude)
+      .map((c) => (
+        <option key={c.userId} value={c.userId}>
+          {c.name}
+          {c.departmentName ? ` - ${c.departmentName}` : ''}
+        </option>
+      ));
+
+  return (
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent size="md">
+        <form
+          className="contents"
+          onSubmit={(event) => {
+            event.preventDefault();
+            save.mutate();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Routing for {scope.label}</DialogTitle>
+            <DialogDescription>
+              New cases filed here are assigned to the responsible person and appear in their queue.
+              When they cannot take it - their account is inactive, they can no longer work cases, or
+              they filed it themselves - it goes to the backup. With neither, it stays unassigned and
+              the queue owners and the escalation recipient are told.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="space-y-4">
+            {error ? (
+              <p role="alert" className="rounded-md border border-destructive/40 bg-destructive-soft px-3 py-2.5 text-[13px] text-destructive">
+                {error}
+              </p>
+            ) : null}
+            <FormField label="Responsible person" htmlFor="routing-responsible" required>
+              <NativeSelect value={responsible} onChange={(e) => setResponsible(e.target.value)}>
+                <option value="">Choose a person</option>
+                {options()}
+              </NativeSelect>
+            </FormField>
+            <FormField label="Backup (optional)" htmlFor="routing-backup">
+              <NativeSelect value={backup} onChange={(e) => setBackup(e.target.value)}>
+                <option value="">No backup</option>
+                {options(responsible)}
+              </NativeSelect>
+            </FormField>
+            <FormField
+              label="Escalation recipient (optional)"
+              htmlFor="routing-escalation"
+              hint="Told when a case went to the backup or could not be assigned."
+            >
+              <NativeSelect value={escalation} onChange={(e) => setEscalation(e.target.value)}>
+                <option value="">Nobody</option>
+                {options()}
+              </NativeSelect>
+            </FormField>
+            <label className="flex cursor-pointer items-center gap-2.5 text-[13px]">
+              <input
+                type="checkbox"
+                className="size-4 rounded border-input accent-[var(--primary)]"
+                checked={active}
+                onChange={(e) => setActive(e.target.checked)}
+              />
+              Active
+            </label>
+          </DialogBody>
+          <DialogFooter>
+            {rule ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="mr-auto text-destructive"
+                loading={remove.isPending}
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: 'Remove this routing?',
+                    description: 'New cases fall back to the next rule up, or stay unassigned. Existing cases are not touched.',
+                    confirmLabel: 'Remove',
+                    tone: 'destructive',
+                  });
+                  if (ok) remove.mutate();
+                }}
+              >
+                Remove
+              </Button>
+            ) : null}
+            <Button type="button" variant="ghost" onClick={onClose} disabled={save.isPending}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={save.isPending} disabled={!responsible}>
+              Save routing
             </Button>
           </DialogFooter>
         </form>

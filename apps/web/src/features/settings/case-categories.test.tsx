@@ -87,6 +87,30 @@ const CATALOGUE = [
   },
 ];
 
+/** IT's Email queue is routed; nothing else is. People are account ids, not names in code. */
+const ROUTING = {
+  rules: [
+    {
+      id: 'rule-email',
+      departmentId: 'dep-it',
+      departmentName: 'IT',
+      categoryId: 'cat-email',
+      categoryName: 'Email',
+      parentCategoryName: null,
+      responsible: { userId: 'u-it-manager', name: 'Aziz Qadir', eligible: true },
+      backup: { userId: 'u-it-backup', name: 'Imran Khan', eligible: true },
+      escalation: null,
+      isActive: true,
+      updatedAt: '2026-10-25T00:00:00.000Z',
+    },
+  ],
+  candidates: [
+    { userId: 'u-it-manager', name: 'Aziz Qadir', departmentName: 'IT' },
+    { userId: 'u-it-backup', name: 'Imran Khan', departmentName: 'IT' },
+    { userId: 'u-hr-manager', name: 'Hina Shah', departmentName: 'HR' },
+  ],
+};
+
 let fetchMock: ReturnType<typeof vi.fn>;
 let calls: Array<{ method: string; url: string; body: unknown }> = [];
 
@@ -106,7 +130,9 @@ function serve() {
     calls.push({ method, url, body });
 
     if (method === 'DELETE') return respond({ data: null }, 204);
+    if (method === 'PUT') return respond({ data: { id: 'rule-new' } });
     if (method === 'POST' || method === 'PATCH') return respond({ data: { id: 'cat-new' } });
+    if (url.includes('/cases/catalogue/routing')) return respond({ data: ROUTING });
     return respond({ data: CATALOGUE });
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -267,5 +293,38 @@ describe('the catalogue screen', () => {
 
     await waitFor(() => expect(sent('DELETE')).toBeTruthy());
     expect(sent('DELETE')?.url).toContain('/cases/catalogue/cat-fax');
+  });
+});
+
+describe('routing a queue to its responsible person', () => {
+  it('says who a routed queue goes to, and that an unrouted one stays unassigned', async () => {
+    renderPage();
+    expect(await screen.findByText(/New cases go to/)).toHaveTextContent(
+      'New cases go to Aziz Qadir · backup Imran Khan',
+    );
+    expect(screen.getAllByText(/No department default/).length).toBeGreaterThan(0);
+  });
+
+  it('saves a department default with the chosen people', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Email');
+
+    const card = departmentCard('IT');
+    await user.click(within(card).getByRole('button', { name: /default routing/i }));
+    await user.selectOptions(await screen.findByLabelText(/Responsible person/), 'u-hr-manager');
+    await user.selectOptions(screen.getByLabelText(/Backup/), 'u-it-backup');
+    await user.click(screen.getByRole('button', { name: /save routing/i }));
+
+    await waitFor(() => expect(sent('PUT')).toBeTruthy());
+    expect(sent('PUT')?.url).toContain('/cases/catalogue/routing');
+    expect(sent('PUT')?.body).toEqual({
+      departmentId: 'dep-it',
+      categoryId: null,
+      responsibleUserId: 'u-hr-manager',
+      backupUserId: 'u-it-backup',
+      escalationUserId: null,
+      isActive: true,
+    });
   });
 });

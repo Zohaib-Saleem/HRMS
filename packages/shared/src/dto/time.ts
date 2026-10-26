@@ -634,8 +634,24 @@ export const checkInSchema = z.object({
   longitude: z.coerce.number().min(-180).max(180).optional().nullable(),
 });
 
+/**
+ * Why the browser has no coordinates to send.
+ *
+ * Sent instead of coordinates so the server can say exactly what to do - a
+ * denied permission and a phone that cannot get a fix are different problems -
+ * and so the refusal is on the record. It never substitutes for a location:
+ * a check-out that needs one is refused without it.
+ */
+export const LOCATION_UNAVAILABLE_REASONS = ['DENIED', 'UNAVAILABLE', 'TIMEOUT', 'UNSUPPORTED'] as const;
+
 export const checkOutSchema = z.object({
   notes: z.string().trim().max(500).optional().nullable(),
+  // Sent when the check-out needs a location - premises check-out, or a
+  // company that geofences web check-out. Compared on the server against the
+  // office boundary; the browser decides nothing.
+  latitude: z.coerce.number().min(-90).max(90).optional().nullable(),
+  longitude: z.coerce.number().min(-180).max(180).optional().nullable(),
+  locationUnavailable: z.enum(LOCATION_UNAVAILABLE_REASONS).optional().nullable(),
 });
 
 export const attendanceSummaryQuerySchema = z.object({
@@ -731,6 +747,12 @@ export interface AttendanceTodayState {
   reason: string | null;
   /** True when the company requires coordinates with a check-in. */
   locationRequired: boolean;
+  /**
+   * True when a web check-out must carry the device's location: this person
+   * may check out from the office premises, or the company geofences web
+   * check-out. The boundary itself is never sent.
+   */
+  checkOutLocationRequired: boolean;
   /** True when check-in is limited to approved networks. The list is never sent. */
   networkRestricted: boolean;
   /** The override in force today, or null when the company baseline applies. */

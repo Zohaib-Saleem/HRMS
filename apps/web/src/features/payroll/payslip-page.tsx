@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Printer } from 'lucide-react';
-import type { PayslipRecord } from '@hrms/shared';
+import { payrollCalendarDays, type PayslipRecord } from '@hrms/shared';
 import { api } from '@/lib/api';
 import { formatDate } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
@@ -101,12 +101,15 @@ export function PayslipPage() {
             Attendance
           </h2>
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
-            <Field label="Working days" value={days(line.scheduledDays)} />
+            <Field label="Calendar days" value={days(payrollCalendarDays(line))} />
+            <Field label="Scheduled working days" value={days(line.scheduledDays)} />
             <Field label="Present" value={days(line.presentDays)} />
             <Field label="Paid leave" value={days(line.paidLeaveDays)} />
-            <Field label="Unpaid leave" value={days(line.unpaidLeaveDays)} />
-            <Field label="Absence" value={days(line.absentDays)} />
-            <Field label="Payable days" value={days(line.payableDays)} />
+            <Field label="Unpaid leave (LWP)" value={days(line.unpaidLeaveDays)} />
+            <Field label="Full-day absences" value={days(line.absentDays)} />
+            {line.halfDays > 0 ? <Field label="Half days" value={days(line.halfDays)} /> : null}
+            <Field label="Paid days" value={days(line.payableDays)} />
+            <Field label="Unpaid days" value={days(line.unpaidDays)} />
             {line.lateOccurrences > 0 ? (
               <Field label="Late arrivals" value={`${line.lateOccurrences} (${line.lateMinutes} min)`} />
             ) : null}

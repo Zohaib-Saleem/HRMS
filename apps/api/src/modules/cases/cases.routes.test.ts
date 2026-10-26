@@ -70,6 +70,9 @@ const db = vi.hoisted(() => ({
   user: { findMany: vi.fn() },
   department: { findFirst: vi.fn(), findMany: vi.fn() },
   caseCategory: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() },
+  // No routing rules unless a test sets one: a queue nobody configured
+  // behaves exactly as it did before rules existed.
+  caseRoutingRule: { findMany: vi.fn(async (_args: never): Promise<unknown[]> => []) },
   case: {
     findFirst: vi.fn(),
     findMany: vi.fn(),

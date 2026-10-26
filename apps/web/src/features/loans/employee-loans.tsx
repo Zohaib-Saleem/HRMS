@@ -219,7 +219,7 @@ export function EmployeeLoans({
                         </p>
                       </div>
                       <Badge variant={LOAN_STATUS_TONE[row.status]}>
-                        {LOAN_STATUS_LABELS[row.status]}
+                        {row.statusLabel}
                       </Badge>
                     </button>
                   </li>

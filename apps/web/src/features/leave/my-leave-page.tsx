@@ -143,19 +143,35 @@ function MyLeavePageInner() {
                 {!b.isPaid ? <Badge variant="neutral">Unpaid</Badge> : null}
               </div>
               <p className="tabular mt-1 text-3xl font-semibold leading-none tracking-tight">
-                {days(b.availableDays)}
+                {days(b.isPaid ? b.availableDays : b.usedDays)}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">days available</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {b.isPaid
+                  ? 'days available'
+                  : `unpaid days taken · ${days(b.availableDays)} more allowed`}
+              </p>
+              {!b.isPaid ? (
+                <p className="mt-1 text-[11.5px] text-muted-foreground">
+                  Leave without pay is not paid leave: every approved day is deducted from salary.
+                </p>
+              ) : null}
 
               <dl className="tabular mt-3 space-y-1 border-t border-border pt-3 text-[12px]">
                 <Row label="Opening (carried)" value={days(b.openingDays)} />
                 <Row label="Accrued" value={days(b.accruedDays)} />
                 {b.adjustmentDays !== 0 ? (
-                  <Row label="Adjustment" value={days(b.adjustmentDays)} />
+                  <Row
+                    label={b.isPaid ? 'Adjustment' : 'Allowance granted'}
+                    value={days(b.adjustmentDays)}
+                  />
                 ) : null}
                 <Row label="Used" value={days(b.usedDays)} />
                 <Row label="Pending" value={days(b.pendingDays)} />
-                <Row label="Entitlement" value={`${days(b.annualEntitlementDays)}/yr`} muted />
+                <Row
+                  label={b.isPaid ? 'Entitlement' : 'Annual cap (unpaid)'}
+                  value={`${days(b.annualEntitlementDays)}/yr`}
+                  muted
+                />
               </dl>
             </Card>
           ))}
@@ -345,7 +361,9 @@ function LeaveRequestDrawer({ open, onClose }: { open: boolean; onClose: () => v
               required
               hint={
                 balance
-                  ? `${days(balance.availableDays)} day(s) available, counting leave awaiting approval.`
+                  ? balance.isPaid
+                    ? `${days(balance.availableDays)} day(s) available, counting leave awaiting approval.`
+                    : `Unpaid: deducted from salary. ${days(balance.availableDays)} more unpaid day(s) allowed this year, counting requests awaiting approval.`
                   : undefined
               }
             >
@@ -354,7 +372,7 @@ function LeaveRequestDrawer({ open, onClose }: { open: boolean; onClose: () => v
                 {(types.data?.data ?? []).map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
-                    {t.isPaid ? '' : ' (unpaid)'}
+                    {t.isPaid ? '' : ' (unpaid - deducted from salary)'}
                   </option>
                 ))}
               </NativeSelect>

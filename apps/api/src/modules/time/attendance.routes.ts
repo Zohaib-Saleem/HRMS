@@ -52,6 +52,8 @@ import { closesPreviousDay } from '../attendance-device/overnight-attribution.js
 import {
   assertCheckInIpAllowed,
   assertCheckInLocationAllowed,
+  assertCheckOutLocationAllowed,
+  OutsideBoundaryError,
   assignmentOn,
   deriveRange,
   deriveRangeForEmployees,
@@ -437,6 +439,7 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         day?.leaveTypeName ??
         (day?.status === 'WEEKEND' ? 'Weekend' : day?.status === 'OFF_DAY' ? 'Off day' : null),
       locationRequired: policy.locationRestrictionEnabled,
+      checkOutLocationRequired: self.premisesCheckOutAllowed === true || policy.checkOutLocationEnforced,
       // The allow-list itself is never sent to the browser; only whether one
       // applies, so the widget can explain a refusal without publishing the
       // company network layout.
@@ -555,6 +558,44 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
 
     const policy = await resolvePolicyFor(auth.companyId, self.id, existing.date);
 
+    /*
+     * Where the check-out is being made from, when that matters: an employee
+     * allowed to check out from the office premises, or a company that
+     * geofences web check-out. Checked here, against the work location's own
+     * boundary - never decided by the browser. A refusal is recorded with the
+     * distance, so repeated attempts from outside are visible to HR.
+     */
+    let where: Awaited<ReturnType<typeof assertCheckOutLocationAllowed>> = null;
+    try {
+      where = await assertCheckOutLocationAllowed({
+        employee: self,
+        policy,
+        latitude: input.latitude ?? null,
+        longitude: input.longitude ?? null,
+        locationUnavailable: input.locationUnavailable ?? null,
+      });
+    } catch (error) {
+      await recordAudit({
+        companyId: auth.companyId,
+        actorId: auth.userId,
+        action: 'attendance.check_out.refused',
+        entityType: 'AttendanceRecord',
+        entityId: existing.id,
+        summary:
+          error instanceof OutsideBoundaryError
+            ? `Web check-out refused: ${error.measured.distanceMeters}m from the office, outside the ${error.measured.radiusMeters}m ${error.measured.boundary === 'PREMISES' ? 'premises' : 'check-out'} boundary`
+            : `Web check-out refused: ${error instanceof Error ? error.message : 'location check failed'}`,
+        after: {
+          latitude: input.latitude ?? null,
+          longitude: input.longitude ?? null,
+          locationUnavailable: input.locationUnavailable ?? null,
+          ...(error instanceof OutsideBoundaryError ? error.measured : {}),
+        },
+        request,
+      });
+      throw error;
+    }
+
     // The shift captured at check-in is the one scored, so a shift reassignment
     // made during the day cannot change how the day is measured after the fact.
     const shift = existing.shiftId
@@ -585,6 +626,13 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
         irregular: computed.irregular,
         status: computed.status,
         notes: input.notes ?? existing.notes,
+        // Marks the day as closed on the web. A terminal upload for the same
+        // day keeps this check-out unless it carries one of its own - see
+        // `recalculateFromPunches` - so the day never ends up with two.
+        checkOutSource: 'SELF',
+        checkOutLatitude: input.latitude ?? null,
+        checkOutLongitude: input.longitude ?? null,
+        checkOutDistanceMeters: where?.distanceMeters ?? null,
       },
     });
 
@@ -594,7 +642,18 @@ export const attendanceRoutes: FastifyPluginAsync = async (app) => {
       action: 'attendance.check_out',
       entityType: 'AttendanceRecord',
       entityId: record.id,
-      summary: `Checked out after ${((computed.workedMinutes ?? 0) / 60).toFixed(1)} hour(s), scored ${computed.status}`,
+      summary: `Checked out after ${((computed.workedMinutes ?? 0) / 60).toFixed(1)} hour(s), scored ${computed.status}${
+        where
+          ? `; ${where.distanceMeters}m from the office, inside the ${where.radiusMeters}m ${where.boundary === 'PREMISES' ? 'premises' : 'check-out'} boundary`
+          : ''
+      }`,
+      after: {
+        checkOutAt: now.toISOString(),
+        source: 'WEB',
+        location: where
+          ? { validated: true, ...where, latitude: input.latitude, longitude: input.longitude }
+          : { validated: false, required: false },
+      },
       request,
     });
 

@@ -20,8 +20,12 @@ const db = vi.hoisted(() => ({
   payrollPeriod: { update: vi.fn() },
   // Finalizing settles the loan repayments the run collected, so the double
   // needs the table even for a run that has no loans against it.
-  employeeLoanInstallment: { updateMany: vi.fn(), findMany: vi.fn(() => []) },
+  employeeLoanInstallment: { updateMany: vi.fn(), findMany: vi.fn((): unknown[] => []) },
   employeeLoan: { findUnique: vi.fn(() => null), update: vi.fn() },
+  // Finalizing checks the stored loan deductions against the installments the
+  // run claimed, and writes a ledger entry for each one it settles.
+  payrollLine: { findMany: vi.fn((): unknown[] => []) },
+  employeeLoanTransaction: { createMany: vi.fn() },
   $transaction: vi.fn(),
 }));
 
@@ -391,6 +395,58 @@ describe('a finalized run cannot be recalculated', () => {
     expect(db.payrollPeriod.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: 'CLOSED' } }),
     );
+  });
+
+  it('writes a payroll-deduction ledger entry for every installment it settles', async () => {
+    db.payrollRun.findFirst.mockResolvedValue({
+      ...runRow('APPROVED'),
+      lines: [{ id: 'line-1', employeeId: 'employee-1' }],
+    });
+    db.payrollSettings.findUnique.mockResolvedValue(SETTINGS);
+    db.payslip.count.mockResolvedValue(0);
+    db.$transaction.mockImplementation(async (fn: (tx: typeof db) => Promise<unknown>) => fn(db));
+    db.payrollLine.findMany.mockResolvedValueOnce([
+      { employeeId: 'employee-1', deductions: [{ amount: 5000 }] },
+    ]);
+    db.employeeLoanInstallment.findMany
+      // the reconciliation read
+      .mockResolvedValueOnce([{ employeeId: 'employee-1', amount: 5000 }])
+      // the ledger read, inside the transaction
+      .mockResolvedValueOnce([{ id: 'inst-1', loanId: 'loan-1', amount: 5000 }]);
+
+    await finalizeRun({ runId: 'run-1', companyId: 'company-1', actorId: 'user-1' });
+
+    expect(db.employeeLoanTransaction.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          installmentId: 'inst-1',
+          type: 'PAYROLL_DEDUCTION',
+          amount: 5000,
+          payrollRunId: 'run-1',
+        }),
+      ],
+    });
+  });
+
+  it('refuses to finalize when the stored loan deductions no longer match what the run claims', async () => {
+    db.payrollRun.findFirst.mockResolvedValue({
+      ...runRow('APPROVED'),
+      lines: [{ id: 'line-1', employeeId: 'employee-1' }],
+    });
+    // The line still deducts six months; a repayment was recorded since, and
+    // the run now claims only one.
+    db.payrollLine.findMany.mockResolvedValueOnce([
+      { employeeId: 'employee-1', deductions: [{ amount: 70000 }] },
+    ]);
+    db.employeeLoanInstallment.findMany.mockResolvedValueOnce([
+      { employeeId: 'employee-1', amount: 11666.7 },
+    ]);
+
+    await expect(
+      finalizeRun({ runId: 'run-1', companyId: 'company-1', actorId: 'user-1' }),
+    ).rejects.toThrow();
+    expect(db.payslip.create).not.toHaveBeenCalled();
+    expect(db.employeeLoanInstallment.updateMany).not.toHaveBeenCalled();
   });
 });
 

@@ -31,7 +31,7 @@ const db = vi.hoisted(() => ({
     create: vi.fn(),
     update: vi.fn(),
   },
-  employeeLoanInstallment: { createMany: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
+  employeeLoanInstallment: { findFirst: vi.fn(), createMany: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
   attendanceRegularizationRequest: { findMany: vi.fn() },
   loanPolicy: { findFirst: vi.fn(), upsert: vi.fn(), create: vi.fn(), findMany: vi.fn(), count: vi.fn() },
   approvalRequest: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn() },
@@ -40,6 +40,8 @@ const db = vi.hoisted(() => ({
   approvalEvent: { create: vi.fn() },
   user: { findMany: vi.fn() },
   auditLog: { create: vi.fn() },
+  payrollPeriod: { findMany: vi.fn() },
+  employeeLoanTransaction: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn() },
   $transaction: vi.fn(),
 }));
 
@@ -159,6 +161,11 @@ let app: FastifyInstance | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // No payroll month is closed and nothing is on the ledger yet.
+  db.payrollPeriod.findMany.mockResolvedValue([]);
+  db.employeeLoanInstallment.findFirst.mockResolvedValue(null);
+  db.user.findMany.mockResolvedValue([]);
+  db.company.findUniqueOrThrow.mockResolvedValue({ currency: 'PKR', timezone: 'Asia/Karachi' });
 
   db.company.findUniqueOrThrow.mockResolvedValue({ currency: 'PKR' });
   /*

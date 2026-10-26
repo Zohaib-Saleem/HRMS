@@ -46,6 +46,44 @@ function currentPosition(): Promise<{ latitude: number; longitude: number }> {
 }
 
 /**
+ * Asks for the location at check-out, and says why when there is none.
+ *
+ * Only called when the server says the check-out needs one. A failure is not
+ * thrown: the reason goes to the server instead of coordinates, so the refusal
+ * the employee sees is the server's own, specific one - "permission was
+ * denied" and "your phone could not find itself" need different fixes - and
+ * the attempt is on the record. The server never accepts the reason in place
+ * of a location.
+ */
+function checkOutPosition(): Promise<
+  | { latitude: number; longitude: number }
+  | { locationUnavailable: 'DENIED' | 'UNAVAILABLE' | 'TIMEOUT' | 'UNSUPPORTED' }
+> {
+  return new Promise((resolve) => {
+    if (!('geolocation' in navigator)) {
+      resolve({ locationUnavailable: 'UNSUPPORTED' });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) =>
+        resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude }),
+      (error) =>
+        resolve({
+          locationUnavailable:
+            error.code === error.PERMISSION_DENIED
+              ? 'DENIED'
+              : error.code === error.TIMEOUT
+                ? 'TIMEOUT'
+                : 'UNAVAILABLE',
+        }),
+      // A fresh fix: a cached position from the office this morning would
+      // prove nothing about where somebody is checking out from.
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 },
+    );
+  });
+}
+
+/**
  * Check-in widget.
  *
  * The server decides whether today is a working day; this only renders what it
@@ -94,11 +132,15 @@ export function AttendanceToday({ className }: { className?: string } = {}) {
   });
 
   const checkOut = useMutation({
-    mutationFn: () =>
-      api.post<{ workedMinutes: number; overtimeMinutes: number | null; status: string }>(
+    mutationFn: async () => {
+      // Asked for only when this check-out needs it, and only now - when the
+      // employee pressed the button - never in the background.
+      const where = today.data?.checkOutLocationRequired ? await checkOutPosition() : null;
+      return api.post<{ workedMinutes: number; overtimeMinutes: number | null; status: string }>(
         '/attendance/check-out',
-        {},
-      ),
+        where ?? {},
+      );
+    },
     onSuccess: async (result) => {
       toast.success(
         `Checked out after ${(result.workedMinutes / 60).toFixed(1)} hours.${
@@ -205,10 +247,18 @@ export function AttendanceToday({ className }: { className?: string } = {}) {
                 </Button>
               </>
             ) : !state.checkedOut ? (
-              <Button variant="outline" loading={checkOut.isPending} onClick={() => checkOut.mutate()}>
-                <LogOut />
-                Check out
-              </Button>
+              <div className="flex flex-col items-end gap-1">
+                <Button variant="outline" loading={checkOut.isPending} onClick={() => checkOut.mutate()}>
+                  <LogOut />
+                  Check out
+                </Button>
+                {state.checkOutLocationRequired ? (
+                  <span className="flex items-center gap-1 text-[11.5px] text-muted-foreground">
+                    <MapPin className="size-3" aria-hidden />
+                    Your location is checked when you check out
+                  </span>
+                ) : null}
+              </div>
             ) : (
               <Badge variant="success">
                 {state.mode === 'REMOTE' ? (

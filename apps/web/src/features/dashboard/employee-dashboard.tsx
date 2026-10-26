@@ -98,8 +98,11 @@ function TodayLeaveCard({
   balances: readonly LeaveBalanceRecord[];
   loading: boolean;
 }) {
-  const available = balances.reduce((sum, balance) => sum + balance.availableDays, 0);
-  const pending = balances.reduce((sum, balance) => sum + balance.pendingDays, 0);
+  // Paid leave only. Leave without pay is not an entitlement, and an unpaid
+  // allowance added to the total read as days off the employee is owed.
+  const paid = balances.filter((balance) => balance.isPaid);
+  const available = paid.reduce((sum, balance) => sum + balance.availableDays, 0);
+  const pending = paid.reduce((sum, balance) => sum + balance.pendingDays, 0);
 
   return (
     <Card className="flex h-full flex-col">
@@ -127,7 +130,7 @@ function TodayLeaveCard({
                   ? 'An administrator has not set them up yet.'
                   : pending > 0
                     ? `${pending} day${pending === 1 ? '' : 's'} awaiting approval`
-                    : 'Across every leave type'}
+                    : 'Paid leave, across every paid type'}
               </p>
             </div>
             <Button variant="outline" size="sm" asChild>
@@ -409,11 +412,15 @@ export function EmployeeDashboard() {
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{balance.leaveTypeName}</p>
                         <p className="text-muted-foreground text-xs">
-                          {balance.usedDays} used · {balance.pendingDays} pending · of{' '}
-                          {balance.annualEntitlementDays}/yr
+                          {balance.isPaid
+                            ? `${balance.usedDays} used · ${balance.pendingDays} pending · of ${balance.annualEntitlementDays}/yr`
+                            : `Unpaid · ${balance.usedDays} taken · ${balance.pendingDays} pending · deducted from salary`}
                         </p>
                       </div>
-                      <span className="text-lg font-semibold tabular-nums">
+                      <span
+                        className="text-lg font-semibold tabular-nums"
+                        title={balance.isPaid ? undefined : 'Unpaid days still allowed this year'}
+                      >
                         {balance.availableDays}
                       </span>
                     </li>

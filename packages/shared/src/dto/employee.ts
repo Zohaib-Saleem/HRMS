@@ -242,6 +242,13 @@ const employeeBaseSchema = z
     excludedFromAttendance: z.boolean().default(false),
 
     /**
+     * May check out on the web from inside the office premises boundary,
+     * not only at the terminal. Optional: omitted leaves it as it is, so a
+     * form that never showed it cannot switch it off.
+     */
+    premisesCheckOutAllowed: z.boolean().optional(),
+
+    /**
      * The device PIN this person punches under, written through to the device
      * module's mapping rather than stored on the employee row.
      *
@@ -586,6 +593,8 @@ export interface EmployeeDetail extends EmployeeListItem {
    * everywhere else; attendance simply stops asking about them.
    */
   excludedFromAttendance: boolean;
+  /** May check out on the web inside the office premises boundary. */
+  premisesCheckOutAllowed: boolean;
   dateOfBirth: string | null;
   gender: string | null;
   maritalStatus: string | null;

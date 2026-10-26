@@ -263,6 +263,7 @@ function LocationDrawer({
       latitude: location?.latitude ?? null,
       longitude: location?.longitude ?? null,
       geofenceRadiusMeters: location?.geofenceRadiusMeters ?? null,
+      checkOutRadiusMeters: location?.checkOutRadiusMeters ?? null,
       isActive: location?.isActive ?? true,
     },
   });
@@ -338,6 +339,15 @@ function LocationDrawer({
               className="sm:col-span-2"
             >
               <Input type="number" min={10} {...register('geofenceRadiusMeters')} />
+            </FormField>
+            <FormField
+              label="Premises check-out boundary (metres)"
+              htmlFor="loc-checkout-radius"
+              error={formState.errors.checkOutRadiusMeters?.message}
+              hint="How far from the centre above an employee allowed premises check-out may check out on the web - the building, its car park. Blank: premises check-out is refused here until it is set."
+              className="sm:col-span-2"
+            >
+              <Input type="number" min={10} max={5000} {...register('checkOutRadiusMeters')} />
             </FormField>
 
             <FormField label="Address line 1" htmlFor="loc-address1" error={formState.errors.addressLine1?.message} className="sm:col-span-2">

@@ -78,6 +78,9 @@ const db = vi.hoisted(() => ({
   user: { findMany: vi.fn(), findFirst: vi.fn() },
   department: { findFirst: vi.fn() },
   caseCategory: { findFirst: vi.fn() },
+  // No routing rules unless a test sets one: a queue nobody configured
+  // behaves exactly as it did before rules existed.
+  caseRoutingRule: { findMany: vi.fn(async (_args: never): Promise<unknown[]> => []) },
   case: {
     findFirst: vi.fn(),
     findMany: vi.fn(),
@@ -488,5 +491,207 @@ describe('nobody reads a case they have no claim on', () => {
     expect((await aziz.inject({ method: 'GET', url: '/cases/queue/case-fin' })).statusCode).toBe(404);
     const list = await aziz.inject({ method: 'GET', url: '/cases/queue' });
     expect(list.json<{ data: unknown[] }>().data).toEqual([]);
+  });
+});
+
+// -----------------------------------------------------------------------------
+
+describe('a new case goes to the person its queue is routed to', () => {
+  /*
+   * Routing rules, as administrators configure them per queue. The people are
+   * user ids from the company's own accounts; nothing is named in code. The
+   * HR, IT, Admin and Accounts examples map onto this fixture's desks: IT has
+   * two agents, Finance stands in for HR, and Accounts has no desk of its own,
+   * so its default goes to the company dispatcher.
+   */
+  type Rule = {
+    id: string;
+    companyId: string;
+    departmentId: string;
+    categoryId: string | null;
+    responsibleUserId: string;
+    backupUserId: string | null;
+    escalationUserId: string | null;
+    isActive: boolean;
+  };
+  const rule = (over: Partial<Rule> & Pick<Rule, 'departmentId' | 'responsibleUserId'>): Rule => ({
+    id: `rule-${over.departmentId}-${over.categoryId ?? 'default'}`,
+    companyId: COMPANY,
+    categoryId: null,
+    backupUserId: null,
+    escalationUserId: null,
+    isActive: true,
+    ...over,
+  });
+
+  let rules: Rule[] = [];
+  /** Accounts that have left or been suspended since the rule was written. */
+  let inactive = new Set<string>();
+
+  beforeEach(() => {
+    rules = [];
+    inactive = new Set();
+    db.caseRoutingRule.findMany.mockImplementation(
+      async (args: { where: { departmentId: string; isActive: boolean; OR: Array<{ categoryId: string | null }> } }) =>
+        rules.filter(
+          (r) =>
+            r.isActive === args.where.isActive &&
+            r.departmentId === args.where.departmentId &&
+            args.where.OR.some((c) => c.categoryId === r.categoryId),
+        ),
+    );
+    // Eligibility is "active and holds a desk grant", asked about specific ids.
+    const deskPeople = PEOPLE.filter((p) => p.grants.some((g) => DESK_READS.includes(g)));
+    db.user.findMany.mockImplementation((args: { where?: { id?: { in?: string[] } } }) => {
+      const ids = args.where?.id?.in;
+      return Promise.resolve(
+        deskPeople
+          .filter((p) => !inactive.has(p.userId))
+          .filter((p) => !ids || ids.includes(p.userId))
+          .map(personRow),
+      );
+    });
+    // The created row carries its assignee, as the real include does.
+    db.case.create.mockImplementation((args: { data: Record<string, unknown> }) => {
+      const assignee = PEOPLE.find((p) => p.userId === args.data.assignedUserId);
+      const [firstName, lastName] = assignee?.name.split(' ') ?? [];
+      const row = caseRow({
+        ...args.data,
+        id: `case-${caseTable.rows.length + 1}`,
+        assignedTo: assignee ? { id: assignee.userId, firstName, lastName } : null,
+      });
+      caseTable.rows.push(row);
+      return Promise.resolve(row);
+    });
+  });
+
+  async function raise(
+    payload: { departmentId: string; categoryId: string; subcategoryId?: string },
+    by: Person = REQUESTER,
+  ) {
+    const app = await appAs(by);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/cases',
+      payload: { subject: 'Help needed', description: 'Please look into this for me.', ...payload },
+    });
+    expect(response.statusCode).toBe(201);
+    return caseTable.rows.at(-1)!;
+  }
+
+  const audits = () =>
+    db.auditLog.create.mock.calls.map((c) => (c[0] as { data: { action: string; after: Record<string, unknown> } }).data);
+
+  it('IT: assigns the queue responsible, tells only them, and records it in the history', async () => {
+    rules = [rule({ departmentId: 'dep-it', categoryId: 'cat-it-laptop', responsibleUserId: IT_SECOND.userId })];
+
+    const row = await raise({ departmentId: 'dep-it', categoryId: 'cat-it-laptop' });
+
+    expect(row.assignedUserId).toBe(IT_SECOND.userId);
+    expect(row.assignedAt).toBeInstanceOf(Date);
+    // The reporter is untouched: the requester is still the person who filed it.
+    expect(row.requesterEmployeeId).toBe(REQUESTER.employeeId);
+    expect(recipients()).toEqual([IT_SECOND.userId]);
+    expect(sent().find((n) => n.userId === IT_SECOND.userId)?.title).toMatch(/assigned to you/);
+    expect(audits().find((a) => a.action === 'case.assign')?.after).toMatchObject({
+      assignedUserId: IT_SECOND.userId,
+      routedBy: 'CASE_ROUTING_RULE',
+      via: 'RESPONSIBLE',
+      scope: 'CATEGORY',
+    });
+    const event = db.caseMessage.create.mock.calls.at(-1)![0] as { data: { message: string; isInternal: boolean } };
+    expect(event.data.isInternal).toBe(true);
+    expect(event.data.message).toMatch(/Assigned to Imran Khan by the routing rule/);
+  });
+
+  it('IT: a subcategory rule beats its category rule', async () => {
+    rules = [
+      rule({ departmentId: 'dep-it', categoryId: 'cat-it-laptop', responsibleUserId: IT_SECOND.userId }),
+      rule({ departmentId: 'dep-it', categoryId: 'sub-it-screen', responsibleUserId: IT_AGENT.userId }),
+    ];
+    const row = await raise({ departmentId: 'dep-it', categoryId: 'cat-it-laptop', subcategoryId: 'sub-it-screen' });
+    expect(row.assignedUserId).toBe(IT_AGENT.userId);
+  });
+
+  it('HR (Finance here): routes to its own manager', async () => {
+    rules = [rule({ departmentId: 'dep-fin', categoryId: 'cat-fin-salary', responsibleUserId: FIN_AGENT.userId })];
+    const row = await raise({ departmentId: 'dep-fin', categoryId: 'cat-fin-salary' }, OTHER_EMPLOYEE);
+    expect(row.assignedUserId).toBe(FIN_AGENT.userId);
+  });
+
+  it('Accounts: a department default catches every queue without its own rule', async () => {
+    rules = [rule({ departmentId: 'dep-acc', responsibleUserId: ADMIN.userId })];
+    const row = await raise({ departmentId: 'dep-acc', categoryId: 'cat-acc-claims' });
+    expect(row.assignedUserId).toBe(ADMIN.userId);
+    expect(audits().find((a) => a.action === 'case.assign')?.after).toMatchObject({ scope: 'DEPARTMENT' });
+  });
+
+  it('falls to the backup when the responsible person has left, and tells the escalation recipient', async () => {
+    rules = [
+      rule({
+        departmentId: 'dep-it',
+        categoryId: 'cat-it-laptop',
+        responsibleUserId: IT_AGENT.userId,
+        backupUserId: IT_SECOND.userId,
+        escalationUserId: ADMIN.userId,
+      }),
+    ];
+    inactive = new Set([IT_AGENT.userId]);
+
+    const row = await raise({ departmentId: 'dep-it', categoryId: 'cat-it-laptop' });
+
+    expect(row.assignedUserId).toBe(IT_SECOND.userId);
+    expect(recipients()).toEqual([ADMIN.userId, IT_SECOND.userId].sort());
+    expect(sent().find((n) => n.userId === ADMIN.userId)?.title).toMatch(/went to the backup/);
+    expect(audits().find((a) => a.action === 'case.assign')?.after).toMatchObject({
+      via: 'BACKUP',
+      passedOver: [{ userId: IT_AGENT.userId, reason: 'UNAVAILABLE' }],
+    });
+  });
+
+  it('leaves the case unassigned when nobody in the rule can take it, and tells the queue owners and escalation', async () => {
+    rules = [
+      rule({
+        departmentId: 'dep-it',
+        categoryId: 'cat-it-laptop',
+        responsibleUserId: IT_AGENT.userId,
+        backupUserId: IT_SECOND.userId,
+        escalationUserId: ADMIN.userId,
+      }),
+    ];
+    inactive = new Set([IT_AGENT.userId, IT_SECOND.userId]);
+
+    const row = await raise({ departmentId: 'dep-it', categoryId: 'cat-it-laptop' });
+
+    expect(row.assignedUserId).toBeNull();
+    expect(recipients()).toContain(ADMIN.userId);
+    expect(sent().find((n) => n.userId === ADMIN.userId)?.title).toMatch(/New case/);
+    expect(audits().some((a) => a.action === 'case.assign')).toBe(false);
+  });
+
+  it('does not hand somebody their own case: the backup takes it', async () => {
+    rules = [
+      rule({
+        departmentId: 'dep-it',
+        categoryId: 'cat-it-laptop',
+        responsibleUserId: IT_AGENT.userId,
+        backupUserId: IT_SECOND.userId,
+      }),
+    ];
+    const row = await raise({ departmentId: 'dep-it', categoryId: 'cat-it-laptop' }, IT_AGENT);
+    expect(row.assignedUserId).toBe(IT_SECOND.userId);
+  });
+
+  it('ignores an inactive rule: the queue behaves as unrouted', async () => {
+    rules = [rule({ departmentId: 'dep-it', categoryId: 'cat-it-laptop', responsibleUserId: IT_SECOND.userId, isActive: false })];
+    const row = await raise({ departmentId: 'dep-it', categoryId: 'cat-it-laptop' });
+    expect(row.assignedUserId).toBeNull();
+    expect(recipients()).toEqual([IT_AGENT.userId, IT_SECOND.userId].sort());
+  });
+
+  it('an unrouted queue is unchanged: unassigned, queue owners told', async () => {
+    const row = await raise({ departmentId: 'dep-it', categoryId: 'cat-it-laptop' });
+    expect(row.assignedUserId).toBeNull();
+    expect(recipients()).toEqual([IT_AGENT.userId, IT_SECOND.userId].sort());
   });
 });

@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { EmptyState, ErrorState } from '@/components/feedback/states';
+import { UnpaidDaysBreakdown, days } from './payroll-shared';
 
 /**
  * The payroll preview.
@@ -292,11 +293,13 @@ export function PayrollPreviewPage() {
                     <TR>
                       <TH>Employee</TH>
                       <TH className="text-right">Salary</TH>
-                      <TH className="text-right">Working days</TH>
+                      <TH className="text-right">Calendar days</TH>
+                      <TH className="text-right">Scheduled working days</TH>
                       <TH className="text-right">Paid days</TH>
+                      <TH className="text-right">Unpaid days</TH>
                       <TH className="text-right">Paid leave</TH>
-                      <TH className="text-right">Unpaid leave</TH>
-                      <TH className="text-right">Absence</TH>
+                      <TH className="text-right">Unpaid leave (LWP)</TH>
+                      <TH className="text-right">Full-day absences</TH>
                       <TH className="text-right">Allowances</TH>
                       <TH className="text-right">OT hours</TH>
                       <TH className="text-right">OT amount</TH>
@@ -333,11 +336,20 @@ export function PayrollPreviewPage() {
                             </div>
                           ) : null}
                         </TD>
-                        <TD className="text-right tabular-nums">{row.scheduledDays}</TD>
-                        <TD className="text-right tabular-nums">{row.paidDays}</TD>
-                        <TD className="text-right tabular-nums">{row.paidLeaveDays}</TD>
-                        <TD className="text-right tabular-nums">{row.unpaidLeaveDays}</TD>
-                        <TD className="text-right tabular-nums">{row.absentDays}</TD>
+                        <TD className="text-right tabular-nums">{days(row.calendarDays)}</TD>
+                        <TD className="text-right tabular-nums">{days(row.scheduledDays)}</TD>
+                        <TD className="text-right tabular-nums">{days(row.paidDays)}</TD>
+                        <TD className="text-right tabular-nums">
+                          {days(row.unpaidDays)}
+                          {row.halfDays > 0 ? (
+                            <div className="text-xs text-muted-foreground">
+                              incl. {days(row.halfDays * 0.5)} from half days
+                            </div>
+                          ) : null}
+                        </TD>
+                        <TD className="text-right tabular-nums">{days(row.paidLeaveDays)}</TD>
+                        <TD className="text-right tabular-nums">{days(row.unpaidLeaveDays)}</TD>
+                        <TD className="text-right tabular-nums">{days(row.absentDays)}</TD>
                         <TD className="text-right tabular-nums">{money(row.allowances, row.currency)}</TD>
                         <TD className="text-right tabular-nums">{row.overtimeHours}</TD>
                         <TD className="text-right tabular-nums">
@@ -384,6 +396,8 @@ export function PayrollPreviewPage() {
                     ))}
                     <TR className="border-t-2 border-border bg-surface-muted/40 font-semibold">
                       <TD>Total</TD>
+                      <TD />
+                      <TD />
                       <TD />
                       <TD />
                       <TD />
@@ -483,16 +497,17 @@ function InspectDrawer({
                   <Row label="Basis" value={`${row.basis} (${row.basisDays} days)`} />
                   <Row label="Daily rate" value={money(row.dailyRate, row.currency)} />
                   <Row label="Hourly rate" value={money(row.hourlyRate, row.currency)} />
-                  <Row label="Working days" value={String(row.scheduledDays)} />
-                  <Row label="Paid days" value={String(row.paidDays)} />
-                  <Row label="Present" value={String(row.presentDays)} />
-                  <Row label="Paid leave" value={String(row.paidLeaveDays)} />
-                  <Row label="Unpaid leave" value={String(row.unpaidLeaveDays)} />
-                  <Row label="Absent" value={String(row.absentDays)} />
-                  <Row label="Holidays" value={String(row.holidayDays)} />
-                  <Row label="Weekends" value={String(row.weekendDays)} />
+                  <Row label="Present" value={days(row.presentDays)} />
+                  <Row label="Paid leave" value={days(row.paidLeaveDays)} />
+                  <Row label="Holidays" value={days(row.holidayDays)} />
+                  <Row label="Weekends" value={days(row.weekendDays)} />
                 </dl>
               </section>
+
+              <UnpaidDaysBreakdown
+                currency={row.currency}
+                line={{ ...row, salaryAmount: row.basicSalary, payableDays: row.paidDays }}
+              />
 
               <section>
                 <h3 className="mb-2 text-sm font-semibold">Earnings</h3>

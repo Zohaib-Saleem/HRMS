@@ -246,6 +246,37 @@ export async function assignableAgents(companyId: string): Promise<CaseAgentOpti
 }
 
 /**
+ * Which of `userIds` could be handed a case right now: an ACTIVE account in
+ * this company holding a desk grant. The same test `assertAssignable` applies,
+ * asked of several people at once and answered rather than thrown - routing
+ * uses it to fall through to a backup instead of refusing to file the case.
+ */
+export async function eligibleAgentIds(
+  companyId: string,
+  userIds: readonly string[],
+): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const users = await prisma.user.findMany({
+    where: {
+      id: { in: [...new Set(userIds)] },
+      companyId,
+      status: 'ACTIVE',
+      userRoles: {
+        some: {
+          role: {
+            rolePermissions: {
+              some: { permission: { key: { in: DESK_GRANT_KEYS } } },
+            },
+          },
+        },
+      },
+    },
+    select: { id: true },
+  });
+  return new Set(users.map((u) => u.id));
+}
+
+/**
  * Proves an assignee is somebody this case can actually be handed to.
  *
  * Read again on the server rather than trusted from the dropdown, and reported

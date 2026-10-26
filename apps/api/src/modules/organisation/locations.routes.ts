@@ -35,6 +35,7 @@ function toRecord(row: Row): LocationRecord {
     latitude: row.latitude,
     longitude: row.longitude,
     geofenceRadiusMeters: row.geofenceRadiusMeters,
+    checkOutRadiusMeters: row.checkOutRadiusMeters,
     isActive: row.isActive,
     employeeCount: row._count.employees,
     createdAt: row.createdAt.toISOString(),

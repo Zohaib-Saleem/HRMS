@@ -38,6 +38,7 @@ const RESTRICTED_COMPANY_FIELDS = [
   'ipRestrictionEnabled',
   'locationRestrictionEnabled',
   'defaultGeofenceRadiusM',
+  'checkOutLocationEnforced',
   'graceMinutes',
   'earlyLeaveGraceMinutes',
   'halfDayMinutes',
@@ -128,6 +129,7 @@ export const companyRoutes: FastifyPluginAsync = async (app) => {
         ...input,
         ipRestrictionEnabled: input.ipRestrictionEnabled ?? before.ipRestrictionEnabled,
         allowedCheckInCidrs: input.allowedCheckInCidrs ?? before.allowedCheckInCidrs,
+        checkOutLocationEnforced: input.checkOutLocationEnforced ?? before.checkOutLocationEnforced,
       };
 
       // Checked against the merged result, so enabling the restriction while

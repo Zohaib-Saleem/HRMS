@@ -118,6 +118,7 @@ export const PAYROLL_EXCEPTION_CODES = [
   'NON_POSITIVE_NET',
   'INCOMPLETE_EMPLOYEE',
   'OVERTIME_CAPPED',
+  'LOAN_ARREARS',
 ] as const;
 export type PayrollExceptionCode = (typeof PAYROLL_EXCEPTION_CODES)[number];
 
@@ -135,6 +136,7 @@ export const PAYROLL_EXCEPTION_LABELS: Record<PayrollExceptionCode, string> = {
   NON_POSITIVE_NET: 'Net pay is zero or negative',
   INCOMPLETE_EMPLOYEE: 'Employee record incomplete',
   OVERTIME_CAPPED: 'Overtime above the payroll cap',
+  LOAN_ARREARS: 'Loan installments from earlier months',
 };
 
 /** A calendar day, `YYYY-MM-DD`. */
@@ -863,14 +865,26 @@ export interface PayrollPreviewRow {
   dailyRate: number;
   hourlyRate: number;
 
+  /**
+   * Every day of the period the employee was employed for, whatever kind of
+   * day it was. A full 30-day month reads 30 here, never the 22 it was
+   * rostered for - that is `scheduledDays`.
+   */
+  calendarDays: number;
+  /** Days the employee was rostered for: the calendar less weekends and holidays. */
   scheduledDays: number;
+  /** Scheduled working days that were paid for: `scheduledDays` less `unpaidDays`. */
   paidDays: number;
   presentDays: number;
+  /** Half days attended. Each one is half a day the calculation charges. */
+  halfDays: number;
   absentDays: number;
   unpaidLeaveDays: number;
   paidLeaveDays: number;
   holidayDays: number;
   weekendDays: number;
+  /** The unpaid days the deduction was priced on - see `payrollUnpaidBreakdown`. */
+  unpaidDays: number;
 
   allowances: number;
   overtimeHours: number;
@@ -926,4 +940,129 @@ export interface PayrollPreview {
     message: string;
     employeeId: string | null;
   }>;
+}
+
+// ------------------------------------------------------ unpaid-day breakdown
+
+/**
+ * Calendar days for a payroll line.
+ *
+ * The attendance tally puts every day of the period into exactly one of three
+ * buckets - scheduled, holiday or weekend - so the three add back up to the
+ * calendar. Derived rather than stored, so a line calculated before the
+ * figure was shown reads the same as one calculated after.
+ */
+export function payrollCalendarDays(line: {
+  scheduledDays: number;
+  holidayDays: number;
+  weekendDays: number;
+}): number {
+  return roundDays(line.scheduledDays + line.holidayDays + line.weekendDays);
+}
+
+const roundDays = (value: number): number => Math.round(value * 100) / 100;
+
+/** The deduction codes that price a day of pay not earned. */
+export const PAYROLL_UNPAID_DAY_CODES = ['ABSENCE', 'UNPAID_LEAVE', 'PAID_LEAVE'] as const;
+
+export interface PayrollUnpaidBreakdown {
+  calendarDays: number;
+  scheduledDays: number;
+  paidDays: number;
+  /** Full working days with no attendance and no leave, as charged. */
+  fullDayAbsences: number;
+  /** How many half days were attended. */
+  halfDays: number;
+  /** What those half days charge: half a day each. */
+  halfDayUnpaid: number;
+  /** Leave without pay, as charged. */
+  unpaidLeaveDays: number;
+  /** Paid leave of a type the company marks deductible, as charged. */
+  deductiblePaidLeaveDays: number;
+  /** The total the deduction lines were priced on. */
+  chargedDays: number;
+  /** The total stored on the line. Equal to `chargedDays` on a monthly salary. */
+  unpaidDays: number;
+  /** The exact daily rate, before the rounding a deduction line shows. */
+  dailyRate: number;
+  /** What the unpaid days cost, summed off the deduction lines themselves. */
+  deductionAmount: number;
+  /**
+   * False when the parts above do not add up to the unpaid days the line was
+   * priced on. It should never be false; a screen that finds it false shows
+   * the difference rather than hiding it.
+   */
+  reconciles: boolean;
+}
+
+/**
+ * Why a line charged the unpaid days it charged, part by part.
+ *
+ * Read off the deduction lines the calculation actually wrote, not
+ * recomputed, so it explains the money rather than a second opinion of it.
+ * The one thing the lines do not say is how an absence deduction splits into
+ * full and half days; the attendance counts on the line say that, and the two
+ * are checked against each other.
+ *
+ * A half day attended is half a day not worked, and the calculation charges it
+ * under the same rule as an absence. That is how "3 absent" becomes 3.5 unpaid:
+ * three absences and one half day.
+ */
+export function payrollUnpaidBreakdown(line: {
+  salaryType: PayrollSalaryType;
+  salaryAmount: number;
+  basisDays: number;
+  scheduledDays: number;
+  holidayDays: number;
+  weekendDays: number;
+  payableDays: number;
+  unpaidDays: number;
+  absentDays: number;
+  halfDays: number;
+  deductions: ReadonlyArray<{ code: string | null; units: number | null; amount: number }>;
+}): PayrollUnpaidBreakdown {
+  const unitsOf = (code: string) =>
+    line.deductions
+      .filter((d) => d.code === code)
+      .reduce((sum, d) => sum + Number(d.units ?? 0), 0);
+
+  const absenceUnits = unitsOf('ABSENCE');
+  // The absence line exists only when the company deducts absence; without it
+  // neither the absences nor the half days cost anything.
+  const fullDayAbsences = absenceUnits > 0 ? line.absentDays : 0;
+  const halfDayUnpaid = absenceUnits > 0 ? roundDays(line.halfDays * 0.5) : 0;
+  const unpaidLeaveDays = roundDays(unitsOf('UNPAID_LEAVE'));
+  const deductiblePaidLeaveDays = roundDays(unitsOf('PAID_LEAVE'));
+  const chargedDays = roundDays(absenceUnits + unpaidLeaveDays + deductiblePaidLeaveDays);
+
+  const deductionAmount = roundDays(
+    line.deductions
+      .filter((d) => (PAYROLL_UNPAID_DAY_CODES as readonly string[]).includes(d.code ?? ''))
+      .reduce((sum, d) => sum + Number(d.amount), 0),
+  );
+
+  const partsAgree = Math.abs(fullDayAbsences + halfDayUnpaid - absenceUnits) < 0.005;
+  // Daily and hourly pay is earned per day worked, so there are no deduction
+  // lines to agree with: an unpaid day was simply never paid.
+  const totalAgrees =
+    line.salaryType !== 'MONTHLY' || Math.abs(chargedDays - line.unpaidDays) < 0.005;
+
+  return {
+    calendarDays: payrollCalendarDays(line),
+    scheduledDays: line.scheduledDays,
+    paidDays: line.payableDays,
+    fullDayAbsences,
+    halfDays: line.halfDays,
+    halfDayUnpaid,
+    unpaidLeaveDays,
+    deductiblePaidLeaveDays,
+    chargedDays,
+    unpaidDays: line.unpaidDays,
+    dailyRate:
+      line.salaryType === 'MONTHLY' && line.basisDays > 0
+        ? Math.round((line.salaryAmount / line.basisDays) * 100) / 100
+        : 0,
+    deductionAmount,
+    reconciles: partsAgree && totalAgrees,
+  };
 }

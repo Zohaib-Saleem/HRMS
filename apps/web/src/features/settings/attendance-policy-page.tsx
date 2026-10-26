@@ -72,6 +72,7 @@ export function AttendancePolicyPage() {
           defaultGeofenceRadiusM: query.data.defaultGeofenceRadiusM,
           ipRestrictionEnabled: query.data.ipRestrictionEnabled,
           allowedCheckInCidrs: query.data.allowedCheckInCidrs ?? [],
+          checkOutLocationEnforced: query.data.checkOutLocationEnforced ?? false,
         }
       : undefined,
   });
@@ -321,6 +322,29 @@ export function AttendancePolicyPage() {
               <span className="block text-[12.5px] text-muted-foreground">
                 Applies to remote check-ins too, so the rule cannot be avoided by changing the work
                 mode.
+              </span>
+            </span>
+          </label>
+
+          <label
+            className={cn(
+              'flex cursor-pointer items-start gap-3 text-[13.5px]',
+              !canManage && 'pointer-events-none opacity-60',
+            )}
+          >
+            <input
+              type="checkbox"
+              disabled={!canManage}
+              {...register('checkOutLocationEnforced')}
+              className="mt-0.5 size-4 shrink-0 rounded border-input accent-[var(--primary)]"
+            />
+            <span>
+              <span className="block font-medium">Restrict web check-out to work locations</span>
+              <span className="block text-[12.5px] text-muted-foreground">
+                Off, the web Check out button works from anywhere, as it always has. On, it needs the
+                device's location inside the same radius as check-in. Employees allowed premises
+                check-out (on their profile) are always held to their location's premises boundary
+                instead. Terminal check-outs are not affected.
               </span>
             </span>
           </label>

@@ -244,7 +244,7 @@ export async function recalculateFromPunches(input: {
     }),
     prisma.attendanceRecord.findUnique({
       where: { employeeId_date: { employeeId, date } },
-      select: { id: true, source: true },
+      select: { id: true, source: true, checkOutAt: true, checkOutSource: true },
     }),
   ]);
 
@@ -265,16 +265,23 @@ export async function recalculateFromPunches(input: {
 
   // The employee's own scheduled end, from the shift and policy already
   // resolved above - not a second shift calculation, and not a literal 18:00.
-  const { checkInAt, checkOutAt } = pairPunches(
+  const paired = pairPunches(
     punches,
     pairing,
     policy.duplicatePunchWindowSeconds,
     checkOutBoundaryOn({ shift, policy, dayKey }),
   );
+  const { checkInAt } = paired;
   if (!checkInAt) {
     await markProcessed(punches.map((p) => p.id));
     return { employeeId, dayKey, status: null, skipped: 'NO_USABLE_PUNCH' };
   }
+
+  const { checkOutAt, checkOutSource } = settleCheckOut({
+    device: paired.checkOutAt,
+    checkInAt,
+    existing,
+  });
 
   const computed = computeAttendance({ day: dayKey, checkInAt, checkOutAt, shift, policy });
 
@@ -289,6 +296,7 @@ export async function recalculateFromPunches(input: {
     irregular: computed.irregular,
     shiftId: shift?.id ?? null,
     source: 'DEVICE' as const,
+    checkOutSource,
   };
 
   await prisma.attendanceRecord.upsert({
@@ -305,6 +313,30 @@ export async function recalculateFromPunches(input: {
   await reconcileAfterAttendanceWrite({ companyId, employeeId, dayKey });
 
   return { employeeId, dayKey, status: computed.status, skipped: null };
+}
+
+/**
+ * One check-out for the day, whichever closed it.
+ *
+ * A web check-out (SELF) is the employee's own record of leaving, made where
+ * the terminal could not see it. When the terminal's punches for the day
+ * carry a check-out of their own, that one stands - it is the raw event, and
+ * the day must not end up with two. When they do not - the terminal saw the
+ * arrival and nothing else - the web check-out is kept rather than wiped,
+ * which is what happened before this existed: an upload of the morning punch
+ * erased the evening's web check-out and reopened the day.
+ *
+ * Raw punches are never touched; this decides only what the day record says.
+ */
+export function settleCheckOut(input: {
+  device: Date | null;
+  checkInAt: Date;
+  existing: { checkOutAt: Date | null; checkOutSource: string | null } | null;
+}): { checkOutAt: Date | null; checkOutSource: 'DEVICE' | 'SELF' | null } {
+  if (input.device) return { checkOutAt: input.device, checkOutSource: 'DEVICE' };
+  const web = input.existing?.checkOutSource === 'SELF' ? input.existing.checkOutAt : null;
+  if (web && web > input.checkInAt) return { checkOutAt: web, checkOutSource: 'SELF' };
+  return { checkOutAt: null, checkOutSource: null };
 }
 
 async function markProcessed(ids: readonly string[]): Promise<void> {

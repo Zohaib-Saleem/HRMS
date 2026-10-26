@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   LOAN_KIND_LABELS,
@@ -11,6 +11,7 @@ import {
   loanCreateSchema,
   type LoanApplicationInput,
   type LoanCreateInput,
+  type LoanDeductionMonthInfo,
   type LoanKind,
   type LookupOption,
 } from '@hrms/shared';
@@ -28,6 +29,22 @@ import {
 import { FormField, Input, NativeSelect, Textarea } from '@/components/ui/field';
 import { isoMonth, money, thisMonthLocal } from '@/features/employment/employment-shared';
 import { LoanEligibilityPanel } from './loan-eligibility-panel';
+
+/**
+ * The deduction month rule, as the server applies it.
+ *
+ * The forms default to this rather than to the browser's clock: an employee
+ * whose laptop is a day out, or who opens the form in the last hour of the
+ * month, would otherwise see one month and be stored against another.
+ */
+export function useDeductionMonth(enabled = true) {
+  return useQuery({
+    queryKey: ['loans', 'deduction-month'],
+    queryFn: () => api.get<LoanDeductionMonthInfo>('/loans/deduction-month'),
+    enabled,
+    staleTime: 60_000,
+  });
+}
 import { useLoanEligibility } from './use-loan-eligibility';
 
 /**
@@ -163,6 +180,8 @@ export function LoanCreateDialog({
       purpose: null,
       notes: null,
       activate: true,
+      alreadyRepaidInstallments: 0,
+      alreadyRepaidReason: null,
     }),
     [fixedEmployeeId, currency, kind, isAdvance],
   );
@@ -213,6 +232,21 @@ export function LoanCreateDialog({
   const principal = Number(form.watch('principalAmount'));
   const installments = Number(form.watch('installmentCount'));
   const startMonth = form.watch('startMonth');
+  const deductionMonth = useDeductionMonth(open);
+  const currentMonth = deductionMonth.data?.currentMonth ?? null;
+  /*
+   * A loan entered after the fact. Every installment due before the current
+   * payroll month would otherwise come off the next payslip all at once, so
+   * the form says how many that is and asks which were already repaid.
+   */
+  const pastInstallments =
+    currentMonth && /^\d{4}-\d{2}/.test(startMonth ?? '')
+      ? buildSchedule({
+          principal: principal > 0 ? principal : 1,
+          installments: Number.isFinite(installments) && installments > 0 ? installments : 1,
+          startMonth,
+        }).filter((row) => row.dueMonth.slice(0, 7) < currentMonth).length
+      : 0;
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
@@ -317,6 +351,43 @@ export function LoanCreateDialog({
                 <Input id="loan-start" type="month" {...form.register('startMonth')} />
               </FormField>
 
+              {pastInstallments > 0 ? (
+                <div className="space-y-3 rounded-md border border-warning/40 bg-warning-soft p-3 text-[13px] sm:col-span-2">
+                  <p role="status">
+                    {pastInstallments} installment(s) fall before the current payroll month (
+                    {isoMonth(currentMonth!)}). Unless they are recorded as already repaid, the next
+                    payroll run collects all of them at once.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <FormField
+                      label="Installments already repaid outside HRMS"
+                      htmlFor="loan-already-repaid"
+                      hint="Counted from the first installment."
+                      error={errors.alreadyRepaidInstallments?.message}
+                    >
+                      <Input
+                        id="loan-already-repaid"
+                        type="number"
+                        min={0}
+                        max={installments}
+                        {...form.register('alreadyRepaidInstallments')}
+                      />
+                    </FormField>
+                    <FormField
+                      label="How they were repaid"
+                      htmlFor="loan-already-repaid-reason"
+                      hint="Required when any are marked repaid. Goes on the loan ledger."
+                      error={errors.alreadyRepaidReason?.message}
+                    >
+                      <Input
+                        id="loan-already-repaid-reason"
+                        {...form.register('alreadyRepaidReason', { setValueAs: blankToNull })}
+                      />
+                    </FormField>
+                  </div>
+                </div>
+              ) : null}
+
               <FormField
                 label="Reference"
                 htmlFor="loan-reference"
@@ -413,11 +484,14 @@ export function LoanApplyDialog({
   const [formError, setFormError] = React.useState<string | null>(null);
   const isAdvance = kind === 'SALARY_ADVANCE';
 
+  const deductionMonth = useDeductionMonth(open);
+  const defaultMonth = deductionMonth.data?.defaultMonth ?? null;
+
   const blank = (): LoanApplicationInput => ({
     kind,
     principalAmount: 0,
     installmentCount: isAdvance ? SALARY_ADVANCE_INSTALLMENTS : 6,
-    startMonth: thisMonthLocal(),
+    startMonth: defaultMonth ?? thisMonthLocal(),
     purpose: '',
     notes: null,
   });
@@ -426,6 +500,14 @@ export function LoanApplyDialog({
     resolver: zodResolver(loanApplicationSchema),
     defaultValues: blank(),
   });
+
+  // The server's month arrives after the form opened: take it, unless the
+  // employee has already chosen one themselves.
+  React.useEffect(() => {
+    if (open && defaultMonth && !form.formState.dirtyFields.startMonth) {
+      form.setValue('startMonth', defaultMonth);
+    }
+  }, [open, defaultMonth, form]);
 
   /*
    * The server's answer, asked for as the form is filled in.
@@ -563,8 +645,25 @@ export function LoanApplyDialog({
                 required
                 error={errors.startMonth?.message}
               >
-                <Input id="apply-start" type="month" {...form.register('startMonth')} />
+                <Input
+                  id="apply-start"
+                  type="month"
+                  min={deductionMonth.data?.currentMonth}
+                  {...form.register('startMonth')}
+                />
               </FormField>
+              {deductionMonth.data ? (
+                <p className="text-[12.5px] text-muted-foreground sm:col-span-2">
+                  Requests made now are{' '}
+                  {isAdvance ? 'recovered from' : 'first deducted from'} the{' '}
+                  <span className="font-medium">{isoMonth(deductionMonth.data.defaultMonth)}</span>{' '}
+                  payslip
+                  {deductionMonth.data.defaultMonth !== deductionMonth.data.currentMonth
+                    ? `, because payroll for ${isoMonth(deductionMonth.data.currentMonth)} is already finalized`
+                    : ', the payroll month this request is made in'}
+                  . You can choose a later month; an earlier or closed one is refused.
+                </p>
+              ) : null}
 
               <FormField
                 label="What is it for?"
@@ -593,14 +692,14 @@ export function LoanApplyDialog({
                 {isAdvance ? (
                   <AdvancePreview
                     amount={Number(form.watch('principalAmount'))}
-                    month={form.watch('startMonth')}
+                    month={form.watch('startMonth') ?? ''}
                     currency={currency}
                   />
                 ) : (
                   <SchedulePreview
                     principal={Number(form.watch('principalAmount'))}
                     installments={Number(form.watch('installmentCount'))}
-                    startMonth={form.watch('startMonth')}
+                    startMonth={form.watch('startMonth') ?? ''}
                     currency={currency}
                   />
                 )}

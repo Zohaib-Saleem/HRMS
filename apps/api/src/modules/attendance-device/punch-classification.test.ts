@@ -322,6 +322,7 @@ const POLICY: AttendancePolicy = {
   overtimeDailyCapMinutes: 240,
   locationRestrictionEnabled: false,
   defaultGeofenceRadiusM: 200,
+  checkOutLocationEnforced: false,
   ipRestrictionEnabled: false,
   allowedCheckInCidrs: [],
   defaultShiftStart: '09:00',

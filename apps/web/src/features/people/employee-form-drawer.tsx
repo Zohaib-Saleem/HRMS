@@ -147,6 +147,7 @@ export function EmployeeFormDrawer({
       linkedinUrl: employee?.linkedinUrl ?? '',
       priorExperienceMonths: employee?.priorExperienceMonths ?? null,
       excludedFromAttendance: employee?.excludedFromAttendance ?? false,
+      premisesCheckOutAllowed: employee?.premisesCheckOutAllowed ?? false,
       // NEVER defaulted from the employee number. 1021 punches as 51 here;
       // copying one into the other is precisely the mistake that files a
       // stranger's attendance against somebody's record.
@@ -501,6 +502,22 @@ export function EmployeeFormDrawer({
                     </span>
                   </span>
                 </label>
+                <label className={cn('flex cursor-pointer items-start gap-3 text-[13.5px]', 'sm:col-span-2')}>
+                  <input
+                    type="checkbox"
+                    {...register('premisesCheckOutAllowed')}
+                    className="mt-0.5 size-4 shrink-0 rounded border-input accent-[var(--primary)]"
+                  />
+                  <span>
+                    <span className="block font-medium">May check out from the office premises</span>
+                    <span className="block text-[12.5px] text-muted-foreground">
+                      Lets this person use the web Check out button away from the terminal, but only
+                      inside their work location's premises boundary - the browser's location is asked
+                      for and checked on the server, and a check-out from outside it is refused. Off
+                      for everyone unless switched on here.
+                    </span>
+                  </span>
+                </label>
               </>
             ) : null}
 
@@ -625,7 +642,7 @@ export function EmployeeFormDrawer({
 
 /** Maps a server-reported field back to the section that renders it. */
 function sectionForField(field: string): Section {
-  if (['punchCode', 'punchDeviceId', 'excludedFromAttendance'].includes(field)) return 'Attendance';
+  if (['punchCode', 'punchDeviceId', 'excludedFromAttendance', 'premisesCheckOutAllowed'].includes(field)) return 'Attendance';
   if (
     ['nationalId', 'passportNumber', 'passportExpiry', 'visaNumber', 'visaExpiry', 'bankAccountNumber'].includes(field)
   ) {

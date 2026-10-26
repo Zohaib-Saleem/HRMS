@@ -158,6 +158,7 @@ export function toDetail(row: DetailRow, includeRestricted: boolean): EmployeeDe
     linkedinUrl: row.linkedinUrl,
     priorExperienceMonths: row.priorExperienceMonths,
     excludedFromAttendance: row.excludedFromAttendance,
+    premisesCheckOutAllowed: row.premisesCheckOutAllowed,
     dateOfBirth: isoDate(row.dateOfBirth),
     gender: row.gender,
     maritalStatus: row.maritalStatus,

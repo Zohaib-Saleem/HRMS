@@ -204,7 +204,10 @@ export function LeaveAdjustmentDialog({
 
             {balance ? (
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-muted/40 px-3 py-2 text-[13px] sm:grid-cols-4">
-                <Figure label="Entitlement" value={balance.annualEntitlementDays} />
+                <Figure
+                  label={balance.isPaid ? 'Entitlement' : 'Unpaid cap'}
+                  value={balance.annualEntitlementDays}
+                />
                 <Figure label="Accrued" value={balance.accruedDays} />
                 <Figure label="Used" value={balance.usedDays} />
                 <Figure label="Remaining" value={balance.availableDays} />
@@ -234,7 +237,11 @@ export function LeaveAdjustmentDialog({
                 label="Adjustment (days)"
                 htmlFor="leave-adjustment-days"
                 required
-                hint="Positive grants days, negative takes them away, in whole or half days. Zero removes the correction."
+                hint={
+                  balance && !balance.isPaid
+                    ? 'This is leave without pay: a positive number raises how many UNPAID days this person may request - it grants no paid leave, and every day taken is deducted from salary.'
+                    : 'Positive grants days, negative takes them away, in whole or half days. Zero removes the correction.'
+                }
                 error={errors.adjustmentDays?.message}
               >
                 <Input

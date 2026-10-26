@@ -40,21 +40,49 @@ export const LOAN_STATUSES = [
 
 export type LoanStatus = (typeof LOAN_STATUSES)[number];
 
+/**
+ * What each stored status is called on a screen.
+ *
+ * The stored statuses are the lifecycle the code reasons about and they do not
+ * change. The words do: ACTIVE means "released and being recovered", which a
+ * reader calls Disbursed, and COMPLETED means nothing is owed. A loan that is
+ * ACTIVE and has started being repaid reads "Repayment in progress" - that
+ * finer label needs the installments, so it comes from `loanStatusLabel`.
+ * This map is for places that only have the status, such as a filter.
+ */
 export const LOAN_STATUS_LABELS: Record<LoanStatus, string> = {
   PENDING: 'Pending approval',
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
-  ACTIVE: 'Active',
-  COMPLETED: 'Completed',
+  ACTIVE: 'Disbursed / repaying',
+  COMPLETED: 'Fully repaid',
   CANCELLED: 'Cancelled',
 };
+
+/**
+ * The label for one loan or advance, from its status and how far it has got.
+ *
+ * Approved-but-not-released is always "Approved" - never "Active" and never
+ * "Resolved". Released and nothing recovered yet is "Disbursed"; released with
+ * something already recovered is "Repayment in progress". An advance is
+ * recovered from one payslip, so it is Disbursed until it is Fully repaid.
+ */
+export function loanStatusLabel(loan: {
+  status: LoanStatus;
+  kind?: LoanKind;
+  paidInstallments?: number;
+}): string {
+  if (loan.status !== 'ACTIVE') return LOAN_STATUS_LABELS[loan.status];
+  if (loan.kind === 'SALARY_ADVANCE') return 'Disbursed';
+  return (loan.paidInstallments ?? 0) > 0 ? 'Repayment in progress' : 'Disbursed';
+}
 
 export const LOAN_STATUS_DESCRIPTIONS: Record<LoanStatus, string> = {
   PENDING: 'Applied for and awaiting a decision. Nothing is deducted.',
   APPROVED: 'Agreed but not released yet. Nothing is deducted until it is activated.',
   REJECTED: 'Declined. Nothing is deducted.',
-  ACTIVE: 'Being repaid. Payroll deducts the installment due in each period.',
-  COMPLETED: 'Fully repaid.',
+  ACTIVE: 'Released to the employee. Payroll deducts the installment due in each period.',
+  COMPLETED: 'Fully repaid. Nothing more is deducted.',
   CANCELLED: 'Withdrawn or written off. No further deductions.',
 };
 
@@ -117,8 +145,98 @@ export const LOAN_INSTALLMENT_STATUS_LABELS: Record<LoanInstallmentStatus, strin
   PENDING_PAYROLL: 'In an unfinalized run',
   PAID: 'Paid',
   WAIVED: 'Waived',
-  SKIPPED: 'Skipped',
+  SKIPPED: 'Not collected',
 };
+
+/**
+ * What an installment is, as somebody reading the schedule would say it.
+ *
+ * Kept apart from what can be DONE to it: the Actions column used to show
+ * "Waive" on every scheduled row, which read as a status. Status is this;
+ * actions are `LoanInstallmentRecord.actions`, decided by the server.
+ */
+export const LOAN_INSTALLMENT_DISPLAY_STATUSES = [
+  'NOT_STARTED',
+  'UPCOMING',
+  'DUE',
+  'OVERDUE',
+  'IN_PAYROLL',
+  'PAID',
+  'WAIVED',
+  'NOT_COLLECTED',
+] as const;
+
+export type LoanInstallmentDisplayStatus = (typeof LOAN_INSTALLMENT_DISPLAY_STATUSES)[number];
+
+export const LOAN_INSTALLMENT_DISPLAY_LABELS: Record<LoanInstallmentDisplayStatus, string> = {
+  NOT_STARTED: 'Not released yet',
+  UPCOMING: 'Upcoming',
+  DUE: 'Due',
+  OVERDUE: 'Overdue',
+  IN_PAYROLL: 'In payroll (not finalized)',
+  PAID: 'Paid',
+  WAIVED: 'Waived',
+  NOT_COLLECTED: 'Not collected',
+};
+
+/**
+ * One installment's display status.
+ *
+ * `currentMonth` is the payroll month today falls in (yyyy-MM). A scheduled
+ * installment for this month is Due; for an earlier month it is Overdue - the
+ * next run will collect it - and for a later one, Upcoming. Nothing is
+ * scheduled-and-owed on a loan that has not been released.
+ */
+export function installmentDisplayStatus(
+  row: { status: LoanInstallmentStatus; dueMonth: string },
+  loanStatus: LoanStatus,
+  currentMonth: string,
+): LoanInstallmentDisplayStatus {
+  switch (row.status) {
+    case 'PAID':
+      return 'PAID';
+    case 'WAIVED':
+      return 'WAIVED';
+    case 'SKIPPED':
+      return 'NOT_COLLECTED';
+    case 'PENDING_PAYROLL':
+      return 'IN_PAYROLL';
+    default: {
+      if (loanStatus === 'PENDING' || loanStatus === 'APPROVED') return 'NOT_STARTED';
+      if (loanStatus !== 'ACTIVE') return 'NOT_COLLECTED';
+      const month = row.dueMonth.slice(0, 7);
+      const now = currentMonth.slice(0, 7);
+      if (month < now) return 'OVERDUE';
+      if (month === now) return 'DUE';
+      return 'UPCOMING';
+    }
+  }
+}
+
+// ------------------------------------------------------------------ ledger
+
+export const LOAN_TRANSACTION_TYPES = [
+  'PAYROLL_DEDUCTION',
+  'MANUAL_PAYMENT',
+  'PAYMENT_REVERSAL',
+  'WAIVER',
+  'SCHEDULE_CORRECTION',
+] as const;
+
+export type LoanTransactionType = (typeof LOAN_TRANSACTION_TYPES)[number];
+
+export const LOAN_TRANSACTION_LABELS: Record<LoanTransactionType, string> = {
+  PAYROLL_DEDUCTION: 'Deducted by payroll',
+  MANUAL_PAYMENT: 'Payment recorded outside payroll',
+  PAYMENT_REVERSAL: 'Payment reversed',
+  WAIVER: 'Waived',
+  SCHEDULE_CORRECTION: 'Schedule corrected',
+};
+
+/** What may be done to one installment, decided by the server per caller. */
+export const LOAN_INSTALLMENT_ACTIONS = ['RECORD_PAYMENT', 'REVERSE_PAYMENT', 'WAIVE'] as const;
+
+export type LoanInstallmentAction = (typeof LOAN_INSTALLMENT_ACTIONS)[number];
 
 /** Installment statuses that count towards what has been repaid. */
 export const LOAN_SETTLED_STATUSES: readonly LoanInstallmentStatus[] = ['PAID', 'WAIVED'];
@@ -215,8 +333,32 @@ export const loanCreateSchema = z
      * which the policy may forbid outright or require a reason for.
      */
     overrideReason: z.string().trim().max(1000).optional(),
+    /**
+     * For a loan entered after the fact: how many of its first installments
+     * were already repaid outside HRMS. Each is settled on the ledger as a
+     * manual payment, with the reason below, so the next payroll does not
+     * collect months that were paid long ago.
+     */
+    alreadyRepaidInstallments: z.coerce.number().int().min(0).max(240).default(0),
+    alreadyRepaidReason: optionalText(1000),
   })
-  .superRefine(singleRecovery);
+  .superRefine(singleRecovery)
+  .superRefine((value, ctx) => {
+    if (value.alreadyRepaidInstallments > value.installmentCount) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['alreadyRepaidInstallments'],
+        message: 'More installments repaid than the loan has.',
+      });
+    }
+    if (value.alreadyRepaidInstallments > 0 && !value.alreadyRepaidReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['alreadyRepaidReason'],
+        message: 'Say how the earlier installments were repaid.',
+      });
+    }
+  });
 
 export type LoanCreateInput = z.infer<typeof loanCreateSchema>;
 
@@ -230,7 +372,12 @@ export const loanApplicationSchema = z
       .int('Enter a whole number of installments.')
       .min(1, 'Choose how many months to repay over.')
       .max(240),
-    startMonth: monthInput,
+    /**
+     * Omitted, the server picks the deduction month by the company rule (see
+     * `GET /loans/deduction-month`). Sent, it is checked against that rule:
+     * never a month before the current payroll month, never a closed one.
+     */
+    startMonth: monthInput.optional(),
     purpose: z.string().trim().min(3, 'Say what the loan is for.').max(500),
     notes: optionalText(2000),
   })
@@ -284,6 +431,12 @@ export interface LoanInstallmentRecord {
   payrollRunId: string | null;
   paidAt: string | null;
   note: string | null;
+  /** The status a reader sees - see `installmentDisplayStatus`. */
+  displayStatus: LoanInstallmentDisplayStatus;
+  /** How it was settled, when it has been: the ledger entry behind it. */
+  settledBy: LoanTransactionType | null;
+  /** What this caller may do to it. Empty is common and correct. */
+  actions: LoanInstallmentAction[];
 }
 
 export interface LoanRecord {
@@ -323,8 +476,74 @@ export interface LoanRecord {
   /** What the caller may do, decided server-side from permissions and scope. */
   canApprove: boolean;
   canCancel: boolean;
+  /** The label for this loan's stage - see `loanStatusLabel`. */
+  statusLabel: string;
 }
 
 export interface LoanDetail extends LoanRecord {
   installments: LoanInstallmentRecord[];
+  /** The ledger, oldest first. */
+  transactions: LoanTransactionRecord[];
+  /** Whether the caller may correct the schedule and record payments. */
+  canCorrect: boolean;
+}
+
+// ------------------------------------------------------------ corrections
+
+/** A real calendar date, yyyy-MM-dd. */
+const dateInput = z
+  .string()
+  .trim()
+  .refine((v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)), 'Enter a date.');
+
+const correctionReason = z.string().trim().min(3, 'Give a reason for the correction.').max(1000);
+
+/** An installment repaid outside payroll: cash, transfer, or before HRMS. */
+export const loanRecordPaymentSchema = z.object({
+  paidOn: dateInput,
+  reference: optionalText(120),
+  reason: correctionReason,
+});
+export type LoanRecordPaymentInput = z.infer<typeof loanRecordPaymentSchema>;
+
+/** Takes back a manual payment recorded in error. */
+export const loanReversePaymentSchema = z.object({ reason: correctionReason });
+
+/** Forgives one installment. Deliberate, authorised and explained. */
+export const loanWaiveSchema = z.object({
+  reason: z.string().trim().min(3, 'Say why this installment is being waived.').max(500),
+});
+
+/** Moves every installment still scheduled so the first falls in `startMonth`. */
+export const loanRescheduleSchema = z.object({
+  startMonth: monthInput,
+  reason: correctionReason,
+});
+export type LoanRescheduleInput = z.infer<typeof loanRescheduleSchema>;
+
+/** The deduction month rule, as the server applies it. */
+export interface LoanDeductionMonthInfo {
+  /** The payroll month today falls in, in the company's timezone. */
+  currentMonth: string;
+  /** What a request made today is recovered from by default. */
+  defaultMonth: string;
+  /** Months whose payroll is finalized; nothing new is scheduled into them. */
+  closedMonths: string[];
+}
+
+export interface LoanTransactionRecord {
+  id: string;
+  installmentId: string | null;
+  installmentSequence: number | null;
+  type: LoanTransactionType;
+  amount: number;
+  effectiveDate: string;
+  payrollRunId: string | null;
+  reference: string | null;
+  reason: string | null;
+  reversesId: string | null;
+  reversed: boolean;
+  detail: unknown;
+  createdByName: string | null;
+  createdAt: string;
 }

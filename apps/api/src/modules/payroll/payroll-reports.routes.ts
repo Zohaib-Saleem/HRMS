@@ -1,7 +1,9 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { Prisma } from '@prisma/client';
 import {
+  PAYROLL_UNPAID_DAY_CODES,
   PERMISSIONS,
+  payrollCalendarDays,
   payrollDashboardQuerySchema,
   payrollReportQuerySchema,
   type PayrollDashboard,
@@ -429,12 +431,14 @@ function buildReport(key: PayrollReportKey, lines: ReportLine[]): PayrollReportT
         columns: [
           { key: 'employee', label: 'Employee' },
           { key: 'period', label: 'Period' },
-          { key: 'scheduled', label: 'Scheduled', align: 'right' },
+          { key: 'calendar', label: 'Calendar days', align: 'right' },
+          { key: 'scheduled', label: 'Scheduled working days', align: 'right' },
           { key: 'present', label: 'Present', align: 'right' },
           { key: 'paidLeave', label: 'Paid leave', align: 'right' },
-          { key: 'unpaidLeave', label: 'Unpaid leave', align: 'right' },
-          { key: 'absent', label: 'Absent', align: 'right' },
-          { key: 'payableDays', label: 'Payable days', align: 'right' },
+          { key: 'unpaidLeave', label: 'Unpaid leave (LWP)', align: 'right' },
+          { key: 'absent', label: 'Full-day absences', align: 'right' },
+          { key: 'halfDays', label: 'Half days', align: 'right' },
+          { key: 'payableDays', label: 'Paid days', align: 'right' },
           { key: 'unpaidDays', label: 'Unpaid days', align: 'right' },
           { key: 'dailyRate', label: 'Daily rate', align: 'right', money: true },
           { key: 'absenceDeduction', label: 'Absence deduction', align: 'right', money: true },
@@ -443,17 +447,23 @@ function buildReport(key: PayrollReportKey, lines: ReportLine[]): PayrollReportT
         rows: lines.map((line) => ({
           employee: displayName(line.employee),
           period: line.run.period.name,
+          calendar: payrollCalendarDays({
+            scheduledDays: num(line.scheduledDays),
+            holidayDays: num(line.holidayDays),
+            weekendDays: num(line.weekendDays),
+          }),
           scheduled: num(line.scheduledDays),
           present: num(line.presentDays),
           paidLeave: num(line.paidLeaveDays),
           unpaidLeave: num(line.unpaidLeaveDays),
           absent: num(line.absentDays),
+          halfDays: num(line.halfDays),
           payableDays: num(line.payableDays),
           unpaidDays: num(line.unpaidDays),
           dailyRate: num(line.dailyRate),
           absenceDeduction: round2(
             line.deductions
-              .filter((d) => d.kind === 'ABSENCE' || d.kind === 'UNPAID_LEAVE')
+              .filter((d) => (PAYROLL_UNPAID_DAY_CODES as readonly string[]).includes(d.kind))
               .reduce((s, d) => s + num(d.amount), 0),
           ),
           net: num(line.netAmount),

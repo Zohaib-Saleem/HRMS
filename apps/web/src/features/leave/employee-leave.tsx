@@ -82,8 +82,10 @@ export function EmployeeLeave({
   const rows = balances.data ?? [];
   const history = requests.data?.data ?? [];
 
+  // Paid types only: leave without pay is an allowance, not an entitlement,
+  // and adding it in made the totals read as paid leave the person did not have.
   const total = (pick: (b: LeaveBalanceRecord) => number) =>
-    Math.round(rows.reduce((sum, b) => sum + pick(b), 0) * 100) / 100;
+    Math.round(rows.filter((b) => b.isPaid).reduce((sum, b) => sum + pick(b), 0) * 100) / 100;
 
   const counts = {
     APPROVED: history.filter((r) => r.status === 'APPROVED').length,
@@ -173,7 +175,15 @@ export function EmployeeLeave({
                           </Badge>
                         )}
                       </TD>
-                      <TD className="tabular text-right">{days(row.annualEntitlementDays)}</TD>
+                      <TD
+                        className="tabular text-right"
+                        title={row.isPaid ? undefined : 'Unpaid: a cap on days of leave without pay, not paid entitlement'}
+                      >
+                        {days(row.annualEntitlementDays)}
+                        {row.isPaid ? null : (
+                          <span className="block text-[11px] font-normal text-muted-foreground">cap</span>
+                        )}
+                      </TD>
                       <TD className="tabular text-right text-muted-foreground">
                         {days(row.openingDays)}
                       </TD>
@@ -217,7 +227,7 @@ export function EmployeeLeave({
                     </TR>
                   ))}
                   <TR className="bg-muted/40">
-                    <TD className="font-medium">All types</TD>
+                    <TD className="font-medium">All paid types</TD>
                     <TD className="tabular text-right font-medium">
                       {days(total((b) => b.annualEntitlementDays))}
                     </TD>

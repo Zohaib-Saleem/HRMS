@@ -33,6 +33,8 @@ export interface AttendancePolicy {
   overtimeDailyCapMinutes: number;
   locationRestrictionEnabled: boolean;
   defaultGeofenceRadiusM: number;
+  /** Web check-out must be made inside the office geofence. */
+  checkOutLocationEnforced: boolean;
   ipRestrictionEnabled: boolean;
   allowedCheckInCidrs: string[];
 
@@ -138,6 +140,7 @@ const POLICY_SELECT = {
   overtimeDailyCapMinutes: true,
   locationRestrictionEnabled: true,
   defaultGeofenceRadiusM: true,
+  checkOutLocationEnforced: true,
   ipRestrictionEnabled: true,
   allowedCheckInCidrs: true,
   defaultShiftStart: true,

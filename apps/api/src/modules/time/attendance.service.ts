@@ -752,6 +752,104 @@ export async function assertCheckInLocationAllowed(input: {
   return { distanceMeters, radiusMeters };
 }
 
+/**
+ * Whether a web check-out is being made from somewhere it is allowed.
+ *
+ * Two boundaries, around the same centre - the employee's work location:
+ *
+ *  - PREMISES, for an employee explicitly allowed to check out away from the
+ *    terminal (`premisesCheckOutAllowed`): within `checkOutRadiusMeters`. The
+ *    boundary must be configured; without it the check-out is refused rather
+ *    than allowed from anywhere, and no coordinates are invented.
+ *  - OFFICE, for everyone else, only while the company enforces it: within
+ *    the same geofence check-in uses.
+ *
+ * Returns null when no location rule applies - a company that has not turned
+ * enforcement on and an employee who is not on premises check-out - which is
+ * exactly how web check-out behaved before any of this existed.
+ *
+ * Fails closed throughout, and every message says what to do next, because
+ * "permission denied" and "your phone could not find itself" need different
+ * fixes from the person standing in the car park.
+ */
+export async function assertCheckOutLocationAllowed(input: {
+  employee: { locationId: string | null; premisesCheckOutAllowed?: boolean };
+  policy: AttendancePolicy;
+  latitude: number | null;
+  longitude: number | null;
+  locationUnavailable: string | null;
+}): Promise<{ distanceMeters: number; radiusMeters: number; boundary: 'PREMISES' | 'OFFICE' } | null> {
+  const { employee, policy, latitude, longitude } = input;
+  const premises = employee.premisesCheckOutAllowed === true;
+  if (!premises && !policy.checkOutLocationEnforced) return null;
+
+  if (latitude === null || longitude === null) {
+    const why =
+      input.locationUnavailable === 'DENIED'
+        ? 'Location permission was denied. Allow location for this site in your browser settings and try again, or check out at the terminal.'
+        : input.locationUnavailable === 'UNSUPPORTED'
+          ? 'This browser cannot share a location. Use a phone or browser that can, or check out at the terminal.'
+          : input.locationUnavailable === 'TIMEOUT' || input.locationUnavailable === 'UNAVAILABLE'
+            ? 'Your device could not determine its location. Move somewhere with a clearer signal and try again, or check out at the terminal.'
+            : 'Checking out on the web needs your location. Share it and try again, or check out at the terminal.';
+    throw new ValidationError({ latitude: [why] });
+  }
+
+  if (!employee.locationId) {
+    throw new ForbiddenError(
+      'Web check-out is limited to your work location, but you have no work location assigned. Ask HR to set one, or check out at the terminal.',
+    );
+  }
+
+  const site = await prisma.location.findUnique({
+    where: { id: employee.locationId },
+    select: {
+      name: true,
+      latitude: true,
+      longitude: true,
+      geofenceRadiusMeters: true,
+      checkOutRadiusMeters: true,
+    },
+  });
+  if (!site || site.latitude === null || site.longitude === null) {
+    throw new ForbiddenError(
+      `${site?.name ?? 'Your work location'} has no office coordinates configured, so web check-out cannot be checked. Ask HR to set them, or check out at the terminal.`,
+    );
+  }
+
+  const radiusMeters = premises
+    ? site.checkOutRadiusMeters
+    : (site.geofenceRadiusMeters ?? policy.defaultGeofenceRadiusM);
+  if (radiusMeters === null || radiusMeters === undefined) {
+    throw new ForbiddenError(
+      `No office premises boundary is configured for ${site.name}, so check-out away from the terminal is not available yet. Ask HR to set one, or check out at the terminal.`,
+    );
+  }
+
+  const distanceMeters = haversineMeters(
+    { latitude: site.latitude, longitude: site.longitude },
+    { latitude, longitude },
+  );
+  if (distanceMeters > radiusMeters) {
+    throw new OutsideBoundaryError(
+      `You appear to be ${distanceMeters}m from ${site.name}, outside the ${radiusMeters}m ${premises ? 'office premises' : 'check-out'} area. Check out from inside it, or at the terminal.`,
+      { distanceMeters, radiusMeters, boundary: premises ? 'PREMISES' : 'OFFICE' },
+    );
+  }
+
+  return { distanceMeters, radiusMeters, boundary: premises ? 'PREMISES' : 'OFFICE' };
+}
+
+/** A refusal that carries the measurement, so the route can put it on the record. */
+export class OutsideBoundaryError extends ForbiddenError {
+  constructor(
+    message: string,
+    readonly measured: { distanceMeters: number; radiusMeters: number; boundary: 'PREMISES' | 'OFFICE' },
+  ) {
+    super(message);
+  }
+}
+
 // ----------------------------------------------------- approval write-through
 
 /**

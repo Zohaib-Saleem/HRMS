@@ -331,6 +331,14 @@ model Company {
   /// while the restriction is on means nothing is permitted - fail closed.
   allowedCheckInCidrs        String[] @default([])
 
+  // --- web check-out location --------------------------------------------
+  /// Off by default, which keeps web check-out exactly as it always was: no
+  /// location asked for. On, a web check-out by anyone not authorised for
+  /// premises check-out must be made inside the office geofence used for
+  /// check-in. Authorised employees are always held to the premises boundary,
+  /// whatever this says.
+  checkOutLocationEnforced Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -393,7 +401,9 @@ model Company {
   salaryRevisions   SalaryRevision[]
   employeeLoans     EmployeeLoan[]
   loanInstallments  EmployeeLoanInstallment[]
+  loanTransactions  EmployeeLoanTransaction[]
   loanPolicies      LoanPolicy[]
+  caseRoutingRules  CaseRoutingRule[]
 
   // --- phase 11 ---
   medicalPolicies   MedicalPolicy[]
@@ -474,6 +484,7 @@ model Department {
   /// A department is never copied into the cases module - it is pointed at.
   caseCategories CaseCategory[]
   cases          Case[]
+  caseRoutes     CaseRoutingRule[]
 
   /// Recruitment. A job opening is filed against a real department for the
   /// same reason a case is: so "Development is hiring two people" is a query
@@ -538,6 +549,11 @@ model Location {
   longitude            Float?
   /// Overrides the company default radius for this site.
   geofenceRadiusMeters Int?
+  /// The office premises boundary for web check-out by employees authorised
+  /// to check out away from the terminal, in metres around the same centre.
+  /// Null means no boundary is configured, and premises check-out is refused
+  /// rather than allowed from anywhere.
+  checkOutRadiusMeters Int?
 
   isActive Boolean @default(true)
 
@@ -787,6 +803,15 @@ model Employee {
    * else.
    */
   excludedFromAttendance Boolean           @default(false)
+
+  /**
+   * May check out on the web from anywhere inside the office premises
+   * boundary (`Location.checkOutRadiusMeters`), not only at the terminal.
+   * Off for everyone by default; Super Admin or HR switch it on per person.
+   * The browser's location is asked for at check-out and checked on the
+   * server - outside the boundary, the check-out is refused.
+   */
+  premisesCheckOutAllowed Boolean @default(false)
 
   // --- personal -------------------------------------------------------------
   dateOfBirth   DateTime?      @db.Date
@@ -1078,10 +1103,13 @@ model User {
   notificationPreference NotificationPreference?
 
   // --- cases (helpdesk) ---
-  casesAssigned    Case[]               @relation("CaseAssignee")
-  caseMessagesSent CaseMessage[]        @relation("CaseMessageSender")
-  caseAttachments  CaseAttachment[]     @relation("CaseAttachmentUploader")
-  caseMentions     CaseMessageMention[] @relation("CaseMentionedUser")
+  casesAssigned         Case[]               @relation("CaseAssignee")
+  caseMessagesSent      CaseMessage[]        @relation("CaseMessageSender")
+  caseAttachments       CaseAttachment[]     @relation("CaseAttachmentUploader")
+  caseMentions          CaseMessageMention[] @relation("CaseMentionedUser")
+  caseRoutesResponsible CaseRoutingRule[]    @relation("CaseRoutingResponsible")
+  caseRoutesBackup      CaseRoutingRule[]    @relation("CaseRoutingBackup")
+  caseRoutesEscalation  CaseRoutingRule[]    @relation("CaseRoutingEscalation")
 
   // --- recruitment ---
   candidateDocuments CandidateDocument[] @relation("CandidateDocumentUploader")
@@ -1818,6 +1846,16 @@ model AttendanceRecord {
   /// audit trail even when the restriction is switched off.
   checkInLatitude  Float?
   checkInLongitude Float?
+
+  /// Who closed the day. SELF is a web check-out; it is kept when a later
+  /// terminal upload for the day carries no check-out of its own, and gives
+  /// way to the terminal's when one does - one check-out, never two.
+  checkOutSource         AttendanceSource?
+  /// Where a web check-out was made, when location was asked for.
+  checkOutLatitude       Float?
+  checkOutLongitude      Float?
+  /// Distance from the office centre the check-out was validated at.
+  checkOutDistanceMeters Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2824,6 +2862,8 @@ enum PayrollExceptionCode {
   NON_POSITIVE_NET
   INCOMPLETE_EMPLOYEE
   OVERTIME_CAPPED
+  /// Loan installments from months before the period, collected in it.
+  LOAN_ARREARS
 }
 
 /// BLOCKING stops finalization; WARNING is recorded and shown but does not.
@@ -3765,6 +3805,7 @@ model EmployeeLoan {
   company      Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   employee     Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   installments EmployeeLoanInstallment[]
+  transactions EmployeeLoanTransaction[]
 
   @@index([companyId, status])
   @@index([employeeId, status])
@@ -3806,6 +3847,8 @@ model EmployeeLoanInstallment {
   employee Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   run      PayrollRun?  @relation(fields: [payrollRunId], references: [id], onDelete: SetNull)
 
+  transactions EmployeeLoanTransaction[]
+
   @@unique([loanId, sequence])
   @@index([employeeId, dueMonth])
   @@index([companyId, status, dueMonth])
@@ -3831,6 +3874,67 @@ model EmployeeLoanInstallment {
 ///
 /// Every threshold is configuration. Nothing in the eligibility engine carries
 /// a literal for any of these.
+/// What a loan ledger entry records.
+enum LoanTransactionType {
+  /// Collected by a finalized payroll run.
+  PAYROLL_DEDUCTION
+  /// Repaid outside payroll - cash, transfer, or before HRMS existed.
+  MANUAL_PAYMENT
+  /// Takes back a MANUAL_PAYMENT recorded in error. The entry it reverses
+  /// stays, so the history reads as what happened, mistake included.
+  PAYMENT_REVERSAL
+  /// An installment forgiven. Settles it without money changing hands.
+  WAIVER
+  /// Installments moved to other months. No money; the months before and
+  /// after are in `detail`.
+  SCHEDULE_CORRECTION
+}
+
+/// The loan ledger: every settlement and correction, append-only.
+///
+/// The installments say what is owed and when; this says what was done about
+/// it, by whom and why. An installment is PAID only with a PAYROLL_DEDUCTION
+/// or an unreversed MANUAL_PAYMENT behind it, and nothing here is ever
+/// updated or deleted - a mistake is corrected by a reversing entry.
+model EmployeeLoanTransaction {
+  id            String  @id @default(cuid())
+  companyId     String
+  loanId        String
+  installmentId String?
+
+  type          LoanTransactionType
+  /// Money settled by the entry. Zero for a schedule correction.
+  amount        Decimal             @db.Decimal(14, 2)
+  /// When the money moved (or the decision took effect), as the person
+  /// recording it states it - not when it was typed in.
+  effectiveDate DateTime            @db.Date
+
+  /// The run that collected it, for PAYROLL_DEDUCTION.
+  payrollRunId String?
+  /// A receipt, bank reference or voucher number for a manual payment.
+  reference    String?
+  /// Why. Required for everything a person records.
+  reason       String?
+  /// The entry this one reverses. Unique: an entry is reversed at most once.
+  reversesId   String? @unique
+  /// Before/after for a schedule correction.
+  detail       Json?
+
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  company     Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  loan        EmployeeLoan             @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  installment EmployeeLoanInstallment? @relation(fields: [installmentId], references: [id], onDelete: Cascade)
+  reverses    EmployeeLoanTransaction? @relation("LoanTransactionReversal", fields: [reversesId], references: [id], onDelete: Restrict)
+  reversedBy  EmployeeLoanTransaction? @relation("LoanTransactionReversal")
+
+  @@index([loanId, createdAt])
+  @@index([installmentId])
+  @@index([companyId, type])
+  @@map("employee_loan_transactions")
+}
+
 model LoanPolicy {
   id        String @id @default(cuid())
   companyId String
@@ -3879,7 +3983,7 @@ model LoanPolicy {
   /// Ceiling on an advance, as a percent of one month's salary. An advance is
   /// recovered from a single payslip, so this - not the monthly deduction
   /// ceiling, which it would always exceed - is what bounds it.
-  advanceMaxSalaryPercent    Decimal @default(50) @db.Decimal(5, 2)
+  advanceMaxSalaryPercent Decimal @default(50) @db.Decimal(5, 2)
 
   // --- employment status ----------------------------------------------------
   blockTerminated Boolean @default(true)
@@ -4412,6 +4516,52 @@ enum CaseStatus {
 /// Nothing here is seeded into the frontend. The web app renders whatever the
 /// catalogue endpoint returns and knows none of the names, so phase 2's admin
 /// screen is a CRUD form over this table and changes no other code.
+/// Who a new case in a queue goes to.
+///
+/// One rule per department default (no category), per category, or per
+/// subcategory. A new case takes the most specific ACTIVE rule that matches
+/// it - subcategory, then category, then department - and is assigned to its
+/// responsible person, or the backup when the responsible person can no
+/// longer take cases. With no rule, or nobody eligible, the case stays
+/// unassigned and the queue owners are told, exactly as before rules existed.
+///
+/// A rule is read once, when the case is filed. Changing it never touches a
+/// case already assigned: who held a case is the case's own history.
+model CaseRoutingRule {
+  id           String  @id @default(cuid())
+  companyId    String
+  departmentId String
+  /// Null for the department's default; a category or subcategory otherwise.
+  categoryId   String?
+
+  responsibleUserId String
+  backupUserId      String?
+  /// Told when a case could not go to the responsible person - routed to the
+  /// backup, or left unassigned because neither could take it.
+  escalationUserId  String?
+
+  isActive Boolean @default(true)
+
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  department  Department    @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  category    CaseCategory? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  responsible User          @relation("CaseRoutingResponsible", fields: [responsibleUserId], references: [id], onDelete: Cascade)
+  backup      User?         @relation("CaseRoutingBackup", fields: [backupUserId], references: [id], onDelete: SetNull)
+  escalation  User?         @relation("CaseRoutingEscalation", fields: [escalationUserId], references: [id], onDelete: SetNull)
+
+  /// Constrains category and subcategory rules. The department default has a
+  /// null category, which PostgreSQL treats as distinct - it is held to one
+  /// per department by a partial unique index in the migration.
+  @@unique([departmentId, categoryId])
+  @@index([companyId])
+  @@map("case_routing_rules")
+}
+
 model CaseCategory {
   id        String @id @default(cuid())
   companyId String
@@ -4442,8 +4592,9 @@ model CaseCategory {
   parent     CaseCategory?  @relation("CaseCategoryTree", fields: [parentCategoryId], references: [id], onDelete: Cascade)
   children   CaseCategory[] @relation("CaseCategoryTree")
 
-  casesAsCategory    Case[] @relation("CaseCategory")
-  casesAsSubcategory Case[] @relation("CaseSubcategory")
+  casesAsCategory    Case[]            @relation("CaseCategory")
+  casesAsSubcategory Case[]            @relation("CaseSubcategory")
+  routingRules       CaseRoutingRule[]
 
   /// One name per level, per department.
   ///

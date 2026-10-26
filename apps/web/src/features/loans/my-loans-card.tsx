@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import { HandCoins } from 'lucide-react';
 import {
   LOAN_KIND_LABELS,
-  LOAN_STATUS_LABELS,
   PERMISSIONS,
   type LoanKind,
   type LoanRecord,
@@ -185,7 +184,7 @@ export function MyLoansCard() {
                     </p>
                   </div>
                   <Badge variant={LOAN_STATUS_TONE[row.status]}>
-                    {LOAN_STATUS_LABELS[row.status]}
+                    {row.statusLabel}
                   </Badge>
                 </li>
               ))}

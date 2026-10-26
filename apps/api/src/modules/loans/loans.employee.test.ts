@@ -35,12 +35,15 @@ const db = vi.hoisted(() => ({
   leaveRequest: { findMany: vi.fn() },
   holiday: { findMany: vi.fn() },
   employeeLoan: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), count: vi.fn(), create: vi.fn(), update: vi.fn() },
-  employeeLoanInstallment: { createMany: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
+  employeeLoanInstallment: { findFirst: vi.fn(), createMany: vi.fn(), findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
   approvalRequest: { create: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn() },
   approvalWorkflow: { findFirst: vi.fn() },
   approvalStep: { findFirst: vi.fn(), updateMany: vi.fn() },
   approvalEvent: { create: vi.fn() },
   auditLog: { create: vi.fn() },
+  payrollPeriod: { findMany: vi.fn() },
+  employeeLoanTransaction: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn() },
+  user: { findMany: vi.fn() },
   $transaction: vi.fn(),
 }));
 
@@ -97,6 +100,11 @@ let app: FastifyInstance | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // No payroll month is closed and nothing is on the ledger yet.
+  db.payrollPeriod.findMany.mockResolvedValue([]);
+  db.employeeLoanInstallment.findFirst.mockResolvedValue(null);
+  db.user.findMany.mockResolvedValue([]);
+  db.company.findUniqueOrThrow.mockResolvedValue({ currency: 'PKR', timezone: 'Asia/Karachi' });
 
   /*
    * One company row serves both readers: the loans routes take `currency`, and
@@ -205,6 +213,87 @@ beforeEach(() => {
 afterEach(async () => {
   await app?.close();
   app = null;
+});
+
+describe('POST /loans/apply - the deduction month', () => {
+  /*
+   * The month is the server's: the current payroll month (Asia/Karachi) by
+   * default, never one before it, never one whose payroll is finalized. The
+   * reported mismatch was a form defaulting from the browser clock and a
+   * server that accepted whatever it was sent.
+   */
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-25T10:00:00+05:00'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const created = () =>
+    db.employeeLoan.create.mock.calls[0]?.[0] as { data: { startMonth: Date } } | undefined;
+
+  it('defaults to the payroll month the request is made in', async () => {
+    app = await appAs(EMPLOYEE);
+    const { startMonth: _omit, ...withoutMonth } = APPLICATION;
+    const response = await app.inject({ method: 'POST', url: '/loans/apply', payload: withoutMonth });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().data.startMonth).toBe('2026-10');
+    expect(created()!.data.startMonth).toEqual(new Date('2026-10-01T00:00:00Z'));
+    const schedule = db.employeeLoanInstallment.createMany.mock.calls[0]?.[0] as {
+      data: Array<{ dueMonth: Date }>;
+    };
+    expect(schedule.data[0]!.dueMonth).toEqual(new Date('2026-10-01T00:00:00Z'));
+  });
+
+  it('moves the default past a month whose payroll is already finalized', async () => {
+    db.payrollPeriod.findMany.mockResolvedValue([
+      { startDate: new Date('2026-10-01T00:00:00Z'), endDate: new Date('2026-10-31T00:00:00Z') },
+    ]);
+    app = await appAs(EMPLOYEE);
+    const { startMonth: _omit, ...withoutMonth } = APPLICATION;
+    const response = await app.inject({ method: 'POST', url: '/loans/apply', payload: withoutMonth });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().data.startMonth).toBe('2026-11');
+  });
+
+  it('refuses a month before the current payroll month', async () => {
+    app = await appAs(EMPLOYEE);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/loans/apply',
+      payload: { ...APPLICATION, startMonth: '2026-09' },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(db.employeeLoan.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a closed month the employee picked, rather than quietly changing it', async () => {
+    db.payrollPeriod.findMany.mockResolvedValue([
+      { startDate: new Date('2026-10-01T00:00:00Z'), endDate: new Date('2026-10-31T00:00:00Z') },
+    ]);
+    app = await appAs(EMPLOYEE);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/loans/apply',
+      payload: { ...APPLICATION, startMonth: '2026-10' },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.details.startMonth[0]).toMatch(/already finalized/);
+  });
+
+  it('tells the form the same rule', async () => {
+    app = await appAs(EMPLOYEE);
+    const response = await app.inject({ method: 'GET', url: '/loans/deduction-month' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual({
+      currentMonth: '2026-10',
+      defaultMonth: '2026-10',
+      closedMonths: [],
+    });
+  });
 });
 
 describe('POST /loans/apply', () => {
@@ -450,6 +539,7 @@ describe('what payroll collects', () => {
         employeeId: 'emp-self',
         sequence: 1,
         amount: 10_000,
+        dueMonth: new Date('2026-11-01T00:00:00Z'),
         loan: { reference: 'LN-1', installmentCount: 6 },
       },
     ]);
@@ -471,6 +561,7 @@ describe('what payroll collects', () => {
         amount: 10_000,
         reference: 'LN-1',
         installmentCount: 6,
+        dueMonth: '2026-11-01',
       },
     ]);
   });

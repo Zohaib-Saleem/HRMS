@@ -37,6 +37,7 @@ import {
   toCaseRecord,
 } from './cases.service.js';
 import { caseQueueOwners, caseResponsible, notifyDesk } from './case-notify.service.js';
+import { resolveCaseRouting } from './case-routing.service.js';
 import { MESSAGE_MENTIONS_SELECT, mentionFeed } from './case-mentions.service.js';
 
 /**
@@ -260,6 +261,11 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
         subcategoryId: input.subcategoryId,
       });
 
+      // Who it goes to, by the queue's routing rule - read now, once. See
+      // `resolveCaseRouting`: with no rule or nobody able to take it, there is
+      // no assignee and the queue owners are told below, as before.
+      const decision = await resolveCaseRouting(auth.companyId, routing, auth.userId);
+
       const created = await createCaseWithNumber({
         companyId: auth.companyId,
         requesterEmployeeId: requester.employeeId,
@@ -272,6 +278,8 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
         // Stated rather than left to the column default, so the one status a
         // new case may have is visible at the call site.
         status: 'OPEN',
+        assignedUserId: decision.assigneeUserId,
+        assignedAt: decision.assigneeUserId ? new Date() : null,
       });
 
       await recordAudit({
@@ -311,26 +319,106 @@ export const caseRoutes: FastifyPluginAsync = async (app) => {
         logger: request.log,
       });
 
-      /*
-       * And the desk. A new case has nobody holding it, so the department's
-       * queue owners are told - its own desk members and head, or the
-       * company-wide dispatchers when the department has neither. See
-       * `caseQueueOwners`: it is never everybody in the department.
-       */
-      await notifyDesk({
-        companyId: auth.companyId,
-        caseId: created.id,
-        userIds: await caseQueueOwners(auth.companyId, created.departmentId),
-        actorUserId: auth.userId,
-        title: `New case ${created.caseNumber} for ${created.department.name}`,
-        message: `${created.subject} - ${created.category.name}${
-          created.subcategory ? ` · ${created.subcategory.name}` : ''
-        }, ${CASE_PRIORITY_LABELS[created.priority].toLowerCase()} priority, raised by ${
-          created.requester.displayName ??
-          `${created.requester.firstName} ${created.requester.lastName}`.trim()
-        }. Unassigned.`,
-        logger: request.log,
-      });
+      const queueLabel = `${created.category.name}${
+        created.subcategory ? ` · ${created.subcategory.name}` : ''
+      }`;
+      const raisedBy =
+        created.requester.displayName ??
+        `${created.requester.firstName} ${created.requester.lastName}`.trim();
+      const summaryLine = `${created.subject} - ${queueLabel}, ${CASE_PRIORITY_LABELS[
+        created.priority
+      ].toLowerCase()} priority, raised by ${raisedBy}`;
+
+      if (decision.assigneeUserId) {
+        const assigneeName = created.assignedTo
+          ? `${created.assignedTo.firstName} ${created.assignedTo.lastName}`.trim()
+          : 'the responsible person';
+        const event =
+          decision.via === 'BACKUP'
+            ? `Assigned to ${assigneeName} (backup) by the routing rule for ${queueLabel}; the responsible person could not take it.`
+            : `Assigned to ${assigneeName} by the routing rule for ${queueLabel}.`;
+
+        // The assignment is part of the case's history from its first minute,
+        // in the same places a hand assignment is recorded: an internal event
+        // in the thread, and a `case.assign` audit row.
+        await prisma.caseMessage.create({
+          data: {
+            companyId: auth.companyId,
+            caseId: created.id,
+            senderUserId: null,
+            message: event,
+            isInternal: true,
+          },
+        });
+        await recordAudit({
+          companyId: auth.companyId,
+          actorId: null,
+          action: 'case.assign',
+          entityType: 'Case',
+          entityId: created.id,
+          summary: `${event.replace(/\.$/, '')} (case ${created.caseNumber})`,
+          before: { assignedUserId: null },
+          after: {
+            assignedUserId: decision.assigneeUserId,
+            routedBy: 'CASE_ROUTING_RULE',
+            ruleId: decision.ruleId,
+            scope: decision.scope,
+            via: decision.via,
+            passedOver: decision.passedOver,
+          },
+          request,
+        });
+
+        await notifyDesk({
+          companyId: auth.companyId,
+          caseId: created.id,
+          userIds: [decision.assigneeUserId],
+          actorUserId: auth.userId,
+          title: `New case ${created.caseNumber} assigned to you`,
+          message: `${summaryLine}.`,
+          logger: request.log,
+        });
+        if (decision.via === 'BACKUP' && decision.escalationUserId) {
+          await notifyDesk({
+            companyId: auth.companyId,
+            caseId: created.id,
+            userIds: [decision.escalationUserId],
+            actorUserId: auth.userId,
+            exclude: [decision.assigneeUserId],
+            title: `Case ${created.caseNumber} went to the backup`,
+            message: `${summaryLine}. The responsible person for ${queueLabel} could not take it, so it was assigned to ${assigneeName}.`,
+            logger: request.log,
+          });
+        }
+      } else {
+        /*
+         * Nobody holds it, so the department's queue owners are told - its
+         * own desk members and head, or the company-wide dispatchers when the
+         * department has neither. See `caseQueueOwners`: it is never
+         * everybody in the department. A rule whose people could not take it
+         * also tells its escalation recipient.
+         */
+        const told = await notifyDesk({
+          companyId: auth.companyId,
+          caseId: created.id,
+          userIds: [
+            ...(await caseQueueOwners(auth.companyId, created.departmentId)),
+            decision.escalationUserId,
+          ],
+          actorUserId: auth.userId,
+          title: `New case ${created.caseNumber} for ${created.department.name}`,
+          message: `${summaryLine}. Unassigned${
+            decision.ruleId ? ' - nobody named in its routing rule could take it' : ''
+          }.`,
+          logger: request.log,
+        });
+        if (told.length === 0) {
+          request.log.warn(
+            { caseId: created.id, departmentId: created.departmentId },
+            'new case is unassigned and nobody could be told about it',
+          );
+        }
+      }
 
       return reply.status(201).send({ data: toCaseRecord(created, callerContext(auth)) });
     },

@@ -109,6 +109,18 @@ export const locationInputSchema = z.object({
     .max(100_000)
     .optional()
     .nullable(),
+  /**
+   * The office premises boundary for employees allowed to check out away from
+   * the terminal: metres around the same centre. Blank means none is set, and
+   * premises check-out is refused rather than allowed from anywhere.
+   */
+  checkOutRadiusMeters: z.coerce
+    .number()
+    .int('Use whole metres.')
+    .min(10, 'A radius under 10m will reject almost every genuine check-out.')
+    .max(5_000, 'A premises boundary over 5km is not a premises boundary.')
+    .optional()
+    .nullable(),
   isActive: z.boolean().default(true),
 });
 
@@ -173,6 +185,7 @@ export interface LocationRecord {
   latitude: number | null;
   longitude: number | null;
   geofenceRadiusMeters: number | null;
+  checkOutRadiusMeters: number | null;
   isActive: boolean;
   employeeCount: number;
   createdAt: string;

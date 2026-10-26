@@ -176,7 +176,12 @@ export function LeaveTypesPage() {
                           ) : null}
                         </TD>
                         <TD className="font-mono text-[12.5px] text-muted-foreground">{row.code ?? '--'}</TD>
-                        <TD className="tabular text-right text-[13px]">{days(row.annualEntitlementDays)}</TD>
+                        <TD className="tabular text-right text-[13px]">
+                          {days(row.annualEntitlementDays)}
+                          {row.isPaid ? null : (
+                            <span className="block text-[11px] text-muted-foreground">cap, unpaid</span>
+                          )}
+                        </TD>
                         <TD className="tabular text-right text-[13px]">{days(row.monthlyAccrualDays)}</TD>
                         <TD className="text-[13px]">
                           {row.carryForwardEnabled
@@ -187,7 +192,7 @@ export function LeaveTypesPage() {
                         </TD>
                         <TD>
                           <Badge variant={row.isPaid ? 'primary' : 'neutral'}>
-                            {row.isPaid ? (row.isDeductible ? 'Paid, deducted' : 'Paid') : 'Unpaid'}
+                            {row.isPaid ? (row.isDeductible ? 'Paid, deducted' : 'Paid') : 'Unpaid - deducted from salary'}
                           </Badge>
                         </TD>
                         <TD className="tabular text-right text-[13px]">{row.requestCount}</TD>
@@ -274,6 +279,7 @@ function LeaveTypeDrawer({
   });
 
   const carryForward = watch('carryForwardEnabled');
+  const isPaid = watch('isPaid');
 
   const mutation = useMutation({
     mutationFn: (values: LeaveTypeInput) =>
@@ -314,7 +320,17 @@ function LeaveTypeDrawer({
             <FormField label="Code" htmlFor="lt-code" error={formState.errors.code?.message}>
               <Input {...register('code')} />
             </FormField>
-            <FormField label="Annual entitlement (days)" htmlFor="lt-annual" error={formState.errors.annualEntitlementDays?.message} required>
+            <FormField
+              label={isPaid ? 'Annual entitlement (days)' : 'Annual cap on unpaid days'}
+              htmlFor="lt-annual"
+              error={formState.errors.annualEntitlementDays?.message}
+              hint={
+                isPaid
+                  ? undefined
+                  : 'Unpaid leave is not an entitlement. This caps how many days of it can be requested a year; an adjustment on an employee raises their own cap. Every approved day is deducted from salary.'
+              }
+              required
+            >
               <Input type="number" min={0} step="0.5" {...register('annualEntitlementDays')} />
             </FormField>
             <FormField
