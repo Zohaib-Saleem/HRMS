@@ -64,8 +64,8 @@ import {
   type PersonDay,
   type TrendRangeKey,
 } from './dashboard-data';
-import { MyAssignedWorkCard } from '@/features/cases/my-assigned-work-card';
 import { MentionsCard } from '@/features/cases/mentions-card';
+import { DashboardActivity } from './dashboard-activity';
 
 /**
  * The company dashboard.
@@ -294,9 +294,14 @@ export function CompanyDashboard() {
 
       <QuickActions />
 
-      {/* Above the company's figures: the cases and issues waiting on the
-          person reading this. Renders itself away without a desk grant. */}
-      <MyAssignedWorkCard />
+      {/* Latest cases, leave, loans, asset issues and approvals - each table
+          only for a reader holding the grant its own screen needs. */}
+      <DashboardActivity />
+
+      {/* No "My Assigned Cases & Issues" card here: the tables above already
+          list the latest cases and asset issues, and the same rows twice on
+          one page read as two different counts. The employee dashboard keeps
+          it, because it has no tables. */}
       {/* Case messages that tagged this person. Renders itself away until
           somebody has. */}
       <MentionsCard />
