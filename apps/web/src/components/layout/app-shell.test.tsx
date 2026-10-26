@@ -200,7 +200,7 @@ describe('app shell scrolling', () => {
     // flow and let the content run underneath it.
     expect(root).toHaveClass('flex');
     expect(aside).toHaveClass('shrink-0');
-    expect(aside.className).toMatch(/w-60/);
+    expect(aside.className).toMatch(/w-64/);
     expect(aside.className).not.toMatch(/\bfixed\b/);
     expect(getComputedStyle(aside).position).not.toBe('fixed');
   });

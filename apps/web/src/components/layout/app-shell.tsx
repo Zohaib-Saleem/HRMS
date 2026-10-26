@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ChevronRight, Menu, Search } from 'lucide-react';
 import { NAV_SECTIONS, ROUTE_TITLES } from '@/navigation/nav-config';
-import { SidebarNav } from './sidebar';
+import { NAV_FILTER_ID, SidebarNav } from './sidebar';
 import { UserMenu } from './user-menu';
 import { NotificationCenter } from '@/features/notifications/notification-center';
 import { cn } from '@/lib/utils';
@@ -58,6 +58,30 @@ export function AppShell() {
     return onPushClick((path) => navigate(path));
   }, [navigate]);
 
+  /*
+   * The header's search pill and Ctrl K find a PAGE: they focus the sidebar's
+   * filter, opening the drawer or un-collapsing the rail first if the filter
+   * is not on screen. Record search is not built; the pill does not pretend.
+   */
+  const findPage = React.useCallback(() => {
+    const desktop = window.matchMedia?.('(min-width: 1024px)').matches ?? true;
+    if (!desktop) setMobileOpen(true);
+    else if (collapsed) toggleCollapsed();
+    // After the drawer or the expanded rail has rendered its input.
+    window.setTimeout(() => document.getElementById(NAV_FILTER_ID)?.focus(), 60);
+  }, [collapsed, toggleCollapsed]);
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        findPage();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [findPage]);
+
   // Close the mobile drawer whenever the route changes.
   React.useEffect(() => setMobileOpen(false), [location.pathname]);
 
@@ -71,7 +95,7 @@ export function AppShell() {
       <aside
         className={cn(
           'hidden h-full shrink-0 border-r border-sidebar-border transition-[width] duration-200 lg:block',
-          collapsed ? 'w-16' : 'w-60',
+          collapsed ? 'w-16' : 'w-64',
         )}
       >
         <SidebarNav collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
@@ -81,7 +105,7 @@ export function AppShell() {
       <Dialog.Root open={mobileOpen} onOpenChange={setMobileOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="hrms-overlay fixed inset-0 z-50 bg-black/50 lg:hidden" />
-          <Dialog.Content className="fixed inset-y-0 left-0 z-50 w-64 outline-none lg:hidden">
+          <Dialog.Content className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] outline-none lg:hidden">
             <Dialog.Title className="sr-only">Navigation</Dialog.Title>
             <SidebarNav
               collapsed={false}
@@ -94,7 +118,7 @@ export function AppShell() {
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="relative z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-surface/85 px-4 backdrop-blur-md sm:px-6">
+        <header className="relative z-30 flex h-16 shrink-0 items-center gap-3 border-b border-border bg-surface/90 px-4 backdrop-blur-md sm:px-6">
           <button
             type="button"
             onClick={() => setMobileOpen(true)}
@@ -107,16 +131,16 @@ export function AppShell() {
           <Breadcrumbs pathname={location.pathname} leafTitle={leafTitle} />
 
           <div className="ml-auto flex items-center gap-1.5">
-            {/* Reserved for global search - wired up with the People module. */}
             <button
               type="button"
-              className="hidden h-9 items-center gap-2 rounded-lg border border-border bg-surface-muted/60 px-3 text-[13px] text-muted-foreground transition-colors hover:bg-accent md:flex"
-              aria-label="Search (coming soon)"
-              disabled
+              onClick={findPage}
+              className="hidden h-10 w-56 items-center gap-2 rounded-full border border-border bg-surface-muted/70 px-4 text-[13px] text-muted-foreground transition-colors hover:bg-accent md:flex xl:w-80"
+              aria-label="Find a page"
+              aria-keyshortcuts="Control+K"
             >
-              <Search className="size-4" aria-hidden />
-              <span>Search</span>
-              <kbd className="ml-3 rounded border border-border bg-surface px-1.5 text-[10px] font-medium">
+              <Search className="size-4 shrink-0" aria-hidden />
+              <span className="flex-1 truncate text-left">Find a page…</span>
+              <kbd className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-[10px] font-medium">
                 Ctrl K
               </kbd>
             </button>

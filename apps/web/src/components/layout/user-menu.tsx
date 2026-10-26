@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import { Check, LogOut, Monitor, Moon, Sun, User as UserIcon } from 'lucide-react';
+import { Check, LogOut, Monitor, Moon, PanelLeft, Sun, User as UserIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, errorMessage } from '@/lib/api';
 import { cn, initials } from '@/lib/utils';
@@ -9,12 +9,17 @@ import { useSession } from '@/features/auth/session-context';
 import { useTheme } from '@/app/theme';
 import { useConfirm } from '@/components/feedback/confirm-dialog';
 import { releasePushOnSignOut } from '@/lib/push';
+import { navModeFor, selfServiceFor } from '@/navigation/nav-config';
+import { useShowSelfService } from '@/navigation/nav-preferences';
+import { useMedicalHiddenFromMenu } from '@/features/medical/use-medical-hidden';
 
 const itemClass =
   'flex cursor-pointer select-none items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] outline-none transition-colors data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground';
 
 export function UserMenu() {
-  const { session, clear } = useSession();
+  const { session, clear, permissions } = useSession();
+  const [showSelfService, setShowSelfService] = useShowSelfService(session?.user.id);
+  const medicalHidden = useMedicalHiddenFromMenu();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const confirm = useConfirm();
@@ -22,6 +27,16 @@ export function UserMenu() {
 
   if (!session) return null;
   const { user } = session;
+
+  /*
+   * An administrator's own services live here rather than in their sidebar,
+   * which is about running the company. Everybody else already has them in
+   * the sidebar, so the section is not drawn for them.
+   */
+  const administrator = navModeFor(permissions) === 'administration';
+  const mine = administrator
+    ? selfServiceFor(permissions, (item) => medicalHidden && item.to === '/medical')
+    : [];
 
   const handleSignOut = async () => {
     const ok = await confirm({
@@ -113,6 +128,30 @@ export function UserMenu() {
               My profile
             </DropdownMenu.Item>
           </div>
+
+          {administrator ? (
+            <div className="border-t border-border py-1">
+              <p className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                My self-service
+              </p>
+              {mine.map(({ to, label, icon: Icon }) => (
+                <DropdownMenu.Item key={to} className={itemClass} onSelect={() => navigate(to)}>
+                  <Icon className="size-4 text-muted-foreground" aria-hidden />
+                  {label}
+                </DropdownMenu.Item>
+              ))}
+              <DropdownMenu.CheckboxItem
+                className={itemClass}
+                checked={showSelfService}
+                onSelect={(event) => event.preventDefault()}
+                onCheckedChange={(checked) => setShowSelfService(checked === true)}
+              >
+                <PanelLeft className="size-4 text-muted-foreground" aria-hidden />
+                <span className="flex-1">Show in sidebar</span>
+                {showSelfService ? <Check className="size-3.5 text-primary" aria-hidden /> : null}
+              </DropdownMenu.CheckboxItem>
+            </div>
+          ) : null}
 
           <div className="border-t border-border py-1">
             <p className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">

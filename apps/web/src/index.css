@@ -10,9 +10,9 @@
   palette is a change to this block, not a sweep through the component tree.
 */
 :root {
-  --radius: 0.625rem;
+  --radius: 0.75rem;
 
-  --background: oklch(0.985 0.002 250);
+  --background: oklch(0.982 0.006 255);
   --foreground: oklch(0.21 0.02 258);
 
   --surface: oklch(1 0 0);
@@ -24,9 +24,9 @@
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.21 0.02 258);
 
-  --primary: oklch(0.52 0.16 265);
+  --primary: oklch(0.546 0.215 262.9);
   --primary-foreground: oklch(0.99 0.005 265);
-  --primary-soft: oklch(0.95 0.03 265);
+  --primary-soft: oklch(0.95 0.035 262);
 
   --secondary: oklch(0.96 0.005 255);
   --secondary-foreground: oklch(0.28 0.02 258);
@@ -49,9 +49,9 @@
   --destructive-foreground: oklch(0.99 0.01 27);
   --destructive-soft: oklch(0.95 0.04 27);
 
-  --border: oklch(0.916 0.006 255);
-  --input: oklch(0.916 0.006 255);
-  --ring: oklch(0.52 0.16 265);
+  --border: oklch(0.92 0.008 258);
+  --input: oklch(0.91 0.008 258);
+  --ring: oklch(0.546 0.215 262.9);
 
   /*
     Chart palette.
@@ -137,12 +137,15 @@
   --att-weekend-hover: color-mix(in oklab, var(--att-weekend) 84%, var(--att-weekend-border));
   --att-upcoming-hover: color-mix(in oklab, var(--att-upcoming) 84%, var(--att-upcoming-border));
 
-  --sidebar: oklch(0.245 0.022 262);
-  --sidebar-foreground: oklch(0.86 0.012 258);
-  --sidebar-muted: oklch(0.66 0.018 258);
-  --sidebar-accent: oklch(0.31 0.028 262);
-  --sidebar-active: oklch(0.58 0.16 265);
-  --sidebar-border: oklch(0.32 0.024 262);
+  /* Deep navy rail with a royal-blue active row. */
+  --sidebar: oklch(0.235 0.06 264);
+  --sidebar-foreground: oklch(0.9 0.015 260);
+  --sidebar-muted: oklch(0.7 0.035 262);
+  --sidebar-accent: oklch(0.3 0.065 264);
+  --sidebar-active: oklch(0.56 0.21 263);
+  --sidebar-border: oklch(0.31 0.055 264);
+  --sidebar-badge: oklch(0.43 0.075 78);
+  --sidebar-badge-foreground: oklch(0.93 0.09 88);
 }
 
 .dark {
@@ -158,7 +161,7 @@
   --popover: oklch(0.229 0.017 260);
   --popover-foreground: oklch(0.93 0.008 255);
 
-  --primary: oklch(0.66 0.15 265);
+  --primary: oklch(0.66 0.17 263);
   --primary-foreground: oklch(0.16 0.02 265);
   --primary-soft: oklch(0.3 0.06 265);
 
@@ -185,7 +188,7 @@
 
   --border: oklch(0.305 0.018 260);
   --input: oklch(0.32 0.018 260);
-  --ring: oklch(0.66 0.15 265);
+  --ring: oklch(0.66 0.17 263);
 
   /* Re-stepped for the dark surface, not an automatic flip - see :root. */
   --chart-present: #199e70;
@@ -227,12 +230,14 @@
   --att-upcoming-foreground: oklch(0.68 0.015 257);
   --att-upcoming-border: oklch(0.34 0.018 260);
 
-  --sidebar: oklch(0.196 0.016 261);
-  --sidebar-foreground: oklch(0.88 0.01 258);
-  --sidebar-muted: oklch(0.63 0.016 258);
-  --sidebar-accent: oklch(0.27 0.02 261);
-  --sidebar-active: oklch(0.62 0.15 265);
-  --sidebar-border: oklch(0.28 0.018 261);
+  --sidebar: oklch(0.19 0.035 264);
+  --sidebar-foreground: oklch(0.88 0.012 258);
+  --sidebar-muted: oklch(0.64 0.025 260);
+  --sidebar-accent: oklch(0.26 0.045 264);
+  --sidebar-active: oklch(0.58 0.19 263);
+  --sidebar-border: oklch(0.27 0.035 264);
+  --sidebar-badge: oklch(0.4 0.07 78);
+  --sidebar-badge-foreground: oklch(0.92 0.09 88);
 }
 
 @theme inline {
@@ -310,6 +315,8 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-active: var(--sidebar-active);
   --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-badge: var(--sidebar-badge);
+  --color-sidebar-badge-foreground: var(--sidebar-badge-foreground);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

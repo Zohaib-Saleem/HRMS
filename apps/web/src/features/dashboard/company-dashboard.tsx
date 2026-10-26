@@ -3,7 +3,14 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   AlarmClock,
+  Banknote,
+  BarChart3,
+  Boxes,
   Building2,
+  ClipboardCheck,
+  HandCoins,
+  Headset,
+  Sun,
   CalendarClock,
   CalendarDays,
   ChevronRight,
@@ -285,6 +292,8 @@ export function CompanyDashboard() {
         </div>
       </section>
 
+      <QuickActions />
+
       {/* Above the company's figures: the cases and issues waiting on the
           person reading this. Renders itself away without a desk grant. */}
       <MyAssignedWorkCard />
@@ -337,8 +346,6 @@ export function CompanyDashboard() {
         </>
       ) : null}
 
-      <QuickActions />
-
       <div className="grid gap-4 lg:grid-cols-3">
         <RecentActivity />
         <AdminLinks />
@@ -384,13 +391,25 @@ function Hero({
         aria-hidden
       />
       <div className="relative flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-        <div className="min-w-0">
-          <h1 className="truncate text-xl font-semibold tracking-tight sm:text-2xl">
-            {greeting()}, {name}
-          </h1>
-          <p className="mt-1 text-[13.5px] text-muted-foreground">
-            Attendance across {company} for {longDate(todayIso())}.
-          </p>
+        <div className="flex min-w-0 items-center gap-4">
+          <span
+            className="hidden size-12 shrink-0 place-items-center rounded-full sm:grid"
+            style={{
+              backgroundColor: 'color-mix(in oklab, var(--chart-late) 16%, transparent)',
+              color: 'var(--chart-late)',
+            }}
+            aria-hidden
+          >
+            <Sun className="size-7" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-bold tracking-tight sm:text-[26px]">
+              {greeting()}, {name}!
+            </h1>
+            <p className="mt-1 text-[13.5px] text-muted-foreground">
+              Overview of your organisation at {company} · {longDate(todayIso())}
+            </p>
+          </div>
         </div>
 
         {showRate ? (
@@ -474,54 +493,55 @@ function Kpi({
   const linked = !permission || has(permission as never);
 
   const body = (
-    <>
+    <div className="flex items-center gap-4 p-4 sm:p-5">
       <span
-        className="absolute inset-x-0 top-0 h-1"
-        style={{ backgroundColor: color }}
+        className="grid size-11 shrink-0 place-items-center rounded-xl sm:size-12"
+        style={{
+          backgroundColor: `color-mix(in oklab, ${color} 16%, transparent)`,
+          color,
+        }}
         aria-hidden
-      />
-      <div className="flex items-start justify-between gap-3 p-4 pt-5 sm:p-5 sm:pt-6">
-        <div className="min-w-0 space-y-1">
-          <p className="flex items-center gap-1 text-[12.5px] font-medium text-muted-foreground">
-            <span className="truncate">{label}</span>
-            {/* The one mark that separates a tile you can open from a tile that
-                only reports. Present from the start on touch, where there is no
-                hover to reveal it with. */}
-            {linked ? (
-              <ChevronRight
-                className="size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100 sm:opacity-0"
-                aria-hidden
-              />
-            ) : null}
-          </p>
-          {loading ? (
-            <Skeleton className="h-8 w-14" />
-          ) : (
-            <p className="text-[28px] font-semibold leading-none tracking-tight">{value ?? '--'}</p>
-          )}
-          {hint ? (
-            <p className="truncate pt-0.5 text-[11.5px] text-muted-foreground">{hint}</p>
+      >
+        <Icon className="size-5 sm:size-6" />
+      </span>
+      <div className="min-w-0 space-y-1">
+        <p className="flex items-center gap-1 text-[12.5px] font-medium text-muted-foreground">
+          <span className="truncate">{label}</span>
+          {/* The one mark that separates a tile you can open from a tile that
+              only reports. Present from the start on touch, where there is no
+              hover to reveal it with. */}
+          {linked ? (
+            <ChevronRight
+              className="size-3.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100 sm:opacity-0"
+              aria-hidden
+            />
           ) : null}
-        </div>
-        <span
-          className="grid size-9 shrink-0 place-items-center rounded-lg"
-          style={{
-            backgroundColor: `color-mix(in oklab, ${color} 14%, transparent)`,
-            color,
-          }}
-          aria-hidden
-        >
-          <Icon className="size-[18px]" />
-        </span>
+        </p>
+        {loading ? (
+          <Skeleton className="h-8 w-14" />
+        ) : (
+          <p className="text-[26px] font-bold leading-none tracking-tight">{value ?? '--'}</p>
+        )}
+        {hint ? (
+          <p className="truncate pt-0.5 text-[11.5px] text-muted-foreground">{hint}</p>
+        ) : null}
       </div>
-    </>
+    </div>
   );
 
-  const shell = 'relative block overflow-hidden rounded-xl border border-border bg-card shadow-xs';
+  // A wash of the accent rather than a stripe: the reference look. The figure
+  // stays in text ink so it reads whatever the accent is.
+  const tint = {
+    backgroundColor: `color-mix(in oklab, ${color} 5%, var(--card))`,
+    borderColor: `color-mix(in oklab, ${color} 22%, var(--border))`,
+  };
+
+  const shell = 'relative block overflow-hidden rounded-xl border bg-card shadow-xs';
 
   return linked ? (
     <Link
       to={to}
+      style={tint}
       className={cn(
         shell,
         // Hover and focus both move the border to the focus hue and lift the
@@ -534,7 +554,9 @@ function Kpi({
       {body}
     </Link>
   ) : (
-    <div className={shell}>{body}</div>
+    <div className={shell} style={tint}>
+      {body}
+    </div>
   );
 }
 
@@ -1045,15 +1067,19 @@ interface Action {
   to: string;
   icon: LucideIcon;
   color: string;
-  permission?: string;
+  permission?: string | string[];
 }
 
 function QuickActions() {
   const { has } = usePermissions();
 
+  /*
+   * The jobs an administrator starts from here, each behind the grant its
+   * destination needs - a reader without it simply is not offered the tile.
+   */
   const actions: Action[] = [
     {
-      label: 'Add employee',
+      label: 'Create employee',
       description: 'New joiner',
       to: '/people?new=1',
       icon: UserPlus,
@@ -1061,71 +1087,96 @@ function QuickActions() {
       permission: PERMISSIONS.EMPLOYEE_MANAGE,
     },
     {
-      label: 'Attendance',
-      description: 'My days',
-      to: '/attendance',
-      icon: CalendarDays,
+      label: 'Process payroll',
+      description: 'Runs and preview',
+      to: '/payroll',
+      icon: Banknote,
       color: 'var(--chart-present)',
-      permission: PERMISSIONS.ATTENDANCE_READ,
+      permission: PERMISSIONS.PAYROLL_MANAGE,
     },
     {
-      label: 'Team attendance',
-      description: 'Everyone',
-      to: '/attendance/team',
-      icon: Users,
-      color: 'var(--chart-half-day)',
-      permission: PERMISSIONS.ATTENDANCE_READ,
-    },
-    {
-      label: 'Device punches',
-      description: 'Terminal feed',
-      to: '/attendance/punches',
-      icon: Fingerprint,
-      color: 'var(--chart-leave)',
-      permission: PERMISSIONS.DEVICE_READ,
-    },
-    {
-      label: 'Employees',
-      description: 'Full directory',
-      to: '/people',
-      icon: Users,
+      label: 'Review approvals',
+      description: 'Waiting on you',
+      to: '/approvals',
+      icon: ClipboardCheck,
       color: 'var(--chart-late)',
+      permission: PERMISSIONS.APPROVAL_ACT,
+    },
+    {
+      label: 'Open case queue',
+      description: 'Helpdesk',
+      to: '/case-queue',
+      icon: Headset,
+      color: 'var(--chart-absent)',
+      permission: [PERMISSIONS.CASE_READ_DEPARTMENT, PERMISSIONS.CASE_READ_ALL],
+    },
+    {
+      label: 'Manage assets',
+      description: 'Register',
+      to: '/assets',
+      icon: Boxes,
+      color: 'var(--chart-half-day)',
+      permission: PERMISSIONS.ASSET_READ_ALL,
+    },
+    {
+      label: 'View reports',
+      description: 'Attendance',
+      to: '/attendance/reports',
+      icon: BarChart3,
+      color: 'var(--chart-half-day)',
       permission: PERMISSIONS.EMPLOYEE_READ,
     },
     {
-      label: 'Leave requests',
-      description: 'Approve time off',
+      label: 'Manage leave',
+      description: 'Requests',
       to: '/leave/requests',
       icon: CalendarClock,
-      color: 'var(--chart-absent)',
-      permission: PERMISSIONS.LEAVE_READ,
+      color: 'var(--chart-leave)',
+      permission: PERMISSIONS.LEAVE_MANAGE,
     },
-  ].filter((action) => !action.permission || has(action.permission as never));
+    {
+      label: 'Manage loans',
+      description: 'Loans & advances',
+      to: '/loans',
+      icon: HandCoins,
+      color: 'var(--chart-late)',
+      permission: [PERMISSIONS.LOAN_MANAGE, PERMISSIONS.LOAN_APPROVE],
+    },
+  ].filter(
+    (action) => !action.permission || [action.permission].flat().some((p) => has(p as never)),
+  );
 
   if (actions.length === 0) return null;
 
   return (
-    <section aria-label="Quick actions" className="space-y-3">
-      <h2 className="text-[15px] font-semibold tracking-tight">Quick actions</h2>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <section
+      aria-label="Quick actions"
+      className="space-y-4 rounded-2xl border border-border bg-card p-4 shadow-xs sm:p-5"
+    >
+      <h2 className="text-[16px] font-semibold tracking-tight">Quick actions</h2>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 2xl:grid-cols-8">
         {actions.map((action) => (
           <Link
             key={action.to}
             to={action.to}
-            className="group flex flex-col gap-2.5 rounded-xl border border-border bg-card p-4 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-sm"
+            className="group flex flex-col items-center gap-2.5 rounded-xl border p-4 text-center transition-all hover:-translate-y-0.5 hover:shadow-sm"
+            style={{
+              backgroundColor: `color-mix(in oklab, ${action.color} 6%, var(--card))`,
+              borderColor: `color-mix(in oklab, ${action.color} 20%, var(--border))`,
+            }}
           >
             <span
-              className="grid size-9 place-items-center rounded-lg transition-colors"
+              className="grid size-11 place-items-center rounded-xl"
               style={{
-                backgroundColor: `color-mix(in oklab, ${action.color} 14%, transparent)`,
+                backgroundColor: `color-mix(in oklab, ${action.color} 15%, transparent)`,
                 color: action.color,
               }}
               aria-hidden
             >
-              <action.icon className="size-[18px]" />
+              <action.icon className="size-6" />
             </span>
-            <span className="min-w-0">
-              <span className="block truncate text-[13.5px] font-medium">{action.label}</span>
+            <span className="min-w-0 max-w-full">
+              <span className="block text-[13px] font-semibold leading-snug">{action.label}</span>
               <span className="block truncate text-[11.5px] text-muted-foreground">
                 {action.description}
               </span>

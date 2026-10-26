@@ -35,6 +35,17 @@ import {
   TrendingUp,
   Users,
   UsersRound,
+  ShieldCheck,
+  UserCog,
+  ScrollText,
+  SlidersHorizontal,
+  Workflow,
+  Tags,
+  Stethoscope,
+  Wallet,
+  Link2,
+  ChefHat,
+  Package,
 } from 'lucide-react';
 import { PERMISSIONS, type Permission } from '@hrms/shared';
 
@@ -607,6 +618,271 @@ export const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
+// ------------------------------------------------- company administration
+
+/**
+ * Which sidebar a signed-in user is drawn.
+ *
+ * `employee` is NAV_SECTIONS above - grouped by whose screen it is, personal
+ * first - and it is what everybody gets, managers and HR included: they are
+ * members of staff with a job on top, and their own leave sits beside the
+ * screens of their job.
+ *
+ * `administration` is for the account that runs the company. It is decided by
+ * GRANTS, never by a role name: whoever holds every one of
+ * ADMINISTRATION_NAV_GRANTS - the right to decide who has an account and what
+ * each role may do - is the company's administrator, whatever their role is
+ * called. In the seeded roles that is Super Admin alone. A company that hands
+ * both grants to another role has, by doing so, made its holders administrators
+ * too, and they get the same sidebar.
+ *
+ * The layout is a presentation choice and nothing else. Every row is still
+ * filtered by the grant its own screen needs, hiding a personal shortcut
+ * removes a signpost rather than a right, and the server remains the only gate
+ * that matters.
+ */
+export type NavMode = 'employee' | 'administration';
+
+export const ADMINISTRATION_NAV_GRANTS: readonly Permission[] = [
+  PERMISSIONS.ROLE_MANAGE,
+  PERMISSIONS.USER_MANAGE,
+];
+
+export function navModeFor(permissions: ReadonlySet<Permission>): NavMode {
+  return ADMINISTRATION_NAV_GRANTS.every((p) => permissions.has(p))
+    ? 'administration'
+    : 'employee';
+}
+
+/**
+ * The administrator's sidebar: running the company, then configuring it, then
+ * the system itself.
+ *
+ * Personal shortcuts are not here - see SELF_SERVICE_ITEMS. Where a screen is
+ * both somebody's own list and the company's queue (loans, medical), the row
+ * is gated on the MANAGING grant, because that is the screen this row is a
+ * signpost to; an administrator without it finds their own record through the
+ * self-service menu instead, where the same route is offered under its
+ * personal name.
+ */
+export const ADMIN_NAV_SECTIONS: NavSection[] = [
+  {
+    key: 'workspace',
+    items: [{ label: 'Dashboard', to: '/', icon: LayoutDashboard, status: 'ready' }],
+  },
+  {
+    key: 'company-management',
+    label: 'Company management',
+    items: [
+      { label: 'People', to: '/people', icon: Users, permission: PERMISSIONS.EMPLOYEE_READ, status: 'ready', matchPrefix: true },
+      {
+        label: 'Organisation',
+        to: '/organisation',
+        icon: Building2,
+        permission: [
+          PERMISSIONS.DEPARTMENT_READ,
+          PERMISSIONS.TEAM_READ,
+          PERMISSIONS.DESIGNATION_READ,
+          PERMISSIONS.LOCATION_READ,
+        ],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      { label: 'Attendance', to: '/attendance', icon: Clock, permission: PERMISSIONS.ATTENDANCE_READ, status: 'ready', matchPrefix: false },
+      { label: 'Team attendance', to: '/attendance/team', icon: UsersRound, permission: PERMISSIONS.EMPLOYEE_READ, status: 'ready', matchPrefix: true },
+      { label: 'Attendance reports', to: '/attendance/reports', icon: BarChart3, permission: PERMISSIONS.EMPLOYEE_READ, status: 'ready', matchPrefix: true },
+      { label: 'Timesheets', to: '/timesheets', icon: FileClock, permission: PERMISSIONS.TIMESHEET_READ, status: 'ready', matchPrefix: true },
+      { label: 'Approvals', to: '/approvals', icon: ClipboardCheck, permission: PERMISSIONS.APPROVAL_READ, status: 'ready', matchPrefix: true },
+      { label: 'Correction centre', to: '/attendance/corrections', icon: ClipboardPen, permission: PERMISSIONS.ATTENDANCE_MANAGE, status: 'ready', matchPrefix: true },
+      // The company's leave requests, narrowed by the reader's scope on the
+      // server. The administrator's own balance is /leave/me, in self-service.
+      { label: 'Leave management', to: '/leave/requests', icon: Plane, permission: PERMISSIONS.LEAVE_READ, status: 'ready', matchPrefix: true },
+      { label: 'Leave types', to: '/leave/types', icon: Layers3, permission: PERMISSIONS.LEAVE_MANAGE, status: 'ready', matchPrefix: true },
+      { label: 'Payroll', to: '/payroll', icon: Banknote, permission: PERMISSIONS.PAYROLL_READ, status: 'ready', matchPrefix: true },
+      { label: 'Payslips', to: '/payslips', icon: Receipt, permission: PERMISSIONS.PAYSLIP_READ, status: 'ready', matchPrefix: true },
+      {
+        label: 'Loans & salary advances',
+        to: '/loans',
+        icon: HandCoins,
+        permission: [PERMISSIONS.LOAN_MANAGE, PERMISSIONS.LOAN_APPROVE],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Medical management',
+        to: '/medical',
+        icon: HeartPulse,
+        permission: [PERMISSIONS.MEDICAL_MANAGE, PERMISSIONS.MEDICAL_CLAIM_APPROVE],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      {
+        label: 'Case queue',
+        to: '/case-queue',
+        icon: Headset,
+        permission: [PERMISSIONS.CASE_READ_DEPARTMENT, PERMISSIONS.CASE_READ_ALL],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      { label: 'Asset dashboard', to: '/assets/dashboard', icon: LayoutDashboard, permission: PERMISSIONS.ASSET_READ_ALL, status: 'ready', matchPrefix: true },
+      { label: 'Assets', to: '/assets', icon: Boxes, permission: PERMISSIONS.ASSET_READ_ALL, status: 'ready', matchPrefix: false },
+      { label: 'Asset issues', to: '/assets/issues', icon: TriangleAlert, permission: PERMISSIONS.ASSET_READ_ALL, status: 'ready', matchPrefix: true },
+      { label: 'Asset reports', to: '/assets/reports', icon: FileSpreadsheet, permission: PERMISSIONS.ASSET_REPORT, status: 'ready', matchPrefix: true },
+      // The fulfilment queue - the company's requests, not the reader's own.
+      { label: 'Equipment requests', to: '/assets/requests', icon: PackagePlus, permission: PERMISSIONS.ASSET_REQUEST_READ_ALL, status: 'ready', matchPrefix: true },
+      { label: 'Lunch collection', to: '/lunch-collection', icon: UtensilsCrossed, permission: PERMISSIONS.LUNCH_COLLECTION_READ, status: 'ready', matchPrefix: true },
+      { label: 'Recruitment', to: '/recruitment', icon: TrendingUp, permission: PERMISSIONS.RECRUITMENT_READ, status: 'ready', matchPrefix: false },
+      { label: 'Job openings', to: '/recruitment/job-openings', icon: Briefcase, permission: PERMISSIONS.RECRUITMENT_READ, status: 'ready', matchPrefix: true },
+      { label: 'Candidates', to: '/recruitment/candidates', icon: ContactRound, permission: PERMISSIONS.CANDIDATE_READ, status: 'ready', matchPrefix: true },
+      { label: 'Interviews', to: '/recruitment/interviews', icon: CalendarSearch, permission: PERMISSIONS.INTERVIEW_READ, status: 'ready', matchPrefix: true },
+      { label: 'Employee Master Report', to: '/reports/employee-master', icon: FileSpreadsheet, permission: PERMISSIONS.EMPLOYEE_MASTER_REPORT_READ, status: 'ready', matchPrefix: true },
+      { label: 'Performance', to: '/performance', icon: TrendingUp, permission: PERMISSIONS.EMPLOYEE_READ, status: 'planned', matchPrefix: true },
+    ],
+  },
+  {
+    /*
+     * Reference data and rules the company is configured with. The rows that
+     * live under /settings are shortcuts into the same Settings screens - the
+     * route gates there are unchanged, and each row carries the grant its own
+     * route requires.
+     */
+    key: 'company-configuration',
+    label: 'Company configuration',
+    items: [
+      { label: 'Shifts', to: '/shifts', icon: Timer, permission: PERMISSIONS.SHIFT_READ, status: 'ready', matchPrefix: true },
+      { label: 'Holidays', to: '/holidays', icon: CalendarHeart, permission: PERMISSIONS.HOLIDAY_READ, status: 'ready', matchPrefix: true },
+      { label: 'Devices', to: '/attendance/devices', icon: Cpu, permission: PERMISSIONS.DEVICE_READ, status: 'ready', matchPrefix: false },
+      { label: 'Device punches', to: '/attendance/punches', icon: Fingerprint, permission: PERMISSIONS.DEVICE_READ, status: 'ready', matchPrefix: true },
+      { label: 'Device user mapping', to: '/settings/device-mapping', icon: Link2, permission: PERMISSIONS.DEVICE_READ, status: 'ready', matchPrefix: true },
+      { label: 'Attendance policy', to: '/settings/attendance', icon: SlidersHorizontal, permission: PERMISSIONS.COMPANY_READ, status: 'ready', matchPrefix: true },
+      { label: 'Approval hierarchy', to: '/settings/approval-hierarchy', icon: Workflow, permission: PERMISSIONS.APPROVAL_WORKFLOW_READ, status: 'ready', matchPrefix: true },
+      { label: 'Case categories', to: '/settings/case-categories', icon: Tags, permission: PERMISSIONS.CASE_CATEGORY_MANAGE, status: 'ready', matchPrefix: true },
+      { label: 'Loan policy', to: '/settings/loan-policy', icon: Wallet, permission: PERMISSIONS.LOAN_POLICY_READ, status: 'ready', matchPrefix: true },
+      { label: 'Medical policy', to: '/settings/medical-policy', icon: Stethoscope, permission: PERMISSIONS.MEDICAL_POLICY_READ, status: 'ready', matchPrefix: true },
+      { label: 'Asset categories', to: '/settings/asset-categories', icon: Package, permission: PERMISSIONS.ASSET_CATEGORY_MANAGE, status: 'ready', matchPrefix: true },
+      { label: 'Lunch menu', to: '/settings/lunch-menu', icon: ChefHat, permission: PERMISSIONS.LUNCH_MENU_MANAGE, status: 'ready', matchPrefix: true },
+    ],
+  },
+  {
+    key: 'system-administration',
+    label: 'System administration',
+    items: [
+      {
+        label: 'Settings',
+        to: '/settings',
+        icon: Settings,
+        permission: [PERMISSIONS.COMPANY_READ, PERMISSIONS.ROLE_READ, PERMISSIONS.AUDIT_READ],
+        status: 'ready',
+        matchPrefix: true,
+      },
+      { label: 'Users', to: '/settings/users', icon: UserCog, permission: PERMISSIONS.USER_READ, status: 'ready', matchPrefix: true },
+      { label: 'Roles & permissions', to: '/settings/roles', icon: ShieldCheck, permission: PERMISSIONS.ROLE_READ, status: 'ready', matchPrefix: true },
+      { label: 'Audit log', to: '/settings/audit', icon: ScrollText, permission: PERMISSIONS.AUDIT_READ, status: 'ready', matchPrefix: true },
+      { label: 'Help & Documentation', to: '/help', icon: LifeBuoy, status: 'ready', matchPrefix: true },
+    ],
+  },
+];
+
+/**
+ * The administrator's own employee services.
+ *
+ * Kept out of the administration sidebar and offered instead under "My
+ * self-service" in the account menu - or, when the administrator turns it on,
+ * as a section at the foot of the sidebar. Every row carries the same grant it
+ * carries in the employee sidebar, and the endpoints behind each one are
+ * pinned to the caller's own record exactly as before.
+ *
+ * A row whose route is already in the administrator's sidebar is dropped (see
+ * selfServiceFor): where the managing row is shown, the same screen is already
+ * one click away, and two rows for one route light up together.
+ */
+export const SELF_SERVICE_ITEMS: NavItem[] = [
+  { label: 'My leave', to: '/leave/me', icon: CalendarDays, permission: PERMISSIONS.LEAVE_READ, status: 'ready', matchPrefix: true },
+  { label: 'My corrections', to: '/attendance/my-corrections', icon: PencilLine, permission: PERMISSIONS.ATTENDANCE_READ, status: 'ready', matchPrefix: true },
+  { label: 'My cases', to: '/cases', icon: Headset, permission: PERMISSIONS.CASE_READ_OWN, status: 'ready', matchPrefix: true },
+  { label: 'My loans', to: '/loans', icon: HandCoins, permission: PERMISSIONS.LOAN_READ, status: 'ready', matchPrefix: true },
+  { label: 'My medical', to: '/medical', icon: HeartPulse, permission: PERMISSIONS.MEDICAL_READ, status: 'ready', matchPrefix: true },
+  { label: 'My equipment requests', to: '/assets/requests', icon: PackagePlus, permission: PERMISSIONS.ASSET_REQUEST_READ, status: 'ready', matchPrefix: true },
+  { label: 'Lunch', to: '/lunch', icon: Sandwich, permission: PERMISSIONS.LUNCH_ORDER_READ_OWN, status: 'ready', matchPrefix: true },
+];
+
+export function isNavItemVisible(item: NavItem, permissions: ReadonlySet<Permission>): boolean {
+  if (!item.permission) return true;
+  const list = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return list.some((p) => permissions.has(p));
+}
+
+function filterSections(
+  sections: NavSection[],
+  permissions: ReadonlySet<Permission>,
+  hidden: (item: NavItem) => boolean,
+): NavSection[] {
+  return sections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => isNavItemVisible(item, permissions) && !hidden(item)),
+    }))
+    .filter((section) => section.items.length > 0);
+}
+
+export interface NavigationOptions {
+  /** Administrator only: also list their own services in the sidebar. */
+  showSelfService?: boolean;
+  /** Leaves an item out for reasons other than a grant (medical eligibility). */
+  hide?: (item: NavItem) => boolean;
+}
+
+/** The administrator's self-service rows, minus routes their sidebar already has. */
+export function selfServiceFor(
+  permissions: ReadonlySet<Permission>,
+  hide: (item: NavItem) => boolean = () => false,
+): NavItem[] {
+  const managed = new Set(
+    filterSections(ADMIN_NAV_SECTIONS, permissions, () => false).flatMap((s) =>
+      s.items.map((i) => i.to),
+    ),
+  );
+  return SELF_SERVICE_ITEMS.filter(
+    (item) => isNavItemVisible(item, permissions) && !managed.has(item.to) && !hide(item),
+  );
+}
+
+/** The sections a user with these grants is shown, in order. */
+export function navigationFor(
+  permissions: ReadonlySet<Permission>,
+  { showSelfService = false, hide = () => false }: NavigationOptions = {},
+): NavSection[] {
+  if (navModeFor(permissions) === 'employee') {
+    return filterSections(NAV_SECTIONS, permissions, hide);
+  }
+  const sections = filterSections(ADMIN_NAV_SECTIONS, permissions, () => false);
+  if (!showSelfService) return sections;
+  const mine = selfServiceFor(permissions, hide);
+  if (mine.length === 0) return sections;
+  // Before System administration, so Help stays the last row.
+  const at = sections.findIndex((s) => s.key === 'system-administration');
+  const own: NavSection = { key: 'my-self-service', label: 'My self-service', items: mine };
+  return at === -1 ? [...sections, own] : [...sections.slice(0, at), own, ...sections.slice(at)];
+}
+
+/**
+ * The row a path belongs to: the most specific visible row that matches it.
+ *
+ * Longest match rather than first match, so /settings/roles lights "Roles &
+ * permissions" and not Settings as well - one highlighted row, always.
+ */
+export function activeNavPath(sections: NavSection[], pathname: string): string | null {
+  let best: string | null = null;
+  for (const item of sections.flatMap((s) => s.items)) {
+    if (item.status === 'planned') continue;
+    const hit = item.matchPrefix
+      ? pathname === item.to || pathname.startsWith(`${item.to}/`)
+      : pathname === item.to;
+    if (hit && (best === null || item.to.length > best.length)) best = item.to;
+  }
+  return best;
+}
+
 /** Breadcrumb labels for routes that are not in the sidebar. */
 export const ROUTE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
@@ -666,6 +942,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   '/recruitment/candidates': 'Candidates',
   '/recruitment/interviews': 'Interviews',
   '/settings/approval-hierarchy': 'Approval hierarchy',
+  '/settings/users': 'Users',
   '/settings/roles': 'Roles and permissions',
   '/settings/audit': 'Audit log',
 };
