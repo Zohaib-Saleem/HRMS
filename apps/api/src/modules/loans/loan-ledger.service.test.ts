@@ -109,6 +109,7 @@ const db = vi.hoisted(() => {
         return rows.at(-1) ?? null;
       }),
     },
+    payrollSettings: { findUnique: vi.fn(async () => null) },
     payrollPeriod: {
       findMany: vi.fn(async ({ where }: { where: { endDate: { gte: Date } } }) =>
         store.periods.filter(
@@ -377,8 +378,9 @@ describe('deduction months', () => {
     });
   }
 
-  it('carries an advance released after its month closed to the first open month, on the record', async () => {
+  it('carries a loan released after its month closed to the first open month, on the record', async () => {
     seedAdvance('2026-10');
+    store.loans[0]!.kind = 'LOAN';
     store.periods.push({ id: 'p-oct', startDate: month('2026-10'), endDate: new Date('2026-10-31T00:00:00Z'), status: 'CLOSED' });
 
     const moved = await ledger.carryForwardPastClosedMonths(db as never, {
@@ -391,6 +393,48 @@ describe('deduction months', () => {
     expect(store.installments[0]!.dueMonth).toEqual(month('2026-11'));
     expect(store.loans[0]!.startMonth).toEqual(month('2026-11'));
     expect(store.transactions[0]).toMatchObject({ type: 'SCHEDULE_CORRECTION', amount: 0 });
+  });
+
+  it('keeps an advance in its requested month when that payroll is finalized, and flags it instead', async () => {
+    seedAdvance('2026-10');
+    store.periods.push({ id: 'p-oct', startDate: month('2026-10'), endDate: new Date('2026-10-31T00:00:00Z'), status: 'CLOSED' });
+
+    const moved = await ledger.carryForwardPastClosedMonths(db as never, {
+      companyId: 'c1',
+      loanId: 'loan-1',
+      actorId: 'user-hr',
+    });
+
+    expect(moved).toBeNull();
+    expect(store.installments[0]!.dueMonth).toEqual(month('2026-10'));
+    expect(store.loans[0]!.startMonth).toEqual(month('2026-10'));
+    expect(store.transactions).toHaveLength(0);
+    expect(await ledger.advanceAwaitingDecision(db as never, { companyId: 'c1', loanId: 'loan-1' })).toBe('2026-10');
+  });
+
+  it('records the authorised revised month with the original, the actor and the reason, and clears the flag', async () => {
+    seedAdvance('2026-10');
+    store.periods.push({ id: 'p-oct', startDate: month('2026-10'), endDate: new Date('2026-10-31T00:00:00Z'), status: 'CLOSED' });
+
+    const { moves } = await ledger.rescheduleLoan({
+      companyId: 'c1',
+      loanId: 'loan-1',
+      startMonth: '2026-11',
+      reason: 'October payroll was finalized before the advance was released',
+      actorId: 'user-accounts',
+    });
+
+    expect(moves).toEqual([{ sequence: 1, from: '2026-10', to: '2026-11' }]);
+    const entry = store.transactions.at(-1)!;
+    expect(entry).toMatchObject({
+      type: 'SCHEDULE_CORRECTION',
+      amount: 0,
+      createdBy: 'user-accounts',
+      reason: 'October payroll was finalized before the advance was released',
+      detail: { kind: 'RESCHEDULE', moves: [{ sequence: 1, from: '2026-10', to: '2026-11' }] },
+    });
+    expect(entry.createdAt).toBeInstanceOf(Date);
+    expect(await ledger.advanceAwaitingDecision(db as never, { companyId: 'c1', loanId: 'loan-1' })).toBeNull();
   });
 
   it('leaves an open month alone', async () => {

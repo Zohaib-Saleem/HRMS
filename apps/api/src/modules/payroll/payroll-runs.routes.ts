@@ -431,6 +431,18 @@ export const payrollPeriodRoutes: FastifyPluginAsync = async (app) => {
     });
     if (clash) throw new ConflictError('A period with those dates already exists.');
 
+    // Overlapping periods would pay the shared days twice - the risk when a
+    // company moves from calendar months to a cycle ending on the 28th.
+    const overlap = await prisma.payrollPeriod.findFirst({
+      where: { companyId: auth.companyId, startDate: { lte: end }, endDate: { gte: start } },
+      select: { name: true, startDate: true, endDate: true },
+    });
+    if (overlap) {
+      throw new ConflictError(
+        `These dates overlap "${overlap.name}" (${day(overlap.startDate)} to ${day(overlap.endDate)}). Change one of the two so no day is paid twice.`,
+      );
+    }
+
     const created = await prisma.payrollPeriod.create({
       data: {
         companyId: auth.companyId,
@@ -534,7 +546,7 @@ export const PREVIEW_COLUMNS: Array<[key: string, label: string, pick: (row: Pay
   ['lateDeduction', 'Late deduction', (r) => r.lateDeduction],
   ['earlyLeaveDeduction', 'Early-leave deduction', (r) => r.earlyLeaveDeduction],
   ['loanDeduction', 'Loan deduction', (r) => r.loanDeduction],
-  ['advanceDeduction', 'Salary advance recovery', (r) => r.advanceDeduction],
+  ['advanceDeduction', 'Salary Advance Repayment', (r) => r.advanceDeduction],
   ['otherDeductions', 'Other deductions', (r) => r.otherDeductions],
   ['deductionsTotal', 'Deductions', (r) => r.deductionsTotal],
   ['grossAmount', 'Gross', (r) => r.grossAmount],
@@ -968,6 +980,13 @@ export const payrollRunRoutes: FastifyPluginAsync = async (app) => {
         const { count } = await tx.employeeLoanInstallment.updateMany({
           where: { payrollRunId: id, status: 'PENDING_PAYROLL' },
           data: { payrollRunId: null, status: 'SCHEDULED' },
+        });
+
+        // Manual adjustments likewise: unapplied ones go back to the pool so
+        // the next run for the period applies them instead of losing them.
+        await tx.payrollAdjustment.updateMany({
+          where: { appliedRunId: id, appliedAt: null },
+          data: { appliedRunId: null },
         });
         return count;
       });

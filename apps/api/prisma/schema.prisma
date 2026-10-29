@@ -2899,6 +2899,9 @@ model PayrollSettings {
   /// Day of the month pay is issued, used as the default pay date when a
   /// period is created. Null leaves the pay date to be set per period.
   payDay          Int?
+  /// Day of the month a payroll cycle closes on (1-28). 28 makes "October"
+  /// 29 September to 28 October. Null keeps calendar months.
+  cycleEndDay     Int?
 
   // --- what a day is worth --------------------------------------------------
   basis               PayrollBasis @default(FIXED_DAYS)

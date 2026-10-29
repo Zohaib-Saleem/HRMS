@@ -7,8 +7,11 @@ import { toast } from 'sonner';
 import { Calculator, CalendarPlus, Plus, Receipt } from 'lucide-react';
 import {
   PERMISSIONS,
+  payrollCycleDates,
+  payrollMonthForDay,
   payrollPeriodSchema,
   payrollRunSchema,
+  type PayrollSettingsRecord,
   type PayrollCalculationResult,
   type PayrollPeriodInput,
   type PayrollPeriodRecord,
@@ -342,20 +345,34 @@ function PeriodDialog({
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
-  const today = new Date();
-  const firstOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const lastOfMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-
-  const { register, handleSubmit, formState, setError } = useForm<PayrollPeriodInput>({
-    resolver: zodResolver(payrollPeriodSchema),
-    defaultValues: {
-      name: firstOfMonth.toLocaleString(undefined, { month: 'long', year: 'numeric' }),
-      startDate: iso(firstOfMonth),
-      endDate: iso(lastOfMonth),
-      payDate: '',
-    },
+  // Proposes the payroll month today belongs to, through the company's cycle:
+  // with a cycle ending on the 28th, "October" is 29 September to 28 October.
+  const settings = useQuery({
+    queryKey: ['payroll-settings'],
+    queryFn: () => api.get<PayrollSettingsRecord>('/payroll/settings'),
   });
+  const proposal = React.useCallback((cycleEndDay: number | null | undefined) => {
+    const month = payrollMonthForDay(new Date().toISOString().slice(0, 10), cycleEndDay);
+    return {
+      name: new Date(`${month}-01T00:00:00Z`).toLocaleString(undefined, {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC',
+      }),
+      ...payrollCycleDates(month, cycleEndDay),
+      payDate: '',
+    };
+  }, []);
+
+  const { register, handleSubmit, formState, setError, reset } = useForm<PayrollPeriodInput>({
+    resolver: zodResolver(payrollPeriodSchema),
+    defaultValues: proposal(null),
+  });
+
+  const cycleEndDay = settings.data?.cycleEndDay;
+  React.useEffect(() => {
+    if (cycleEndDay && !formState.isDirty) reset(proposal(cycleEndDay));
+  }, [cycleEndDay, formState.isDirty, proposal, reset]);
 
   const mutation = useMutation({
     mutationFn: (values: PayrollPeriodInput) =>

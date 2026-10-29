@@ -218,6 +218,30 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
             {LOAN_STATUS_DESCRIPTIONS[loan.status]}
           </p>
 
+          {loan.deductionDecisionMonth ? (
+            <div
+              role="status"
+              className="rounded-md bg-warning-soft px-3 py-2.5 text-[12.5px] text-warning-foreground"
+            >
+              <p className="font-medium">Needs a deduction-month decision</p>
+              <p className="mt-0.5">
+                Requested for {isoMonth(loan.deductionDecisionMonth)}, whose payroll is already
+                finalized. Payroll will not deduct it until an authorised user chooses a revised
+                month or records the repayment; the finalized payroll is not changed.
+              </p>
+              {loan.canCorrect ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => setCorrecting({ kind: 'RESCHEDULE' })}
+                >
+                  Choose a revised month
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
           {collecting ? (
             <p className="rounded-md bg-accent/50 px-3 py-2 text-[12.5px]">
               Installment {collecting.sequence} of {loan.installmentCount} (
@@ -281,9 +305,14 @@ export function LoanDetailPanel({ loanId }: { loanId: string }) {
           <dl className="grid gap-4 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-                {isAdvance ? 'Recovered from' : 'First deduction'}
+                {isAdvance ? 'Deduction month' : 'First deduction'}
               </dt>
               <dd className="text-sm font-medium">{isoMonth(loan.startMonth)}</dd>
+              {loan.requestedDeductionMonth !== loan.startMonth.slice(0, 7) ? (
+                <dd className="text-[11px] text-muted-foreground">
+                  Originally requested for {isoMonth(loan.requestedDeductionMonth)}
+                </dd>
+              ) : null}
             </div>
             {loan.activatedAt ? (
               <div>

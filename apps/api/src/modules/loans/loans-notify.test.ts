@@ -11,13 +11,14 @@ import { PERMISSIONS, type Permission } from '@hrms/shared';
 
 const db = vi.hoisted(() => ({
   employee: { findFirst: vi.fn(), findUnique: vi.fn() },
-  employeeLoan: { findFirst: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
-  employeeLoanInstallment: { findFirst: vi.fn(), updateMany: vi.fn() },
+  employeeLoan: { findFirst: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
+  employeeLoanInstallment: { findFirst: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
   approvalRequest: { updateMany: vi.fn() },
   approvalStep: { updateMany: vi.fn() },
   approvalEvent: { create: vi.fn() },
   auditLog: { create: vi.fn() },
   payrollPeriod: { findMany: vi.fn() },
+  payrollSettings: { findUnique: vi.fn(async () => null) },
   employeeLoanTransaction: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn() },
   company: { findUniqueOrThrow: vi.fn() },
   user: { findMany: vi.fn() },
@@ -91,6 +92,8 @@ beforeEach(() => {
   // No payroll month is closed and nothing is on the ledger yet.
   db.payrollPeriod.findMany.mockResolvedValue([]);
   db.employeeLoanInstallment.findFirst.mockResolvedValue(null);
+  db.employeeLoanInstallment.findMany.mockResolvedValue([]);
+  db.employeeLoan.findUnique.mockResolvedValue({ kind: 'SALARY_ADVANCE', status: 'ACTIVE' });
   db.user.findMany.mockResolvedValue([]);
   db.company.findUniqueOrThrow.mockResolvedValue({ currency: 'PKR', timezone: 'Asia/Karachi' });
   db.employee.findFirst.mockResolvedValue({ id: 'emp-hr', departmentId: 'dep-1' });
@@ -122,6 +125,33 @@ describe('loan notices to the employee', () => {
       entityType: 'EmployeeLoan',
       entityId: 'loan-1',
     });
+  });
+
+  it('releasing an advance whose month is finalized leaves the month alone and says Payroll will confirm it', async () => {
+    const october = { ...LOAN, startMonth: new Date('2026-10-01T00:00:00Z') };
+    db.employeeLoan.findFirst.mockResolvedValue(october);
+    db.employeeLoan.findUniqueOrThrow.mockResolvedValue({ ...october, status: 'ACTIVE' });
+    db.payrollPeriod.findMany.mockResolvedValue([
+      { startDate: new Date('2026-10-01T00:00:00Z'), endDate: new Date('2026-10-31T00:00:00Z') },
+    ]);
+    db.employeeLoanInstallment.findFirst.mockResolvedValue({ dueMonth: new Date('2026-10-01T00:00:00Z') });
+    db.employeeLoanInstallment.findMany.mockResolvedValue([
+      { status: 'SCHEDULED', dueMonth: new Date('2026-10-01T00:00:00Z') },
+    ]);
+
+    app = await appAsHr();
+    const response = await app.inject({ method: 'POST', url: '/loans/loan-1/activate' });
+
+    expect(response.statusCode).toBe(200);
+    // Nothing was moved: no schedule correction, no installment rewritten.
+    expect(db.employeeLoanTransaction.create).not.toHaveBeenCalled();
+    expect(notify.mock.calls[0]![0].message).toBe(
+      'PKR 50000 - recovered in full from the 2026-10 payslip. Payroll for 2026-10 is already finalized, so it will not be changed: Payroll will confirm the month this is recovered from, and you will be told.',
+    );
+    const audit = db.auditLog.create.mock.calls
+      .map((c) => (c[0] as { data: { action: string; after: Record<string, unknown> } }).data)
+      .find((a) => a.action === 'loan.activate');
+    expect(audit?.after).toMatchObject({ startMonth: '2026-10', deductionDecisionMonth: '2026-10' });
   });
 
   it('tells them it was declined, with the reason', async () => {

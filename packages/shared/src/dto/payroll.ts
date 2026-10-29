@@ -227,7 +227,49 @@ export const payrollSettingsSchema = z.object({
     .max(31, 'The pay day must be between 1 and 31.')
     .nullable()
     .optional(),
+  /**
+   * The day of the month a payroll cycle closes on. 28 makes "October" run
+   * 29 September to 28 October; null keeps calendar months. Capped at 28 so
+   * every month, February included, has the day.
+   */
+  cycleEndDay: z.coerce
+    .number()
+    .int('Use a whole day of the month.')
+    .min(1, 'The cycle must end between day 1 and day 28.')
+    .max(28, 'The cycle must end between day 1 and day 28.')
+    .nullable()
+    .optional(),
 });
+
+/**
+ * The payroll month (yyyy-MM) a calendar day (yyyy-MM-dd) belongs to: with a
+ * cycle ending on the 28th, the 29th onwards already counts towards next month.
+ */
+export function payrollMonthForDay(day: string, cycleEndDay: number | null | undefined): string {
+  const [y, m, d] = day.slice(0, 10).split('-').map(Number) as [number, number, number];
+  if (!cycleEndDay || d <= cycleEndDay) return day.slice(0, 7);
+  const next = new Date(Date.UTC(y, m, 1));
+  return next.toISOString().slice(0, 7);
+}
+
+/**
+ * The dates a payroll month (yyyy-MM) covers. With no cycle end day it is the
+ * calendar month; with 28, "2026-10" is 2026-09-29 to 2026-10-28.
+ */
+export function payrollCycleDates(
+  month: string,
+  cycleEndDay: number | null | undefined,
+): { startDate: string; endDate: string } {
+  const [y, m] = month.slice(0, 7).split('-').map(Number) as [number, number];
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  if (!cycleEndDay) {
+    return { startDate: iso(new Date(Date.UTC(y, m - 1, 1))), endDate: iso(new Date(Date.UTC(y, m, 0))) };
+  }
+  return {
+    startDate: iso(new Date(Date.UTC(y, m - 2, cycleEndDay + 1))),
+    endDate: iso(new Date(Date.UTC(y, m - 1, cycleEndDay))),
+  };
+}
 
 export type PayrollSettingsInput = z.infer<typeof payrollSettingsSchema>;
 

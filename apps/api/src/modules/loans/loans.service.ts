@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import {
   LOAN_SETTLED_STATUSES,
+  advanceNeedsDeductionDecision,
   buildSchedule,
   installmentDisplayStatus,
   loanStatusLabel,
@@ -97,6 +98,8 @@ export function loanTotals(installments: ReadonlyArray<{ status: string; amount:
 export function toLoanRecord(
   row: LoanRow,
   caller: { employeeId: string | null; canApprove: boolean; canManage: boolean },
+  /** Months whose payroll is finalized - see `closedPayrollMonths`. */
+  closedMonths: ReadonlySet<string> = new Set(),
 ): LoanRecord {
   const totals = loanTotals(row.installments);
   const next = row.installments.find(
@@ -149,6 +152,14 @@ export function toLoanRecord(
       kind: row.kind,
       paidInstallments: totals.paidInstallments,
     }),
+    deductionDecisionMonth: advanceNeedsDeductionDecision(
+      {
+        kind: row.kind,
+        status: row.status,
+        installments: row.installments.map((i) => ({ status: i.status, dueMonth: day(i.dueMonth)! })),
+      },
+      closedMonths,
+    ),
   };
 }
 
@@ -168,7 +179,11 @@ export function toLoanDetail(
     canManage: boolean;
     canCorrect?: boolean;
   },
-  context: { currentMonth: string; names?: ReadonlyMap<string, string> } = {
+  context: {
+    currentMonth: string;
+    names?: ReadonlyMap<string, string>;
+    closedMonths?: ReadonlySet<string>;
+  } = {
     currentMonth: new Date().toISOString().slice(0, 7),
   },
 ): LoanDetail {
@@ -198,9 +213,15 @@ export function toLoanDetail(
     return actions;
   };
 
+  // The month first asked for: where the earliest schedule move started, or
+  // the start month when nothing has been moved.
+  const firstMove = transactions.find((t) => t.type === 'SCHEDULE_CORRECTION');
+  const movedFrom = (firstMove?.detail as { moves?: Array<{ from?: string }> } | null)?.moves?.[0]?.from;
+
   return {
-    ...toLoanRecord(row, caller),
+    ...toLoanRecord(row, caller, context.closedMonths),
     canCorrect,
+    requestedDeductionMonth: (movedFrom ?? day(row.startMonth)!).slice(0, 7),
     installments: row.installments.map((i) => ({
       id: i.id,
       sequence: i.sequence,

@@ -113,6 +113,9 @@ export const LOAN_KIND_PAYROLL_CODES: Record<LoanKind, 'LOAN' | 'ADVANCE'> = {
   SALARY_ADVANCE: 'ADVANCE',
 };
 
+/** What a payslip, Payroll Review and the reports call an advance coming back. */
+export const SALARY_ADVANCE_REPAYMENT_LABEL = 'Salary Advance Repayment';
+
 /** Shared by both write schemas: an advance with a schedule is not an advance. */
 function singleRecovery(
   value: { kind: LoanKind; installmentCount: number },
@@ -478,6 +481,13 @@ export interface LoanRecord {
   canCancel: boolean;
   /** The label for this loan's stage - see `loanStatusLabel`. */
   statusLabel: string;
+  /**
+   * An advance whose deduction month's payroll is already finalized, so
+   * payroll will not collect it until somebody authorised chooses a revised
+   * month (or records the repayment) - see `advanceNeedsDeductionDecision`.
+   * The closed month (yyyy-MM), or null when nothing is waiting on a decision.
+   */
+  deductionDecisionMonth: string | null;
 }
 
 export interface LoanDetail extends LoanRecord {
@@ -486,6 +496,12 @@ export interface LoanDetail extends LoanRecord {
   transactions: LoanTransactionRecord[];
   /** Whether the caller may correct the schedule and record payments. */
   canCorrect: boolean;
+  /**
+   * The month the request was first made for (yyyy-MM). Differs from
+   * `startMonth` only once the schedule has been moved, and the move is on the
+   * ledger with who, when and why.
+   */
+  requestedDeductionMonth: string;
 }
 
 // ------------------------------------------------------------ corrections
@@ -521,11 +537,40 @@ export const loanRescheduleSchema = z.object({
 });
 export type LoanRescheduleInput = z.infer<typeof loanRescheduleSchema>;
 
+/**
+ * Whether an advance is waiting on a deduction-month decision.
+ *
+ * A salary advance is recovered from the payroll month it was requested in.
+ * When that month's payroll is already finalized, nothing moves it on its own:
+ * the requested month stays on the record, payroll holds the recovery, and an
+ * authorised user either picks a revised month or records the repayment.
+ * Returns the closed month, or null.
+ */
+export function advanceNeedsDeductionDecision(
+  loan: {
+    kind: LoanKind;
+    status: LoanStatus;
+    installments: ReadonlyArray<{ status: LoanInstallmentStatus; dueMonth: string }>;
+  },
+  closedMonths: ReadonlySet<string>,
+): string | null {
+  if (loan.kind !== 'SALARY_ADVANCE') return null;
+  if (!['PENDING', 'APPROVED', 'ACTIVE'].includes(loan.status)) return null;
+  const waiting = loan.installments.find(
+    (i) => i.status === 'SCHEDULED' && closedMonths.has(i.dueMonth.slice(0, 7)),
+  );
+  return waiting ? waiting.dueMonth.slice(0, 7) : null;
+}
+
 /** The deduction month rule, as the server applies it. */
 export interface LoanDeductionMonthInfo {
   /** The payroll month today falls in, in the company's timezone. */
   currentMonth: string;
-  /** What a request made today is recovered from by default. */
+  /**
+   * What a LOAN applied for today is first deducted from by default: the
+   * current month, or the first open one after it. A salary advance always
+   * defaults to `currentMonth` - see `advanceNeedsDeductionDecision`.
+   */
   defaultMonth: string;
   /** Months whose payroll is finalized; nothing new is scheduled into them. */
   closedMonths: string[];

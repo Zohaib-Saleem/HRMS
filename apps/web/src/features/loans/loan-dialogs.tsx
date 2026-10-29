@@ -61,6 +61,14 @@ import { useLoanEligibility } from './use-loan-eligibility';
  * to choose and the preview names the payslip instead of a schedule.
  */
 
+/** "October 2026" for a yyyy-MM month, read as the calendar month it names. */
+export function longMonth(value: string): string {
+  const parsed = new Date(`${value.slice(0, 7)}-01T00:00:00Z`);
+  return Number.isNaN(parsed.getTime())
+    ? '—'
+    : parsed.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
 const blankToNull = (value: unknown) =>
   typeof value === 'string' && value.trim() === '' ? null : value;
 
@@ -485,7 +493,13 @@ export function LoanApplyDialog({
   const isAdvance = kind === 'SALARY_ADVANCE';
 
   const deductionMonth = useDeductionMonth(open);
-  const defaultMonth = deductionMonth.data?.defaultMonth ?? null;
+  // An advance is against this month's pay: always the month it is asked for
+  // in (the company's timezone), even when that payroll is finalized - the
+  // server then flags it for Payroll instead of moving it.
+  const defaultMonth =
+    (isAdvance ? deductionMonth.data?.currentMonth : deductionMonth.data?.defaultMonth) ?? null;
+  const currentMonthClosed =
+    deductionMonth.data?.closedMonths.includes(deductionMonth.data.currentMonth) ?? false;
 
   const blank = (): LoanApplicationInput => ({
     kind,
@@ -538,7 +552,13 @@ export function LoanApplyDialog({
   }, [open, kind]);
 
   const apply = useMutation({
-    mutationFn: (values: LoanApplicationInput) => api.post('/loans/apply', values),
+    // An advance sends the month it showed, or none before the server's month
+    // has arrived - never one taken from the browser's clock.
+    mutationFn: (values: LoanApplicationInput) =>
+      api.post(
+        '/loans/apply',
+        isAdvance && !deductionMonth.data ? { ...values, startMonth: undefined } : values,
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['loans'] });
       await queryClient.invalidateQueries({ queryKey: ['approvals'] });
@@ -639,31 +659,54 @@ export function LoanApplyDialog({
                 </FormField>
               )}
 
-              <FormField
-                label={isAdvance ? 'Recovered from (payslip month)' : 'First deduction month'}
-                htmlFor="apply-start"
-                required
-                error={errors.startMonth?.message}
-              >
-                <Input
-                  id="apply-start"
-                  type="month"
-                  min={deductionMonth.data?.currentMonth}
-                  {...form.register('startMonth')}
-                />
-              </FormField>
-              {deductionMonth.data ? (
-                <p className="text-[12.5px] text-muted-foreground sm:col-span-2">
-                  Requests made now are{' '}
-                  {isAdvance ? 'recovered from' : 'first deducted from'} the{' '}
-                  <span className="font-medium">{isoMonth(deductionMonth.data.defaultMonth)}</span>{' '}
-                  payslip
-                  {deductionMonth.data.defaultMonth !== deductionMonth.data.currentMonth
-                    ? `, because payroll for ${isoMonth(deductionMonth.data.currentMonth)} is already finalized`
-                    : ', the payroll month this request is made in'}
-                  . You can choose a later month; an earlier or closed one is refused.
-                </p>
-              ) : null}
+              {isAdvance ? (
+                <div className="sm:col-span-2" data-testid="advance-deduction-month">
+                  <input type="hidden" {...form.register('startMonth')} />
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">Deduction Month:</span>{' '}
+                    <span className="font-medium">
+                      {deductionMonth.data ? longMonth(deductionMonth.data.currentMonth) : '…'}
+                    </span>
+                  </p>
+                  {errors.startMonth?.message ? (
+                    <p className="mt-1 text-[12.5px] text-destructive">{errors.startMonth.message}</p>
+                  ) : null}
+                  {deductionMonth.data ? (
+                    <p className="mt-1 text-[12.5px] text-muted-foreground">
+                      {currentMonthClosed
+                        ? `Payroll for ${longMonth(deductionMonth.data.currentMonth)} is already finalized and will not be changed. Your request keeps this month, and Payroll will confirm the month it is recovered from before anything is deducted.`
+                        : 'An advance is recovered from the salary of the month you request it in.'}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  <FormField
+                    label="First deduction month"
+                    htmlFor="apply-start"
+                    required
+                    error={errors.startMonth?.message}
+                  >
+                    <Input
+                      id="apply-start"
+                      type="month"
+                      min={deductionMonth.data?.currentMonth}
+                      {...form.register('startMonth')}
+                    />
+                  </FormField>
+                  {deductionMonth.data ? (
+                    <p className="text-[12.5px] text-muted-foreground sm:col-span-2">
+                      Requests made now are first deducted from the{' '}
+                      <span className="font-medium">{isoMonth(deductionMonth.data.defaultMonth)}</span>{' '}
+                      payslip
+                      {deductionMonth.data.defaultMonth !== deductionMonth.data.currentMonth
+                        ? `, because payroll for ${isoMonth(deductionMonth.data.currentMonth)} is already finalized`
+                        : ', the payroll month this request is made in'}
+                      . You can choose a later month; an earlier or closed one is refused.
+                    </p>
+                  ) : null}
+                </>
+              )}
 
               <FormField
                 label="What is it for?"

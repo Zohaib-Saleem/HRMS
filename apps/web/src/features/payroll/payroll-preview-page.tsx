@@ -305,7 +305,7 @@ export function PayrollPreviewPage() {
                       <TH className="text-right">OT amount</TH>
                       <TH className="text-right">Hours ded.</TH>
                       <TH className="text-right">Loan</TH>
-                      <TH className="text-right">Advance</TH>
+                      <TH className="text-right">Advance repayment</TH>
                       <TH className="text-right">Other ded.</TH>
                       <TH className="text-right">Deductions</TH>
                       <TH className="text-right">Gross</TH>

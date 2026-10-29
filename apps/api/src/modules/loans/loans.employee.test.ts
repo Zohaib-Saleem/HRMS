@@ -296,6 +296,94 @@ describe('POST /loans/apply - the deduction month', () => {
   });
 });
 
+describe('POST /loans/apply - a salary advance is recovered from the month it is requested in', () => {
+  const ADVANCE = {
+    kind: 'SALARY_ADVANCE',
+    principalAmount: 20_000,
+    installmentCount: 1,
+    purpose: 'Rent due this week.',
+  };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const applyAt = async (instant: string, payload: Record<string, unknown> = ADVANCE) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(instant));
+    app = await appAs(EMPLOYEE);
+    return app.inject({ method: 'POST', url: '/loans/apply', payload });
+  };
+  const storedMonth = () =>
+    (db.employeeLoan.create.mock.calls[0]?.[0] as { data: { startMonth: Date } }).data.startMonth
+      .toISOString()
+      .slice(0, 7);
+  const scheduledMonth = () =>
+    (
+      db.employeeLoanInstallment.createMany.mock.calls[0]?.[0] as { data: Array<{ dueMonth: Date }> }
+    ).data[0]!.dueMonth
+      .toISOString()
+      .slice(0, 7);
+
+  it.each([
+    ['25 October', '2026-10-25T10:00:00+05:00', '2026-10'],
+    ['10 November', '2026-11-10T10:00:00+05:00', '2026-11'],
+    ['30 December', '2026-12-30T10:00:00+05:00', '2026-12'],
+  ])('applied for on %s, it is deducted from that month', async (_label, instant, month) => {
+    const response = await applyAt(instant);
+    expect(response.statusCode).toBe(201);
+    expect(response.json().data.startMonth).toBe(month);
+    expect(response.json().data.deductionDecisionMonth).toBeNull();
+    expect(storedMonth()).toBe(month);
+    expect(scheduledMonth()).toBe(month);
+  });
+
+  it('reads the month in the company timezone, not UTC or the browser', async () => {
+    // 31 October 20:30 UTC is already 1 November in Karachi.
+    const late = await applyAt('2026-10-31T20:30:00Z');
+    expect(late.json().data.startMonth).toBe('2026-11');
+
+    vi.clearAllMocks();
+    db.employeeLoan.create.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: 'loan-1', ...data }),
+    );
+    db.payrollPeriod.findMany.mockResolvedValue([]);
+    await app?.close();
+    // 31 October 18:30 UTC is 23:30 on the 31st in Karachi: still October.
+    const before = await applyAt('2026-10-31T18:30:00Z');
+    expect(before.json().data.startMonth).toBe('2026-10');
+  });
+
+  it('keeps October when October payroll is already finalized, and flags it for a decision', async () => {
+    db.payrollPeriod.findMany.mockResolvedValue([
+      { startDate: new Date('2026-10-01T00:00:00Z'), endDate: new Date('2026-10-31T00:00:00Z') },
+    ]);
+    db.employeeLoan.findUnique.mockResolvedValue({ kind: 'SALARY_ADVANCE', status: 'PENDING' });
+    db.employeeLoanInstallment.findMany.mockResolvedValue([
+      { status: 'SCHEDULED', dueMonth: new Date('2026-10-01T00:00:00Z') },
+    ]);
+
+    const response = await applyAt('2026-10-25T10:00:00+05:00');
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().data.startMonth).toBe('2026-10');
+    expect(response.json().data.deductionDecisionMonth).toBe('2026-10');
+    expect(storedMonth()).toBe('2026-10');
+    const audit = db.auditLog.create.mock.calls
+      .map((c) => (c[0] as { data: { action: string; after: Record<string, unknown> } }).data)
+      .find((a) => a.action === 'loan.apply');
+    expect(audit?.after).toMatchObject({ startMonth: '2026-10', deductionDecisionMonth: '2026-10' });
+  });
+
+  it('the form is told the current month in the company timezone', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T20:30:00Z'));
+    app = await appAs(EMPLOYEE);
+    const response = await app.inject({ method: 'GET', url: '/loans/deduction-month' });
+    expect(response.json().data.currentMonth).toBe('2026-11');
+  });
+});
+
 describe('POST /loans/apply', () => {
   it('files the application against the caller, ignoring an employee id in the body', async () => {
     app = await appAs(EMPLOYEE);

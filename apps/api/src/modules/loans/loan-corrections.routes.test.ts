@@ -19,12 +19,15 @@ const db = vi.hoisted(() => ({
   company: { findUniqueOrThrow: vi.fn() },
   user: { findMany: vi.fn() },
   auditLog: { create: vi.fn() },
+  payrollPeriod: { findMany: vi.fn() },
+  payrollSettings: { findUnique: vi.fn(async () => null) },
   $transaction: vi.fn(),
 }));
 vi.mock('../../core/db.js', () => ({ prisma: db }));
 
 const ledger = vi.hoisted(() => ({
   canCorrectLoans: (p: ReadonlySet<string>) => p.has('loan.manage') && p.has('payroll.manage'),
+  advanceAwaitingDecision: vi.fn(),
   carryForwardPastClosedMonths: vi.fn(),
   recordManualPayment: vi.fn(),
   rescheduleLoan: vi.fn(),
@@ -126,6 +129,7 @@ beforeEach(() => {
     payrollRunId: 'run-sep',
   });
   db.company.findUniqueOrThrow.mockResolvedValue({ timezone: 'Asia/Karachi' });
+  db.payrollPeriod.findMany.mockResolvedValue([]);
   db.user.findMany.mockResolvedValue([]);
   db.auditLog.create.mockResolvedValue({});
   ledger.recordManualPayment.mockResolvedValue({
@@ -260,6 +264,20 @@ describe('changing the deduction month', () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-sana', title: 'Your loan deduction month changed' }),
     );
+    // The adjustment is on the record: who, the reason, the original and the
+    // revised month. The ledger row carries the same, with its timestamp.
+    const audit = db.auditLog.create.mock.calls
+      .map((c) => (c[0] as { data: Record<string, unknown> }).data)
+      .find((a) => a.action === 'loan.reschedule') as
+      | { actorId: string; before: unknown; after: unknown }
+      | undefined;
+    const moves = [{ from: '2026-04', to: '2026-09' }];
+    expect(audit).toMatchObject({
+      actorId: 'user-accounts',
+      before: { months: [{ dueMonth: moves[0]!.from }] },
+      after: { months: [{ dueMonth: moves[0]!.to }], reason: 'Entered with the wrong start month' },
+    });
+    expect(notify.mock.calls.at(-1)![0].message).toContain(`instead of ${moves[0]!.from}`);
   });
 });
 

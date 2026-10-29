@@ -41,6 +41,7 @@ const db = vi.hoisted(() => ({
   user: { findMany: vi.fn() },
   auditLog: { create: vi.fn() },
   payrollPeriod: { findMany: vi.fn() },
+  payrollSettings: { findUnique: vi.fn(async () => null) },
   employeeLoanTransaction: { create: vi.fn(), createMany: vi.fn(), findFirst: vi.fn() },
   $transaction: vi.fn(),
 }));

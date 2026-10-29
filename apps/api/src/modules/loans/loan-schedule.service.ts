@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client';
-import { addMonths, type LoanDeductionMonthInfo } from '@hrms/shared';
+import { addMonths, payrollMonthForDay, type LoanDeductionMonthInfo, type LoanKind } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { ValidationError } from '../../core/errors.js';
 import { todayInZone } from '../../core/zoned-time.js';
@@ -11,14 +11,21 @@ import { todayInZone } from '../../core/zoned-time.js';
  * payroll all read the same month:
  *
  *   A request is recovered from the payroll month it is made in - the month
- *   today falls in, in the company's timezone - unless that month's payroll is
- *   already finalized, in which case it is the first month after it that is
- *   still open.
+ *   today falls in, in the company's timezone.
  *
- * "Closed" is a payroll period marked CLOSED or carrying a FINALIZED run.
- * Nothing new is ever scheduled into a closed month: a closed payroll cannot
- * collect it, and pretending otherwise is how a deduction month on a screen
- * and the payslip it actually came off end up different.
+ *   A salary advance keeps that month even when its payroll is already
+ *   finalized: the request is stored against it and flagged, payroll holds
+ *   the recovery, and an authorised user decides - a revised month through
+ *   the audited reschedule, or a repayment recorded outside payroll. Nothing
+ *   moves it on its own.
+ *
+ *   A loan applied for in a finalized month starts in the first open month
+ *   after it, and the form says so before it is submitted.
+ *
+ * "Closed" is a payroll period marked CLOSED or carrying a FINALIZED run. A
+ * closed payroll is never changed to collect anything; the flag is how a
+ * deduction month on a screen and the payslip it actually came off are kept
+ * from quietly disagreeing.
  *
  * Months are yyyy-MM strings throughout; the database pins them to the first.
  */
@@ -27,17 +34,32 @@ type Client = Prisma.TransactionClient | typeof prisma;
 
 const monthKey = (value: Date): string => value.toISOString().slice(0, 7);
 
-/** The payroll month today falls in, in the company's own timezone. */
+/** The day a payroll cycle closes on (payroll settings), or null for calendar months. */
+async function cycleEndDayFor(companyId: string, client: Client): Promise<number | null> {
+  const settings = await client.payrollSettings.findUnique({
+    where: { companyId },
+    select: { cycleEndDay: true },
+  });
+  return settings?.cycleEndDay ?? null;
+}
+
+/**
+ * The payroll month today falls in, in the company's own timezone. With a
+ * cycle closing on the 28th, the 29th onwards already belongs to next month.
+ */
 export async function currentPayrollMonth(
   companyId: string,
   client: Client = prisma,
   now = new Date(),
 ): Promise<string> {
-  const company = await client.company.findUniqueOrThrow({
-    where: { id: companyId },
-    select: { timezone: true },
-  });
-  return todayInZone(company.timezone || 'UTC', now).slice(0, 7);
+  const [company, cycleEndDay] = await Promise.all([
+    client.company.findUniqueOrThrow({
+      where: { id: companyId },
+      select: { timezone: true },
+    }),
+    cycleEndDayFor(companyId, client),
+  ]);
+  return payrollMonthForDay(todayInZone(company.timezone || 'UTC', now), cycleEndDay);
 }
 
 /**
@@ -61,11 +83,14 @@ export async function closedPayrollMonths(
     },
     select: { startDate: true, endDate: true },
   });
+  const cycleEndDay = periods.length ? await cycleEndDayFor(companyId, client) : null;
 
   const closed = new Set<string>();
   for (const period of periods) {
-    // A period is normally one month; one that spans several closes each.
-    let month = monthKey(period.startDate);
+    // A period is normally one month; one that spans several closes each. A
+    // 29 September - 28 October cycle is October alone: its first days are
+    // read through the cycle, so they do not close September as well.
+    let month = payrollMonthForDay(period.startDate.toISOString().slice(0, 10), cycleEndDay);
     const last = monthKey(period.endDate);
     for (let guard = 0; month <= last && guard < 24; guard += 1) {
       closed.add(month);
@@ -112,8 +137,14 @@ export async function resolveRequestedDeductionMonth(
   requested: string | undefined,
   client: Client = prisma,
   now = new Date(),
+  kind: LoanKind = 'LOAN',
 ): Promise<string> {
   const info = await deductionMonthInfo(companyId, client, now);
+  // An advance is against this month's pay, finalized or not; a closed month
+  // is flagged for a decision rather than skipped.
+  if (kind === 'SALARY_ADVANCE' && (!requested || requested.slice(0, 7) === info.currentMonth)) {
+    return info.currentMonth;
+  }
   if (!requested) return info.defaultMonth;
 
   const month = requested.slice(0, 7);

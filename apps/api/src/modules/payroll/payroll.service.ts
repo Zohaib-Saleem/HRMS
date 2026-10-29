@@ -6,7 +6,7 @@ import type {
   PayrollSettings,
   Prisma,
 } from '@prisma/client';
-import { LOAN_KIND_PAYROLL_CODES } from '@hrms/shared';
+import { LOAN_KIND_PAYROLL_CODES, SALARY_ADVANCE_REPAYMENT_LABEL } from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { logger } from '../../core/logger.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
@@ -24,6 +24,7 @@ import {
   assertRunLoanDeductionsReconcile,
   recordPayrollDeductions,
 } from '../loans/loan-ledger.service.js';
+import { closedPayrollMonths } from '../loans/loan-schedule.service.js';
 
 /**
  * Running payroll.
@@ -681,13 +682,28 @@ export async function computePayroll(input: {
    * everything else is decided. Nothing about how basic pay, overtime or
    * attendance deductions are computed changes.
    */
-  const loanInstallments = await dueInstallmentsForPeriod({
+  const dueInstallments = await dueInstallmentsForPeriod({
     companyId,
     employeeIds,
     from,
     to,
     runId,
   });
+
+  /*
+   * A salary advance still scheduled in a month whose payroll is finalized is
+   * held, not collected as arrears: that month keeps its original deduction
+   * on the record and an authorised user decides where it goes (a revised
+   * month, or a repayment recorded outside payroll). Loans are unchanged.
+   */
+  const earliestDue = dueInstallments.map((i) => i.dueMonth.slice(0, 7)).sort()[0];
+  const closedMonths = earliestDue
+    ? await closedPayrollMonths(companyId, earliestDue)
+    : new Set<string>();
+  const isHeld = (i: (typeof dueInstallments)[number]) =>
+    i.kind === 'SALARY_ADVANCE' && closedMonths.has(i.dueMonth.slice(0, 7));
+  const heldAdvances = dueInstallments.filter(isHeld);
+  const loanInstallments = dueInstallments.filter((i) => !isHeld(i));
 
   const profileByEmployee = new Map(profiles.map((p) => [p.employeeId, p]));
   const salariesByEmployee = new Map<string, SalaryRow[]>();
@@ -751,7 +767,7 @@ export async function computePayroll(input: {
       kind: 'DEDUCTION',
       label:
         installment.kind === 'SALARY_ADVANCE'
-          ? `Salary advance recovery${ref}`
+          ? `${SALARY_ADVANCE_REPAYMENT_LABEL}${ref}`
           : `Loan repayment ${installment.sequence}/${installment.installmentCount}${ref}`,
       amount: installment.amount,
       code,
@@ -936,6 +952,17 @@ export async function computePayroll(input: {
      * that were repaid before HRMS knew about it, which would otherwise come
      * off one payslip all at once. Not blocking, but never silent.
      */
+    for (const held of heldAdvances.filter((i) => i.employeeId === employee.id)) {
+      const month = held.dueMonth.slice(0, 7);
+      pending.push({
+        code: 'LOAN_ARREARS',
+        severity: 'WARNING',
+        message: `${employee.firstName} ${employee.lastName}'s salary advance of ${held.amount} was requested for ${month}, whose payroll is already finalized. It was not deducted here: choose a revised deduction month on the advance, or record the repayment.`,
+        employeeId: employee.id,
+        detail: { installmentIds: [held.id], months: [month], total: held.amount, heldForDecision: true },
+      });
+    }
+
     const periodStartKey = dateKey(from);
     const arrears = (loanInstallmentsByEmployee.get(employee.id) ?? []).filter(
       (i) => i.dueMonth < periodStartKey,

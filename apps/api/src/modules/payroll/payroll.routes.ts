@@ -126,6 +126,7 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
       payslipPrefix: settings.payslipPrefix,
       prorationMethod: settings.prorationMethod,
       payDay: settings.payDay,
+      cycleEndDay: settings.cycleEndDay,
     };
 
     return reply.send({ data });
@@ -170,6 +171,7 @@ export const payrollSettingsRoutes: FastifyPluginAsync = async (app) => {
         payslipPrefix: before.payslipPrefix,
         prorationMethod: before.prorationMethod,
         payDay: before.payDay,
+        cycleEndDay: before.cycleEndDay,
         ...(request.body as Record<string, unknown>),
       });
 

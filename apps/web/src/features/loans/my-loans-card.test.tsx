@@ -92,6 +92,7 @@ const BASE: LoanRecord = {
   canApprove: false,
   canCancel: false,
   statusLabel: 'Repayment in progress',
+  deductionDecisionMonth: null,
 };
 
 /** The label follows the status unless a case sets it, as the server's would. */

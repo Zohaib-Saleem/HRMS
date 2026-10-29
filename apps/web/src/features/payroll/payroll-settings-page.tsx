@@ -203,6 +203,14 @@ export function PayrollSettingsPage() {
             >
               <Input type="number" min={1} max={31} {...register('payDay', { setValueAs: (v) => (v === '' ? null : Number(v)) })} className="tabular" />
             </FormField>
+            <FormField
+              label="Payroll cycle ends on day"
+              htmlFor="cycleEndDay"
+              error={formState.errors.cycleEndDay?.message}
+              hint="28 makes October run from 29 September to 28 October. Leave empty for calendar months."
+            >
+              <Input type="number" min={1} max={28} {...register('cycleEndDay', { setValueAs: (v) => (v === '' || v == null ? null : Number(v)) })} className="tabular" />
+            </FormField>
           </div>
         </Card>
 

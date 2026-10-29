@@ -285,6 +285,11 @@ export function LoansPage() {
                           <Badge variant={LOAN_STATUS_TONE[row.status]}>
                             {row.statusLabel}
                           </Badge>
+                          {row.deductionDecisionMonth ? (
+                            <Badge variant="warning" className="ml-1.5">
+                              Month needs decision
+                            </Badge>
+                          ) : null}
                         </TD>
                       </TR>
                     ))

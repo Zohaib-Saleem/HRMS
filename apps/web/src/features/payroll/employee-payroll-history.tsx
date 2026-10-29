@@ -92,7 +92,7 @@ export function EmployeePayrollHistory({ employeeId }: { employeeId: string }) {
                     <TH className="text-right">Leave</TH>
                     <TH className="text-right">Working hours</TH>
                     <TH className="text-right">Loan</TH>
-                    <TH className="text-right">Advance</TH>
+                    <TH className="text-right">Advance repayment</TH>
                     <TH className="text-right">Other</TH>
                     <TH className="text-right">Net</TH>
                     <TH />

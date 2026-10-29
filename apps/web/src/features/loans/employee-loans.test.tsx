@@ -91,6 +91,7 @@ const BASE: LoanRecord = {
   canApprove: false,
   canCancel: false,
   statusLabel: 'Repayment in progress',
+  deductionDecisionMonth: null,
 };
 
 /** The label follows the status unless a case sets it, as the server's would. */
@@ -104,6 +105,7 @@ const loan = (over: Partial<LoanRecord>): LoanRecord => ({
 function detailFor(record: LoanRecord): LoanDetail {
   return {
     ...record,
+    requestedDeductionMonth: record.startMonth.slice(0, 7),
     installments: Array.from({ length: record.installmentCount }, (_, index) => ({
       id: `${record.id}-i${index + 1}`,
       sequence: index + 1,

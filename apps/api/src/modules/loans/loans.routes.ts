@@ -48,6 +48,7 @@ import {
   toNumber,
 } from './loans.service.js';
 import {
+  advanceAwaitingDecision,
   canCorrectLoans,
   carryForwardPastClosedMonths,
   recordManualPayment,
@@ -57,6 +58,7 @@ import {
   waiveInstallment,
 } from './loan-ledger.service.js';
 import {
+  closedPayrollMonths,
   currentPayrollMonth,
   deductionMonthInfo,
   resolveRequestedDeductionMonth,
@@ -85,6 +87,13 @@ import {
 
 const employeeLabel = (e: { firstName: string; lastName: string; displayName: string | null }) =>
   e.displayName ?? `${e.firstName} ${e.lastName}`.trim();
+
+/** Far enough back to read every finalized payroll month the company has. */
+const EARLIEST_MONTH = '2000-01';
+
+/** The sentence an employee reads when their advance's month is already finalized. */
+const awaitingDecisionNote = (month: string) =>
+  ` Payroll for ${month} is already finalized, so it will not be changed: Payroll will confirm the month this is recovered from, and you will be told.`;
 
 /** "loan" or "salary advance", for sentences an audit row or a toast reads. */
 const nounFor = (kind: LoanKind) => LOAN_KIND_LABELS[kind].toLowerCase();
@@ -146,10 +155,11 @@ async function loanDetailFor(
   auth: { companyId: string; userId: string; permissions: ReadonlySet<string> },
   loanId: string,
 ) {
-  const [row, currentMonth, caller] = await Promise.all([
+  const [row, currentMonth, caller, closedMonths] = await Promise.all([
     prisma.employeeLoan.findUniqueOrThrow({ where: { id: loanId }, include: LOAN_DETAIL_INCLUDE }),
     currentPayrollMonth(auth.companyId),
     callerContext(auth),
+    closedPayrollMonths(auth.companyId, EARLIEST_MONTH),
   ]);
   const actorIds = [
     ...new Set((row.transactions ?? []).map((t) => t.createdBy).filter(Boolean) as string[]),
@@ -163,7 +173,7 @@ async function loanDetailFor(
   const names = new Map(
     users.map((u) => [u.id, u.employee ? employeeLabel(u.employee) : u.email] as const),
   );
-  return toLoanDetail(row, caller, { currentMonth, names });
+  return toLoanDetail(row, caller, { currentMonth, names, closedMonths });
 }
 
 /**
@@ -325,7 +335,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
     };
 
     const { skip, take } = toSkipTake(query.page, query.limit);
-    const [total, rows] = await Promise.all([
+    const [total, rows, closedMonths] = await Promise.all([
       prisma.employeeLoan.count({ where }),
       prisma.employeeLoan.findMany({
         where,
@@ -334,10 +344,11 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         orderBy: [{ createdAt: 'desc' }],
         include: LOAN_INCLUDE,
       }),
+      closedPayrollMonths(auth.companyId, EARLIEST_MONTH),
     ]);
 
     return reply.send({
-      data: rows.map((row) => toLoanRecord(row, caller)),
+      data: rows.map((row) => toLoanRecord(row, caller, closedMonths)),
       meta: buildMeta(query.page, query.limit, total),
     });
   });
@@ -553,7 +564,13 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
       // The deduction month, by the company rule - the one asked for if it is
       // allowed, the default if none was asked for. Stored on the loan and
       // its schedule; payroll reads the schedule and nothing else.
-      const startMonth = await resolveRequestedDeductionMonth(auth.companyId, input.startMonth);
+      const startMonth = await resolveRequestedDeductionMonth(
+        auth.companyId,
+        input.startMonth,
+        prisma,
+        new Date(),
+        input.kind,
+      );
 
       const chain = await resolveChain(auth.companyId, 'LOAN_REQUEST', self.id);
       assertChainUsable(chain, self.id);
@@ -619,6 +636,13 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         return { created: loan, approval };
       });
 
+      // Requested in a month whose payroll is already finalized: kept, and
+      // flagged for Payroll's decision rather than moved.
+      const awaitingDecision = await advanceAwaitingDecision(prisma, {
+        companyId: auth.companyId,
+        loanId: created.id,
+      });
+
       await recordAudit({
         companyId: auth.companyId,
         actorId: auth.userId,
@@ -647,12 +671,19 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           installmentCount: input.installmentCount,
           startMonth,
           requestedStartMonth: input.startMonth ?? null,
+          deductionDecisionMonth: awaitingDecision,
         },
         request,
       });
 
       return reply.status(201).send({
-        data: { id: created.id, approvalRequestId: approval.id, monthlyDeduction: monthly, startMonth },
+        data: {
+          id: created.id,
+          approvalRequestId: approval.id,
+          monthlyDeduction: monthly,
+          startMonth,
+          deductionDecisionMonth: awaitingDecision,
+        },
       });
     },
   );
@@ -707,7 +738,13 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
       // below if its payroll has closed since.
       const startMonth =
         requestedStart && requestedStart !== storedStart
-          ? await resolveRequestedDeductionMonth(auth.companyId, requestedStart)
+          ? await resolveRequestedDeductionMonth(
+              auth.companyId,
+              requestedStart,
+              prisma,
+              new Date(),
+              loan.kind,
+            )
           : storedStart;
       const retermed =
         principal !== toNumber(loan.principalAmount) ||
@@ -754,6 +791,10 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           actorId: auth.userId,
         });
       });
+      const awaitingDecision = await advanceAwaitingDecision(prisma, {
+        companyId: auth.companyId,
+        loanId: loan.id,
+      });
 
       // Mirror the decision into the approval record so the Approvals screen
       // and the loan never disagree about what happened.
@@ -796,6 +837,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           startMonth: carried?.to ?? startMonth,
           status: input.activate ? 'ACTIVE' : 'APPROVED',
           carriedForwardFrom: carried?.from ?? null,
+          deductionDecisionMonth: awaitingDecision,
         },
         request,
       });
@@ -807,7 +849,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         input.activate
           ? `Your ${nounFor(loan.kind)} was approved and released`
           : `Your ${nounFor(loan.kind)} was approved`,
-        `${loan.currency} ${principal}${retermed ? ', on revised terms' : ''}. ${loan.kind === 'SALARY_ADVANCE' ? 'Recovered from' : 'Deductions start with'} the ${deductionMonth} payslip${carried ? ` (moved from ${carried.from}, whose payroll was already finalized)` : ''}.${input.activate ? '' : ' It will be released before payroll starts recovering it.'}`,
+        `${loan.currency} ${principal}${retermed ? ', on revised terms' : ''}. ${loan.kind === 'SALARY_ADVANCE' ? 'Recovered from' : 'Deductions start with'} the ${deductionMonth} payslip${carried ? ` (moved from ${carried.from}, whose payroll was already finalized)` : ''}.${awaitingDecision ? awaitingDecisionNote(awaitingDecision) : ''}${input.activate ? '' : ' It will be released before payroll starts recovering it.'}`,
       );
 
       return reply.send({ data: await loanDetailFor(auth, loan.id) });
@@ -928,6 +970,10 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         });
       });
       const deductionMonth = carried?.to ?? day(loan.startMonth)!.slice(0, 7);
+      const awaitingDecision = await advanceAwaitingDecision(prisma, {
+        companyId: auth.companyId,
+        loanId: loan.id,
+      });
 
       await recordAudit({
         companyId: auth.companyId,
@@ -936,7 +982,12 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         entityType: 'EmployeeLoan',
         entityId: loan.id,
         summary: `Released the ${nounFor(loan.kind)} for ${employeeLabel(loan.employee)}; ${loan.kind === 'SALARY_ADVANCE' ? 'recovered from' : 'repayment starts'} ${deductionMonth}${carried ? ` (carried forward from ${carried.from}, already finalized)` : ''}`,
-        after: { status: 'ACTIVE', startMonth: deductionMonth, carriedForwardFrom: carried?.from ?? null },
+        after: {
+          status: 'ACTIVE',
+          startMonth: deductionMonth,
+          carriedForwardFrom: carried?.from ?? null,
+          deductionDecisionMonth: awaitingDecision,
+        },
         request,
       });
 
@@ -944,7 +995,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
         request,
         loan,
         `Your ${nounFor(loan.kind)} has been released`,
-        `${loan.currency} ${toNumber(loan.principalAmount)} - ${loan.kind === 'SALARY_ADVANCE' ? 'recovered in full from' : 'repayments start with'} the ${deductionMonth} payslip.`,
+        `${loan.currency} ${toNumber(loan.principalAmount)} - ${loan.kind === 'SALARY_ADVANCE' ? 'recovered in full from' : 'repayments start with'} the ${deductionMonth} payslip.${awaitingDecision ? awaitingDecisionNote(awaitingDecision) : ''}`,
       );
 
       return reply.send({ data: await loanDetailFor(auth, loan.id) });
@@ -1218,7 +1269,7 @@ export const loanRoutes: FastifyPluginAsync = async (app) => {
           request,
           loan,
           `Your ${nounFor(loan.kind)} deduction month changed`,
-          `${loan.kind === 'SALARY_ADVANCE' ? 'Now recovered from' : 'Deductions now start with'} the ${moves[0]!.to} payslip. ${body.reason}`,
+          `${loan.kind === 'SALARY_ADVANCE' ? 'Now recovered from' : 'Deductions now start with'} the ${moves[0]!.to} payslip, instead of ${moves[0]!.from}. ${body.reason}`,
         );
       }
 

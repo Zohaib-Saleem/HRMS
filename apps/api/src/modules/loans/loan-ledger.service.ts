@@ -1,5 +1,10 @@
 import type { Prisma } from '@prisma/client';
-import { LOAN_KIND_PAYROLL_CODES, PERMISSIONS, addMonths } from '@hrms/shared';
+import {
+  LOAN_KIND_PAYROLL_CODES,
+  PERMISSIONS,
+  addMonths,
+  advanceNeedsDeductionDecision,
+} from '@hrms/shared';
 import { prisma } from '../../core/db.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { completeIfSettled, toMonthStart, toNumber } from './loans.service.js';
@@ -460,12 +465,22 @@ export async function rescheduleLoan(input: {
  * open month, on the record, rather than left pointing at a payroll that can
  * no longer collect it.
  *
+ * Not for a salary advance. An advance keeps the month it was requested for
+ * and waits on an authorised decision instead - see `advanceAwaitingDecision`
+ * - so nothing here moves it.
+ *
  * Returns the move, or null when nothing had to move.
  */
 export async function carryForwardPastClosedMonths(
   tx: Client,
   input: { companyId: string; loanId: string; actorId: string | null },
 ): Promise<{ from: string; to: string } | null> {
+  const loan = await tx.employeeLoan.findUnique({
+    where: { id: input.loanId },
+    select: { kind: true },
+  });
+  if (!loan || loan.kind === 'SALARY_ADVANCE') return null;
+
   const first = await tx.employeeLoanInstallment.findFirst({
     where: { loanId: input.loanId, status: 'SCHEDULED' },
     orderBy: { sequence: 'asc' },
@@ -488,6 +503,40 @@ export async function carryForwardPastClosedMonths(
     monthFor: (_index, current) => addMonths(current, shift),
   });
   return { from: firstMonth, to };
+}
+
+/**
+ * The finalized month a salary advance is still scheduled in, or null.
+ *
+ * Such an advance is flagged rather than moved: payroll holds the recovery
+ * and an authorised user chooses a revised month (`rescheduleLoan`, which
+ * keeps the original and revised month, the actor and the reason on the
+ * ledger) or records the repayment outside payroll.
+ */
+export async function advanceAwaitingDecision(
+  client: Client,
+  input: { companyId: string; loanId: string },
+): Promise<string | null> {
+  const loan = await client.employeeLoan.findUnique({
+    where: { id: input.loanId },
+    select: { kind: true, status: true },
+  });
+  if (!loan) return null;
+  const rows = await client.employeeLoanInstallment.findMany({
+    where: { loanId: input.loanId, status: 'SCHEDULED' },
+    select: { status: true, dueMonth: true },
+  });
+  if (rows.length === 0) return null;
+  const earliest = rows.map((r) => monthOf(r.dueMonth)).sort()[0]!;
+  const closed = await closedPayrollMonths(input.companyId, earliest, client);
+  return advanceNeedsDeductionDecision(
+    {
+      kind: loan.kind,
+      status: loan.status,
+      installments: rows.map((r) => ({ status: r.status, dueMonth: monthOf(r.dueMonth) })),
+    },
+    closed,
+  );
 }
 
 /**
